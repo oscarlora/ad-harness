@@ -1,0 +1,9 @@
+.env
+.DS_Store
+node_modules/
+
+# Brand context is never committed — it lives in R2 and syncs in via sync-brand.
+workspaces/
+
+# Machine-specific Claude Code launch configs (brand/port entries differ per machine).
+.claude/launch.json

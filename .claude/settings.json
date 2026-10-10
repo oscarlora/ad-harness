@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash tools/setup.sh)",
+      "Bash(node tools/:*)",
+      "Bash(node studio/dev.mjs:*)",
+      "Bash(npm run studio:*)",
+      "Bash(npm install:*)",
+      "Bash(git fetch:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git reset --hard origin/main)"
+    ]
+  }
+}

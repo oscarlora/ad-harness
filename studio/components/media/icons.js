@@ -1,0 +1,28 @@
+// Inline stroke icon set (Media library, Workflow generation info).
+const base = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', viewBox: '0 0 24 24' };
+
+export const IcDl = () => <svg {...base}><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" /></svg>;
+export const IcCopy = () => <svg {...base}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>;
+export const IcFull = () => <svg {...base}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
+export const IcInfo = () => <svg {...base}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>;
+export const IcLink = () => <svg {...base}><path d="M10 14a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1" /></svg>;
+export const IcFolder = () => <svg {...base}><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>;
+export const IcX = () => <svg {...base}><path d="M6 6l12 12M18 6L6 18" /></svg>;
+export const IcOpen = () => <svg {...base}><path d="M14 4h6v6M20 4l-9 9M10 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-4" /></svg>;
+export const IcChip = () => <svg {...base}><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></svg>;
+export const IcServer = () => <svg {...base}><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7.5h.01M7 16.5h.01" /></svg>;
+export const IcFrame = () => <svg {...base}><rect x="7" y="3" width="10" height="18" rx="2" /></svg>;
+export const IcGrid = () => <svg {...base}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></svg>;
+export const IcClock = () => <svg {...base}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
+export const IcSpark = () => <svg {...base}><path d="M12 3l2 7 7 2-7 2-2 7-2-7-7-2 7-2z" /></svg>;
+export const IcMotion = () => <svg {...base}><circle cx="16" cy="12" r="5" /><path d="M3 8h6M2 12h7M3 16h6" /></svg>;
+export const IcCamera = () => <svg {...base}><rect x="2" y="7" width="14" height="10" rx="2" /><path d="M16 11l6-3v8l-6-3z" /></svg>;
+export const IcCut = () => <svg {...base}><rect x="3" y="6" width="7" height="12" rx="1" /><rect x="14" y="6" width="7" height="12" rx="1" /><path d="M12 3v18" /></svg>;
+export const IcSound = () => <svg {...base}><path d="M11 5L6 9H3v6h3l5 4zM16 9a4 4 0 010 6M19 6a8 8 0 010 12" /></svg>;
+export const IcFile = () => <svg {...base}><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z" /><path d="M14 3v5h5" /></svg>;
+export const IcFilm = () => <svg {...base}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></svg>;
+export const IcText = () => <svg {...base}><path d="M4 6h16M4 10h16M4 14h10M4 18h7" /></svg>;
+export const IcQuote = () => <svg {...base}><path d="M21 12a8 8 0 01-11.6 7.1L4 20l1-4.6A8 8 0 1121 12z" /></svg>;
+export const IcEye = () => <svg {...base}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>;
+export const IcCal = () => <svg {...base}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M3 10h18M8 3v4M16 3v4" /></svg>;
+export const IcImage = () => <svg {...base}><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="M21 15l-5-5L5 21" /></svg>;

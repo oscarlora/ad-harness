@@ -1,0 +1,9 @@
+#!/bin/sh
+# pre-commit — block commits that mention a local client workspace or brand name
+# (tools/check-public.mjs). Enabled by tools/setup.sh / setup.ps1 (git config core.hooksPath .githooks).
+PATH="$HOME/.local/node/bin:$PATH"
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found, so the client-name check can't run. Run bash tools/setup.sh, then commit again." >&2
+  exit 1
+fi
+exec node "$(git rev-parse --show-toplevel)/tools/check-public.mjs"
