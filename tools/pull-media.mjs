@@ -36,9 +36,9 @@ function driveId(source) {
 async function pullDrive(source, out, W, { brand, dryRun } = {}) {
   const id = driveId(source);
   if (!id) { console.error('Could not parse a Drive folder/file id from the source.'); process.exit(1); }
-  const token = W && hasDriveCreds(W) ? (await driveToken(W)).token : null;
+  let token = W && hasDriveCreds(W) ? (await driveToken(W)).token : null;
   const meta = token ? await driveGet(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,mimeType&supportsAllDrives=true`, token).catch(() => null) : null;
-  if (token && !meta?.mimeType) { console.error(`Drive can't see ${id} with ${W}'s creds — share it with that account.`); process.exit(1); }
+  if (token && !meta?.mimeType) { console.log(`${W}'s Drive account can't see ${id}; trying the public link.`); token = null; }
   const isFolder = meta ? meta.mimeType === FOLDER_MIME : !/\/file\/d\//.test(source);
   console.log(`Drive ${isFolder ? 'folder' : 'file'} ${id} via ${token ? 'API' : 'public link (no Drive creds)'}`);
 
