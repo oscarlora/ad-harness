@@ -1,17 +1,31 @@
-// connect-drive.mjs — one-time OAuth consent → captures a workspace's Drive refresh token into .env.
-// Usage: node tools/connect-drive.mjs <oauth-client.json> <WORKSPACE>
-// Writes <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN to the repo-root .env.
+// connect-drive.mjs — one-time Google sign-in → captures a workspace's Drive refresh token into .env.
+// Usage: node tools/connect-drive.mjs <WORKSPACE> [<oauth-client.json>]
+// The workspace's OAuth client (Desktop) lives in workspaces/<WS>/_custom/drive-client.json, which syncs to the
+// team with R2; passing a client JSON stores it there. Writes <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET /
+// _REFRESH_TOKEN to the repo-root .env.
 import fs from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { REPO_ROOT, parseArgs } from './lib/catalog.mjs';
 
-const [clientPath, workspace] = parseArgs(process.argv.slice(2))._;
-if (!clientPath || !workspace) { console.error('Usage: node tools/connect-drive.mjs <oauth-client.json> <WORKSPACE>'); process.exit(1); }
+const pos = parseArgs(process.argv.slice(2))._;
+const given = pos.find((a) => a.endsWith('.json')), workspace = pos.find((a) => a !== given);
+if (!workspace) { console.error('Usage: node tools/connect-drive.mjs <WORKSPACE> [<oauth-client.json>]'); process.exit(1); }
 const PREFIX = workspace.toUpperCase();
 const ENV_FILE = join(REPO_ROOT, '.env');
-const j = JSON.parse(fs.readFileSync(clientPath, 'utf8'));
+const wsDir = fs.readdirSync(join(REPO_ROOT, 'workspaces')).find((d) => d.toUpperCase() === PREFIX) || workspace;
+const shared = join(REPO_ROOT, 'workspaces', wsDir, '_custom', 'drive-client.json');
+if (given) {
+  fs.mkdirSync(dirname(shared), { recursive: true });
+  fs.copyFileSync(given, shared);
+  console.log(`Saved the client for the team: ${shared}\nShare it: node tools/sync-brand.mjs --push workspaces/${wsDir}/_custom`);
+} else if (!fs.existsSync(shared)) {
+  console.error(`No ${shared}. Pull the workspace (node tools/sync-brand.mjs --pull workspaces/${wsDir}/_custom); the first\n` +
+    'time, someone with the Google Cloud project downloads its OAuth client (Desktop) JSON and passes it here.');
+  process.exit(1);
+}
+const j = JSON.parse(fs.readFileSync(shared, 'utf8'));
 const c = j.installed || j.web;
 if (!c) { console.error('Not an OAuth client JSON'); process.exit(1); }
 const CLIENT_ID = c.client_id, CLIENT_SECRET = c.client_secret;

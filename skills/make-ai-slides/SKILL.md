@@ -78,8 +78,7 @@ approves it (each extension is paid), extend it to 9:16, art pixel-identical:
 `node tools/extend-to-story.mjs --in <frame>-4x5.png --out <frame>.png --above "<background>" --below
 "<what runs off the bottom>" --paste`.
 
-Check all frames side by side (an ffmpeg `xstack` contact sheet) against step 4, then show them in
-table rows.
+Check all frames side by side (an ffmpeg `xstack` contact sheet) against step 4, then show them.
 
 ## 6. Clips
 

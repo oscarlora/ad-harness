@@ -68,8 +68,9 @@ Files land in `<WS>_DRIVE_FOLDER / <brand folder> / <group> /`, where the group 
   never prefixed with `#`.
 - A revision: `--archive` moves same-named files into `Archived` before uploading.
 - Setup: `<WS>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN / _FOLDER` in `.env`. First time
-  on a machine, download the workspace's OAuth client (Desktop) JSON and run the one-time consent,
-  which writes them: `node tools/connect-drive.mjs <oauth-client.json> <WS>`.
+  on a machine, `node tools/connect-drive.mjs <WS>`: the user signs in with their Google account and
+  it writes the first three. It reads the workspace's Google app from `_custom/drive-client.json`;
+  only the first person ever passes the OAuth client (Desktop) JSON from Google Cloud, which stores it there.
 
 ## Notion
 

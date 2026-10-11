@@ -29,11 +29,16 @@ async function findFreePort(start, tries = 20) {
   for (let p = start; p < start + tries; p++) if (await isPortFree(p)) return p;
   throw new Error(`No free port found in ${start}-${start + tries - 1}. Set PORT to something else.`);
 }
-const port = String(await findFreePort(Number(requestedPort)));
-if (port !== requestedPort) {
-  console.log(`Port ${requestedPort} is busy — someone else already has the studio open on this machine.`);
-  console.log(`Starting a separate instance on port ${port} instead.\n`);
+// One Studio covers every workspace and brand: if it's already running, point there instead of starting another.
+const probeHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+const running = await fetch(`http://${probeHost}:${requestedPort}/`, { signal: AbortSignal.timeout(3000) })
+  .then(async (r) => (await r.text()).includes('Ad Harness')).catch(() => false);
+if (running) {
+  console.log(`Studio is already running on http://${shownHost}:${requestedPort}`);
+  process.exit(0);
 }
+const port = String(await findFreePort(Number(requestedPort)));
+if (port !== requestedPort) console.log(`Port ${requestedPort} is taken by another app; Studio uses ${port} instead.\n`);
 
 const env = { ...process.env };
 // Next allows one server per build dir, so any non-default port gets its own dist dir.

@@ -21,7 +21,7 @@ preview follows within a second. Schema, flags and every subcommand: `node tools
 3. **Captions:** `captions --words <transcript or song timing>` writes word-timed lines (**caption-video**).
 4. **Check:** `check` (missing files, black gaps). `frames --at …` makes a contact sheet when you
    need to see a moment.
-5. **Show it** right away: open Studio on the ad (**open-studio**).
+5. **Show it** right away: point the user to the ad's Edit step in Studio (**open-studio**).
 
 ## Revise: live review
 

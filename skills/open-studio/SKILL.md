@@ -15,7 +15,9 @@ switcher and URLs `/<Workspace>/<Brand>/board`, `/<Workspace>/<Brand>/media` and
 node studio/dev.mjs        # from the repo root → http://localhost:4179, or the next free port
 ```
 
-Read the address it prints. `PORT` sets the starting port; parallel sessions get their own port.
+Run it as a background command and read the address it prints; if Studio is already running it
+prints that address and exits, so it never starts a second one. Then open the address for the user
+(the agent app's browser pane if it has one, else `open <url>`, or `start <url>` on Windows).
 Deps install via `tools/setup.sh` / `setup.ps1` (or `npm install --prefix studio` once).
 
 ## Board — review a brand's ads

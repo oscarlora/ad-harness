@@ -36,11 +36,11 @@ Every file here — skills, docs, code, comments — is as short and plain as it
 - **Clear:** the simplest words that carry the meaning; technical terms only where needed.
 - **Generative:** give 3 deliberately different options by default, as a plain numbered list in
   chat. Ask questions in chat, never through a picker or interview UI.
-- **Visual:** show each output the moment it exists; never hold it back to self-check — the user
-  judges and calls re-rolls (brief sub-agents the same way). Embed images inline
-  (`![label](repo-relative/path)`); compare alternatives in one table row, one image per cell.
-  Link videos (`[label](repo-relative/path)`), never an `open` command or a raw path. When a path
-  has spaces, link a working copy without them.
+- **Visual:** outputs show in Studio as they land; never hold one back to self-check — the user
+  judges and calls re-rolls (brief sub-agents the same way). In chat, say in one line what's ready
+  and on which step; no embeds or links. Only when the user can't see Studio (e.g. on their phone),
+  embed images (`![label](repo-relative/path)`, alternatives in one table row) and link videos
+  (`[label](repo-relative/path)`); when a path has spaces, link a working copy without them.
 
 ## Folder structure
 
@@ -64,7 +64,8 @@ workspace's R2 bucket when it has one (see Operating principles).
 
 ## Skills
 
-To make an ad, settle the ad type first (ask if it isn't given), then follow its workflow:
+To make an ad, settle the ad type first (ask if it isn't given), open Studio on the brand's Workflow
+page without asking (**open-studio**; the user watches each step land there), then follow its workflow:
 
 - **make-image-ad** — image ads
 - **make-ai-podcast** — podcast video ads

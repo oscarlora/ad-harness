@@ -142,7 +142,7 @@ follow **write-prompt**'s "How a model reads a prompt".
   sides, camera side, eyelines, wardrobe, props, light) and against step 4's one-story rules.
 - No text beyond prop labels and the product.
 
-Show the frames scene by scene in table rows; reroll only the ones the user flags.
+Show the frames scene by scene; reroll only the ones the user flags.
 
 ## 7. Clips
 

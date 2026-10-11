@@ -37,7 +37,7 @@ export async function driveToken(workspace, { needFolder = false } = {}) {
   if (missing.length) {
     console.error(`\nMissing Google Drive credentials for workspace ${W}: ${missing.join(', ')}`);
     console.error(`First-time setup (one-time consent): download the workspace's OAuth client (Desktop) JSON, then run:`);
-    console.error(`   node tools/connect-drive.mjs <oauth-client.json> ${W}`);
+    console.error(`   node tools/connect-drive.mjs ${W}`);
     console.error(`That opens a browser consent link and writes the creds into .env.${needFolder ? ` Then set ${keys.folder}=<destination folder id>.` : ''}\n`);
     process.exit(1);
   }
@@ -47,7 +47,7 @@ export async function driveToken(workspace, { needFolder = false } = {}) {
   })).json();
   if (!tk.access_token) {
     console.error('Drive token refresh failed:', tk.error || '(no error code)', tk.error_description || '');
-    if (tk.error === 'invalid_grant') console.error(`Refresh token revoked/expired. Re-run: node tools/connect-drive.mjs <oauth-client.json> ${W}`);
+    if (tk.error === 'invalid_grant') console.error(`Refresh token revoked/expired. Re-run: node tools/connect-drive.mjs ${W}`);
     process.exit(1);
   }
   return { token: tk.access_token, folder: env[keys.folder] };
@@ -75,7 +75,7 @@ const unescape = (s) => s.replace(/&#x([\da-f]+);/gi, (_, h) => String.fromCodeP
 async function publicFolder(folderId) {
   const r = await fetch(`https://drive.google.com/embeddedfolderview?id=${folderId}`);
   const html = r.ok ? await r.text() : '';
-  if (!html.includes('flip-entries')) throw new Error(`Drive folder ${folderId} isn't readable without creds (HTTP ${r.status}). Share it as "anyone with the link", or connect Drive: node tools/connect-drive.mjs <oauth-client.json> <WS>`);
+  if (!html.includes('flip-entries')) throw new Error(`Drive folder ${folderId} isn't readable without creds (HTTP ${r.status}). Share it as "anyone with the link", or connect Drive: node tools/connect-drive.mjs <WS>`);
   const name = unescape((html.match(/<title>([^<]*)/) || [])[1] || '');
   const files = [...html.matchAll(/<div class="flip-entry" id="entry-([\w-]+)"[\s\S]*?<a href="([^"]+)"[\s\S]*?<div class="flip-entry-title">([\s\S]*?)<\/div>/g)]
     .map(([, id, href, title]) => ({ id, name: unescape(title), mimeType: href.includes('/drive/folders/') ? FOLDER_MIME : href.includes('/file/d/') ? null : NATIVE, modifiedTime: null, size: null }));

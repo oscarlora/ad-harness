@@ -112,8 +112,8 @@ node tools/generate-image.mjs \
 ```
 
 Roll `-a`/`-b`/`-c`; the second speaker's `--ref` is the `-flipped` copy. Keep `--out` under
-`workspaces/<WS>/…` (the tool picks the workspace's keys from it). Show the rolls inline, one table
-row per character; **the user picks** — never grade them yourself. If no roll lands, tighten the
+`workspaces/<WS>/…` (the tool picks the workspace's keys from it). Show the rolls; **the user
+picks** — never grade them yourself. If no roll lands, tighten the
 prompt and reroll.
 
 ## 7. Script
