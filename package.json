@@ -11,8 +11,10 @@
   "description": "Shared generation + sync tooling for Ad Harness. The AI SDK deps (ai, @ai-sdk/gateway, undici) run the Vercel AI Gateway — the media library and the third generation provider after Segmind and kie.ai, whose paths stay dependency-free.",
   "license": "MIT",
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.98",
-    "ai": "^7.0.120",
-    "undici": "^7.29.1"
+    "@ai-sdk/gateway": "^4.0.110",
+    "ai": "^7.0.137",
+    "esbuild": "^0.28.2",
+    "playwright-core": "^1.64.0",
+    "undici": "^8.11.2"
   }
 }

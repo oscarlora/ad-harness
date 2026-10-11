@@ -1,7 +1,5 @@
-// Workspace/brand enumeration and validation, the brand page wrapper, and small fs helpers.
-// A "brand" is any directory at <root>/workspaces/<Workspace>/<Brand> that has an inputs/ or
-// outputs/ child. Folders starting with "." or "_" (e.g. workspaces/_swipe, <WS>/_harness) are
-// private, never brands.
+// Brand listing and validation, the brand page wrapper, and fs helpers.
+// A brand is workspaces/<WS>/<Brand> with an inputs/ or outputs/ child; "." and "_" folders are never brands.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { notFound } from 'next/navigation';
@@ -10,7 +8,6 @@ import { workspacesDir } from './root.js';
 const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 const listDirs = (p) => { try { return readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory() && !/^[._]/.test(d.name)).map((d) => d.name); } catch { return []; } };
 
-// A JSON file, or the fallback when it is missing or unreadable.
 export function readJson(p, fallback) {
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; }
 }
@@ -29,7 +26,7 @@ export function listBrands() {
   return out.sort((a, b) => a.workspace.localeCompare(b.workspace) || a.brand.localeCompare(b.brand));
 }
 
-// Route params arrive percent-encoded; decode defensively (idempotent for plain names).
+// Route params arrive percent-encoded.
 function decodeSegment(s) {
   try { return decodeURIComponent(String(s || '')); } catch { return String(s || ''); }
 }
@@ -44,7 +41,7 @@ function brandDir(ws, brand) {
   return isDir(dir) ? dir : null;
 }
 
-// Resolve [ws]/[brand] route params → { ws, brand, dir }, or null when the brand doesn't exist.
+// [ws]/[brand] route params → { ws, brand, dir }, or null.
 export async function brandCtx(params) {
   const raw = await params;
   const ws = decodeSegment(raw.ws);
@@ -53,15 +50,14 @@ export async function brandCtx(params) {
   return dir ? { ws, brand, dir } : null;
 }
 
-// A /[ws]/[brand]/<tab> page: 404 on an unknown brand, else <Component ws brand {...extra} />.
-// `extra(params)` adds props (the workflow ad). Each page file keeps its own `dynamic` literal.
+// A /[ws]/[brand]/<tab> page: 404 on an unknown brand. Each page file keeps its own `dynamic` literal (Next reads it statically).
 export const brandPage = (Component, extra) => async function BrandTabPage({ params }) {
   const ctx = await brandCtx(params);
   if (!ctx) notFound();
   return <Component ws={ctx.ws} brand={ctx.brand} {...(extra ? await extra(params) : {})} />;
 };
 
-// Its title, "<Brand> · <label> · Ad Harness"; label may be a function of the params.
+// Page title "<Brand> · <label> · Ad Harness"; label may be a function of the params.
 export const brandMetadata = (label) => async ({ params }) => {
   const ctx = await brandCtx(params);
   const text = typeof label === 'function' ? await label(params) : label;

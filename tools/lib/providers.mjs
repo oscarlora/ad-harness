@@ -1,27 +1,11 @@
-// providers.mjs — who generates: Segmind, kie.ai and the Vercel AI Gateway, tried in PROVIDER_ORDER (or the workspace's own order).
-// The one shared layer for generate-image / -video / -voice / -music: the routing decision
-// (PROVIDER_ORDER + MODELS + planRoute/runRoute), per-workspace keys, the Gateway client, the
-// Segmind and kie.ai REST clients, reference hosting, and saving results (+ their .gen.json sidecars).
+// providers.mjs — provider routing (Segmind, kie.ai, Vercel AI Gateway), per-workspace keys, the
+// provider clients, reference hosting and saving results, shared by generate-*.mjs.
 //
-// Routing, in one place: `--provider auto` walks PROVIDER_ORDER, keeping each provider that carries
-// the model (MODELS below, or a raw `creator/model` Gateway id), has its <WS>_ key, and can take this
-// request (a tool's per-provider blocker). A failover only happens on an explicit pre-submit
-// rejection (bad request, model not found, rate limit, out of credits) or a provider's known outage
-// shape — never on an ambiguous failure after submit, since a second generation is a second charge.
-// For the same reason a job is only ever resubmitted when the submit itself failed
-// (retryTransient): once a provider hands back a task/request id, the tool polls it to the end and
-// never submits again.
-//
-// Segmind auth is `x-api-key`, NOT `Authorization: Bearer` (kie.ai's scheme) — verified live,
-// do not "fix" this to Bearer.
-//
-// Segmind async (v2), one code path for images/video/audio:
-//   POST /v2/<slug> -> { request_id }
-//   poll GET /v2/requests/{id}/status until status is COMPLETED or FAILED
-//   GET /v2/requests/{id} for the final body
-// Output is a direct URL that expires ~1 hour after completion — download promptly. The
-// Segmind/kie paths are zero-dependency (plain fetch); the AI SDK is imported only when the
-// Gateway actually runs.
+// Fail over only on an explicit pre-submit rejection or a known outage shape, and resubmit only when
+// the submit itself failed: once a provider returns a task id, poll it to the end. A second
+// submission is a second charge.
+// Segmind auth is `x-api-key`, not Bearer (verified live). Segmind v2: POST /v2/<slug> -> request_id,
+// poll /v2/requests/{id}/status, then GET /v2/requests/{id}; output URLs expire after ~1 hour.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -30,29 +14,21 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { REPO_ROOT, brandDirFrom, die, extForMime, inferBrand, inferWorkspace, loadEnv, mimeOf, sleep, typeOf } from './catalog.mjs';
 import { r2FromEnv } from './r2.mjs';
 
-// The default provider order. A workspace can set its own in .env (<WS>_PROVIDER_ORDER=kie,gateway);
-// it is exact: providers it leaves out are never used for that workspace.
+// <WS>_PROVIDER_ORDER=kie,gateway in .env overrides it exactly: providers left out are never used.
 export const PROVIDER_ORDER = ['segmind', 'kie', 'gateway'];
 const providerOrder = (ws) => {
   const own = (process.env[`${ws}_PROVIDER_ORDER`] || '').split(',').map((q) => q.trim().toLowerCase()).filter((q) => PROVIDER_ORDER.includes(q));
   return own.length ? [...new Set(own)] : PROVIDER_ORDER;
 };
 
-// Harness model name -> the id each provider carries it under; a missing provider doesn't carry it.
-// generate-*.mjs build each provider's request from these ids and never hardcode another. `kind`
-// picks the Gateway's AI SDK call: image = generateImage, text-image = generateText with image output
-// (Gemini "Nano Banana" models are language models on the Gateway), video = experimental_generateVideo,
-// speech = generateSpeech. Base ids with endpoint variants get their suffix in the tool:
-// kie gpt-image-* -> <id>-text-to-image | -image-to-image; Segmind minimax-h3-max -> -turbo |
-// -reference-to-video; kie minimax-h3 -> /text-to-video | /image-to-video | /reference-to-video.
-// A kie id is set only where docs.kie.ai carries the SAME model (or, for minimax-h3-max, its base
-// H3 — the only H3 kie has) under a compatible shape; seedream-5-pro (kie: Seedream 3.0),
-// flux-2-pro (kie: Kontext only), grok-imagine-image-2 (kie: no refs), ideogram-v4-fast (kie: V3),
-// qwen-image-3 and reve-2 have none. Gateway ids: ai-gateway.vercel.sh/v1/models, checked 2026-09-29.
-// Re-check the provider's docs before adding an id — never guess one.
+// Harness model name -> the id each provider carries it under (missing = not carried). generate-*.mjs
+// never hardcode another id. `kind` picks the Gateway call: image = generateImage, text-image =
+// generateText with image output (Gemini image models), video = experimental_generateVideo, speech =
+// generateSpeech. Tools add endpoint suffixes (e.g. kie gpt-image-* -> -text-to-image | -image-to-image).
+// A provider id is set only where its docs carry the same model; never guess one.
 export const MODELS = {
   // images
-  'gpt-image-2.5':        { kind: 'image',      segmind: 'gpt-image-2.5-flare', kie: 'gpt-image-2-5-flare', gateway: 'openai/gpt-image-2.5-flare' }, // default (Flare = fast variant)
+  'gpt-image-2.5':        { kind: 'image',      segmind: 'gpt-image-2.5-flare', kie: 'gpt-image-2-5-flare', gateway: 'openai/gpt-image-2.5-flare' }, // default
   'gpt-image-2':          { kind: 'image',      segmind: 'gpt-image-2',         kie: 'gpt-image-2',         gateway: 'openai/gpt-image-2' },
   'nano-banana-pro':      { kind: 'text-image', segmind: 'nano-banana-pro',     kie: 'nano-banana-pro',     gateway: 'google/gemini-3-pro-image' },
   'nano-banana-2':        { kind: 'text-image',                                                             gateway: 'google/gemini-3.1-flash-image' },
@@ -64,24 +40,20 @@ export const MODELS = {
   'reve-2':               { kind: 'image',      segmind: 'reve-2' },
   'ideogram-v4-fast':     { kind: 'image',      segmind: 'ideogram-v4-fast' },
   // video
-  'minimax-h3-max':       { kind: 'video', segmind: 'minimax-h3-max', kie: 'minimax-h3', gateway: 'minimax/minimax-h3-max' }, // default
+  'minimax-h3-max':       { kind: 'video', segmind: 'minimax-h3-max', kie: 'minimax-h3', gateway: 'minimax/minimax-h3-max' }, // default; kie has only base H3
   'seedance-2.5':         { kind: 'video', segmind: 'seedance-2.5',      kie: 'bytedance/seedance-2-5',    gateway: 'bytedance/seedance-2.5' },
   'seedance-2':           { kind: 'video', segmind: 'seedance-2.0',      kie: 'bytedance/seedance-2',      gateway: 'bytedance/seedance-2.0' },
   'seedance-2-mini':      { kind: 'video', segmind: 'seedance-2.0-mini', kie: 'bytedance/seedance-2-mini', gateway: 'bytedance/seedance-2.0-mini' },
-  'flux-3-video-edit':    { kind: 'video', segmind: 'flux-3-video-edit' }, // edit-only: one source clip + prompt (segmind.com/models/flux-3-video-edit/api, 2026-10-01)
-  // kie only (docs.kie.ai/market/google/gemini-omni-flash-1-1, 2026-10-06): Segmind's gemini-omni-flash
-  // is the older 1.0 (no resolution or first frame); the Gateway has only gemini-omni-flash-preview.
+  'flux-3-video-edit':    { kind: 'video', segmind: 'flux-3-video-edit' }, // edit-only: one source clip + prompt
+  // kie only: Segmind's gemini-omni-flash is the older 1.0; the Gateway has only a preview.
   'gemini-omni-1.1-flash': { kind: 'video', kie: 'google/gemini-omni-flash-1-1' },
   // voice
   'gemini-3.8-flash-tts': { kind: 'speech', segmind: 'gemini-3.8-flash-tts', kie: 'google/gemini-3-8-flash-tts', gateway: 'google/gemini-3.8-flash-tts' }, // default
-  // Seed Audio 1.0 (voice, music, SFX). kie has no Seed Audio: there the same --voices-file cast
-  // runs on ElevenLabs Text to Dialogue v3.
+  // Seed Audio 1.0 (voice, music, SFX); on kie the same --voices-file cast runs on ElevenLabs.
   'seed-audio':           { kind: 'speech', segmind: 'seed-audio-1.0', kie: 'elevenlabs/text-to-dialogue-v3' },
 };
 
-// A model's routing entry: a MODELS name, any provider id listed there (e.g. openai/gpt-image-2 ->
-// gpt-image-2), or a raw Gateway id (`creator/model`, Gateway only) so any Gateway model runs
-// without a table edit. Returns { name, kind, segmind?, kie?, gateway? } or null.
+// Accepts a MODELS name, any provider id in it, or a raw Gateway id (`creator/model`, Gateway only).
 export function modelEntry(model, kind) {
   if (MODELS[model]) return { name: model, ...MODELS[model] };
   const hit = Object.entries(MODELS).find(([, e]) => e.gateway === model || e.segmind === model || e.kie === model);
@@ -95,9 +67,8 @@ export const userError = (message) => Object.assign(new Error(message), { quiet:
 
 const PROVIDER_KEY = { gateway: 'AI_GATEWAY_API_KEY', segmind: 'SEGMIND_API_KEY', kie: 'KIE_API_KEY' };
 
-// Per-workspace keys, strictly scoped (no shared fallback): the workspace comes from the first of
-// `paths` under workspaces/<WS>/, and only its <WS>_* keys are used. Sets the unprefixed names the
-// Segmind/kie clients read; returns { W, keys } (key presence) for planRoute.
+// Only the inferred workspace's <WS>_* keys are used (no shared fallback). Sets the unprefixed names
+// the clients read; returns { W, keys } (key presence).
 export function workspaceKeys(paths, from = '--out') {
   const ws = [paths].flat().filter(Boolean).map((p) => inferWorkspace(String(p))).find(Boolean);
   if (!ws) throw userError(`Could not infer the workspace from ${from} (expected workspaces/<Workspace>/...).`);
@@ -110,10 +81,8 @@ export function workspaceKeys(paths, from = '--out') {
   return { W, keys };
 }
 
-// The routing decision. Returns the ordered providers to try. `keys` = { gateway, segmind, kie }
-// presence; `entry` = the model's routing entry (default modelEntry(model, kind)); `blockers` =
-// { provider: why it can't carry this request } — auto skips that provider with a note, an explicit
-// --provider fails with the reason.
+// Returns the ordered providers to try. `blockers` = { provider: why it can't take this request }:
+// auto skips it with a note, an explicit --provider fails with the reason.
 export function planRoute({ model, provider = 'auto', keys, ws, blockers = {}, kind, entry = modelEntry(model, kind), label = model }) {
   const p = provider === 'vercel' ? 'gateway' : provider;
   const need = (q) => `Add ${ws}_${PROVIDER_KEY[q]}=... to .env`;
@@ -140,24 +109,17 @@ export function planRoute({ model, provider = 'auto', keys, ws, blockers = {}, k
   return plan;
 }
 
-// Gateway failures that happen before anything is generated: a rejected request (400), no
-// access/credit (402/403), unknown model (404), rate limit (429). 5xx, timeouts and malformed
-// responses are ambiguous — the generation may already be billed — so they never fail over.
+// Gateway failures before anything is generated. 5xx and timeouts may already be billed: no failover.
 const GATEWAY_PRESUBMIT = new Set(['GatewayInvalidRequestError', 'GatewayForbiddenError', 'GatewayModelNotFoundError', 'GatewayRateLimitError']);
 const isGatewayPreSubmit = (e) => GATEWAY_PRESUBMIT.has(e?.name) || [400, 402, 403, 404, 429].includes(e?.statusCode);
 const isGatewayAuth = (e) => e?.name === 'GatewayAuthenticationError' || e?.statusCode === 401;
-// A local pre-submit failure on any provider (missing AI SDK, reference hosting, a request shape the
-// provider can't take): nothing was sent, so the next provider may run.
+// Marks a local failure before anything was sent, so the next provider may run.
 export const preSubmit = (e) => Object.assign(e instanceof Error ? e : new Error(String(e)), { preSubmit: true });
-// kie.ai: 402 insufficient credits, 429/433 rate or sub-key limits, 455 maintenance, 5xx outages (as
-// an HTTP status or the body's `code`), and the 4:5/5:4 upscale-tier 422.
+// kie: 402 credits, 429/433 limits, 455 maintenance, 5xx (HTTP or body `code`), the 4:5/5:4 tier 422.
 const isKieOutage = (e) => /temporarily unavailable|aspect ratios|Internal error|(HTTP|code) (402|429|433|455|5\d\d)\b|failCode\D*5\d\d/i.test(e?.message || '');
-// Segmind: 5xx, 429 rate-limited, 406 insufficient credits, and a FAILED job (HTTP 422 on the result
-// fetch). Widen empirically as new shapes show up.
+// Segmind: 5xx, 429 rate limit, 406 credits, and a FAILED job (422 on the result fetch).
 const isSegmindOutage = (e) => /HTTP 5\d\d|HTTP 429|HTTP 406|HTTP 422|status.*FAILED/i.test(e?.message || '');
 
-// Walk the plan: run the first provider; move to the next only on that provider's explicit
-// pre-submit / outage failure. Gateway auth failures get a clear fix-the-key message instead.
 export async function runRoute(plan, runners, ws) {
   const failover = { gateway: isGatewayPreSubmit, segmind: isSegmindOutage, kie: isKieOutage };
   for (let i = 0; ; i++) {
@@ -174,13 +136,11 @@ export async function runRoute(plan, runners, ws) {
   }
 }
 const firstLine = (m) => String(m || '').replace(/\x1b\[[0-9;]*m/g, '').split('\n')[0];
-// What a tool prints for a fatal error: our own and the Gateway's messages are self-explanatory;
-// anything else keeps its stack.
+// Our own and the Gateway's errors print without a stack.
 export const errorText = (e) => (e?.quiet || /^Gateway/.test(e?.name || '') ? `${e.name && e.name !== 'Error' ? e.name + ': ' : ''}${e.message}` : e?.stack || String(e));
 
-// Retry a submit that failed before the provider accepted the job (no task/request id yet).
-// Outage-shaped and `fatal` errors are thrown at once so runRoute can fail over. Never wrap a poll
-// in this: resubmitting after a job was accepted is a second paid generation.
+// Retry a submit that failed before the job was accepted. Outage and `fatal` errors throw at once
+// so runRoute can fail over. Never wrap a poll in this: that would be a second paid generation.
 export async function retryTransient(submit, isOutage = () => false, attempts = 3, delayMs = 3000) {
   for (let attempt = 1; ; attempt++) {
     try { return await submit(); }
@@ -193,33 +153,31 @@ export async function retryTransient(submit, isOutage = () => false, attempts = 
 }
 
 // ---------- Gateway ----------
-// The Gateway client (AI SDK 7). Imported lazily so the Segmind/kie paths need no npm install.
-// Long video renders hold one request open; Node's fetch drops it after 5 min of silence, so the
-// client gets an undici agent with generous timeouts. Every call site passes maxRetries: 0 — an SDK
-// retry after a timeout would be a second paid generation.
+// Imported lazily so the Segmind/kie paths need no npm install. Node's fetch drops a request after
+// 5 min of silence, too short for video renders, hence the undici agent. Call sites pass
+// maxRetries: 0: an SDK retry after a timeout is a second paid generation.
 export async function gatewayClient(apiKey, timeoutSec = 1800) {
   let ai, createGateway;
   try { ai = await import('ai'); ({ createGateway } = await import('@ai-sdk/gateway')); }
   catch { throw preSubmit(new Error('The Gateway provider needs the AI SDK — run `npm install` in the repo root.')); }
   let fetchImpl;
   try {
-    const { Agent } = await import('undici');
+    // undici's own fetch: its Agent can't drive Node's bundled (older) undici.
+    const { Agent, fetch: undiciFetch } = await import('undici');
     const dispatcher = new Agent({ headersTimeout: timeoutSec * 1000, bodyTimeout: timeoutSec * 1000 });
-    fetchImpl = (url, init) => fetch(url, { ...init, dispatcher });
+    fetchImpl = (url, init) => undiciFetch(url, { ...init, dispatcher });
   } catch { /* undici missing: default fetch timeouts */ }
   return { ai, gw: createGateway({ apiKey, ...(fetchImpl ? { fetch: fetchImpl } : {}) }) };
 }
 
-// Print the Gateway's per-call warnings (unsupported settings are warnings there, not errors).
+// Unsupported settings are warnings on the Gateway, not errors.
 export function logGatewayWarnings(warnings) {
   for (const w of warnings || []) console.error(`WARN: gateway ${w.feature || w.setting || w.type}: ${w.details || w.message || ''}`.trim());
 }
 
 // ---------- references ----------
-// A local reference as a temporary signed R2 URL (Gateway video, every Segmind path). Brand assets
-// stay in the workspace R2 master; only the signed GET URL is temporary. A file not yet in R2 is
-// uploaded on demand — the local file is the source of truth, and a missing R2 copy is a sync gap,
-// not a reason to fail the render. http(s) URLs pass through.
+// A local reference as a public URL: a 1-hour signed R2 URL (uploaded first if R2 doesn't have it),
+// or, for a workspace without R2, kie's temporary file hosting.
 export async function presignRef(refPath, contextPath) {
   if (/^https?:\/\//i.test(refPath)) return refPath;
   const abs = resolve(refPath);
@@ -227,11 +185,14 @@ export async function presignRef(refPath, contextPath) {
   const brandDir = brandDirFrom(contextPath);
   const workspace = inferWorkspace(brandDir);
   const brand = inferBrand(brandDir);
+  const r2 = workspace && r2FromEnv(loadEnv(), workspace);
+  if (!r2) {
+    if (process.env.KIE_API_KEY) return kieUpload(abs);
+    throw userError(`Local references need a public URL: add R2 or a kie key for workspace ${workspace || '?'}, or pass an https URL.`);
+  }
   const rel = relative(brandDir, abs).replace(/\\/g, '/');
-  if (!workspace || !brand || rel.startsWith('../') || rel === '..')
+  if (!brand || rel.startsWith('../') || rel === '..')
     throw userError(`Local references must live inside ${brandDir} to get a signed R2 URL; move/catalog the file there or pass an https URL.`);
-  const r2 = r2FromEnv(loadEnv(), workspace);
-  if (!r2) throw userError(`No R2 credentials for workspace ${workspace}; local references need a signed R2 URL.`);
   const key = `${brand}/${rel}`;
   if (!(await r2.head(key))) {
     console.error(`not yet in R2, uploading ${basename(abs)} (${key})`);
@@ -250,8 +211,7 @@ async function segmindFetch(path, opts = {}) {
   return json;
 }
 
-// The output URL of a completed v2 job. The envelope isn't fully documented, so check the
-// plausible paths and throw with the raw body if none match.
+// The v2 result envelope isn't fully documented, so try the plausible paths.
 function segmindOutputUrl(body) {
   for (const v of [body?.output, body?.result?.output, body?.response?.output]) {
     const url = Array.isArray(v) ? v[0] : v;
@@ -260,7 +220,6 @@ function segmindOutputUrl(body) {
   throw new Error(`segmind job completed but no output url found: ${JSON.stringify(body)}`);
 }
 
-// Submit one v2 job (retrying only a failed submit), poll it to the end, return its output URL.
 export async function segmindJob(slug, input, timeoutSec) {
   const id = await retryTransient(async () => {
     const json = await segmindFetch(`/v2/${slug}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
@@ -281,7 +240,6 @@ export async function segmindJob(slug, input, timeoutSec) {
 }
 
 // ---------- kie.ai ----------
-// Throws on a non-OK response, so runRoute can fail over on an outage.
 export async function kie(path, { base = 'https://api.kie.ai', ...opts } = {}) {
   const res = await fetch(base + path, { ...opts, headers: { Authorization: `Bearer ${process.env.KIE_API_KEY}`, ...opts.headers } });
   const json = await res.json().catch(() => ({}));
@@ -289,7 +247,6 @@ export async function kie(path, { base = 'https://api.kie.ai', ...opts } = {}) {
   return json;
 }
 
-// Upload a local file to kie.ai's CDN and return its public URL; http(s) URLs pass through.
 export async function kieUpload(refPath) {
   if (/^https?:\/\//i.test(refPath)) return refPath;
   const abs = resolve(refPath);
@@ -304,11 +261,10 @@ export async function kieUpload(refPath) {
   return url;
 }
 
-// Create one market job (retrying only a failed create), poll it to the end, return its result URLs.
 export async function kieJob(model, input, timeoutSec, pollMs = 5000) {
   const taskId = await retryTransient(async () => {
     const json = await kie('/api/v1/jobs/createTask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, input }) });
-    // kie reports most rejections (402 no credits, 422 bad input, 455 maintenance) as HTTP 200 + body code.
+    // kie reports most rejections as HTTP 200 + a body code.
     if (json?.code !== undefined && json.code !== 200)
       throw Object.assign(userError(`${model} createTask -> code ${json.code} ${json.msg || JSON.stringify(json)}`), { fatal: json.code >= 400 && json.code < 500 });
     if (!json?.data?.taskId) throw new Error(`createTask failed: ${JSON.stringify(json)}`);
@@ -331,7 +287,7 @@ export async function kieJob(model, input, timeoutSec, pollMs = 5000) {
 }
 
 // ---------- saving results ----------
-// Insert a variation suffix before the extension: foo.png + index 1 -> foo_2.png
+// foo.png + index 1 -> foo_2.png
 export const suffixed = (p, i) => (i === 0 ? p : join(dirname(p), `${basename(p, extname(p))}_${i + 1}${extname(p)}`));
 
 async function writeAs(outPath, ext, bytes) {
@@ -341,8 +297,7 @@ async function writeAs(outPath, ext, bytes) {
   return finalPath;
 }
 
-// Download a result URL to outPath under the extension of the actual bytes (Content-Type, else the
-// URL's own) — providers may return jpg for a png request, so --out's extension isn't trusted.
+// The extension follows the actual bytes: providers may return jpg for a png request.
 export async function downloadTo(url, outPath, { fallbackExt, transform = (b) => b } = {}) {
   const res = await fetch(url);
   if (!res.ok) throw userError(`download ${url} -> HTTP ${res.status}`);
@@ -350,8 +305,7 @@ export async function downloadTo(url, outPath, { fallbackExt, transform = (b) =>
   return writeAs(outPath, ext, transform(Buffer.from(await res.arrayBuffer())));
 }
 
-// Save every result — a URL (Segmind/kie) is downloaded, { bytes, mediaType | ext } (Gateway) is
-// written — result i to suffixed(out, i). Prints "Saved: <path>" per file; returns the paths.
+// Results are URLs (Segmind/kie) or { bytes, mediaType | ext } (Gateway). Prints "Saved: <path>" per file.
 export async function saveResults(results, out, { fallbackExt, transform = (b) => b } = {}) {
   const saved = [];
   for (const [i, r] of results.entries()) {
@@ -364,9 +318,7 @@ export async function saveResults(results, out, { fallbackExt, transform = (b) =
   return saved;
 }
 
-// The generation sidecar: <stem>.gen.json beside each saved file, recording what was sent —
-// { tool, model, provider, at, params (only those set), refs: [{ role, path }], prompt } — for the
-// Studio. Ref paths are brand-relative when the file sits in a brand folder, else as given.
+// <stem>.gen.json beside each saved file, read by the Studio. Ref paths are brand-relative when possible.
 export async function writeSidecars(saved, { tool, model, provider, params = {}, refs = [], prompt }) {
   const rel = (p) => (/^https?:\/\//i.test(p) || !inferBrand(p) ? p : relative(brandDirFrom(p), resolve(p)).replace(/\\/g, '/'));
   const body = JSON.stringify({
@@ -381,9 +333,7 @@ export async function writeSidecars(saved, { tool, model, provider, params = {},
   }
 }
 
-// Seed Audio 1.0 (music beds, SFX) runs through generate-voice.mjs's Seed Audio client on Segmind,
-// so audio generation has one client and one default. `seconds` is the target length (best-effort).
-// Exits with the child's status if it fails.
+// Music beds and SFX run through generate-voice.mjs's Seed Audio client. `seconds` is best-effort.
 export function runSeedAudio({ prompt, seconds, num = 1, timeout = 600, out }) {
   const child = spawnSync(process.execPath, [
     join(REPO_ROOT, 'tools', 'generate-voice.mjs'),

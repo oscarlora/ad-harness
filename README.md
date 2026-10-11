@@ -1,66 +1,92 @@
-# Ad Harness
+# Ad Production Harness
 
-AI ad agent for ecommerce brands — image and video Meta ads, made with any coding agent (Claude Code,
-Codex, Cursor…). [AGENTS.md](AGENTS.md) is how the system thinks and the rules the agent follows;
-this is how humans set up and work.
+Skills and tools to make Meta ads end to end with AI agents like Claude and Codex.
 
-## Where things live
+## Who it's for
 
-- **This repo** — skills and tools. `main` is the source of truth; only the maintainer merges.
-- **Brand work** — Cloudflare R2, one bucket per workspace (`tools/sync-brand.mjs`). Never in the repo.
-- **Keys** — your local `.env`, assembled from the team vault. Never in the repo.
-- **Client delivery** — Google Drive + Notion, pushed when ads are approved.
+People who make ads on their own or as a team: business owners, agencies, brands, creative
+strategists, copywriters, video editors, designers.
 
-## Setup (once — macOS or Windows)
+Even if you've never made ads with AI, or never made ads at all, everything you need to go from idea
+to final file is here.
 
-1. Install a coding agent that reads `AGENTS.md` (Claude Code, Codex, Cursor…).
-2. Install git — macOS: run `git` once in Terminal and accept the tools install · Windows: `winget install Git.Git`.
-3. `git clone https://github.com/oscarlora/ad-harness.git && cd ad-harness`
-   — a **fresh clone into a new folder**; never reuse an older Ad Harness or brand-share copy.
-4. Create `.env` from `.env.example` and paste the block the maintainer sent you. **Never paste keys
-   into the chat** — the agent reads `.env` from disk.
-5. Run setup — macOS: `bash tools/setup.sh` · Windows: `powershell -ExecutionPolicy Bypass -File tools\setup.ps1`.
-   macOS: installs Node, the GitHub CLI, ffmpeg, and app deps. Windows: installs
-   Node and app deps, and checks the rest (ffmpeg, Python) with install hints. Both print a health
-   check. Re-run any time.
-6. Drive, if your workspace uses it: `node tools/connect-drive.mjs <oauth-client.json> <WORKSPACE>`
-   — sign in with your own Google account. The maintainer sends the json.
-7. Optional, macOS: install [Palmier Pro](https://www.palmier.io), the recommended video editor
-   (the agent drives it). Without it, videos are edited with ffmpeg (**edit-video**).
-8. **Open your agent in the Ad Harness folder itself** — not a parent folder. Its project config only
-   works from the repo root.
-9. Test: say *"pull \<brand\> and open the studio."*
+Built by [@oscarlorak](https://x.com/oscarlorak). It's how I make ads myself, every day. Easy, fast,
+and cheap.
 
-GitHub sign-in (`gh auth login`) is optional — only needed the first time you propose a harness
-change. Run it **yourself in Terminal** when that day comes; it needs a real keyboard and can't be
-driven by the agent.
+## What it makes
 
-## Daily use
+- **Image ads:** a single static post: a product photo or graphic with a headline in the brand's
+  fonts, sized for feed and stories.
+- **Scripts:** a script for a video someone films: the hook, what to say, what to show, and the
+  call to action.
+- **Podcast video ads:** what looks like a clip from a real podcast: two hosts at their mics in a
+  studio, talking about the product, with captions.
+- **Song video ads:** a short, catchy song about the product, its lyrics as captions over scenes
+  that match each line.
+- **Animated video ads:** a short animated scene (Pixar-like, claymation, anime…), with either a
+  narrator over characters acting it out or characters speaking their own lines.
+- **Slides video ads:** a narrated explainer: one simple illustrated slide per line, each thing
+  lighting up as it's said, with the hook on top and captions below.
 
-Everything runs through your agent — no git commands, ever.
+## How it works
 
-- **"Update Ad Harness"** — get the latest version. Never touches brand work or `.env`.
-- **"Pull \<brand\>"** to start, **"push \<brand\>"** to stop — work lives in R2, so anyone can take over.
-- **"\<skill\> should …"** — your agent opens a PR. Once merged, everyone gets it on next update.
-- **"Open the studio"** — the local app (`node studio/dev.mjs`) for every brand: the ads **Board**,
-  the **Media** library and the **Workflow** page (each ad's progress); it updates live as ads render.
+Everything runs through your agent: say what you want in plain words.
 
-## Rules
+1. **Research:** *"Research Acme's greens powder."* The agent reads the brand's site and reviews and
+   writes up the product, who buys it (personas) and why (angles).
+2. **Concept:** *"Make an image ad for Acme"* — or a script, or a podcast, song, animated or
+   slides video ad. The agent offers 3 different concepts (persona, angle, hook); you
+   pick one.
+3. **Write:** hooks, script and on-screen copy.
+4. **Make:** the design or storyboard, then images, voices, music and video clips. You see and
+   approve each step before the next.
+5. **Edit:** clips, captions, music and effects are cut into the final video. You watch it in the
+   studio and click on the video to leave notes; the agent applies them while you watch, then exports.
+6. **Review and upload:** *"Open the studio"* — the local web app: **Board** (review ads),
+   **Media** (search the library), **Workflow** (each ad's progress and its edit). Approved ads are uploaded to
+   Google Drive, Notion, or anywhere you set up (e.g. Dropbox). Anything you or a client want
+   remembered goes into the brand's memory, so the next ads follow it.
 
-- Harness changes go through a PR, never a direct edit.
-- One driver per brand at a time. The sync warns you before overwriting someone's newer work.
-- Push to R2 when you stop.
-- The rest (updating, keys, client data) the agent follows from [AGENTS.md](AGENTS.md).
+**Working solo:** everything stays on your computer. With cloud storage set up, say *"push Acme"*
+when you finish to back it up.
 
-## Maintainer
+**Working as a team:**
 
-- Merging to `main` is releasing; the team gets it at next update.
-- New teammate: mint their R2 token (scoped to their workspace's bucket) and generation keys (Segmind,
-  kie and the AI Gateway, which the media library needs; order in AGENTS.md), share the Drive folders
-  with their Google account, add their `.env` block to the vault, invite them to this repo, run setup
-  together.
-- Offboarding: revoke their tokens, unshare Drive, remove from the repo.
+Teams share brands through cloud storage:
+
+- At the start of every session: *"Update Ad Harness and pull Acme"* — the latest harness and the
+  latest brand files. Updating never touches your brand work or `.env`.
+- At the end of your work: *"Push Acme"*. The sync warns before overwriting someone's newer work.
+- Share each workspace's `.env` block through a password vault, and propose harness changes as a
+  pull request.
+
+## How to set it up
+
+1. Install an AI agent (Claude Code, Codex, Cursor…).
+2. Tell it: *"Set up Ad Production Harness from https://github.com/oscarlora/ad-harness"*
+
+The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
+keys ([.env.example](.env.example)):
+
+- **Generation:** at least one of [Segmind](https://www.segmind.com), [kie.ai](https://kie.ai) or
+  the [Vercel AI Gateway](https://vercel.com/ai-gateway); the Gateway also runs the media library.
+- **Cloud storage (teams; optional solo):** a
+  [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket the team and their
+  agents pull from and push to.
+- **Uploads (optional):** Google Drive, Notion.
+
+Videos are edited in the harness's own editor and exported through Chrome, Edge, or a Chromium that
+setup installs. It runs on macOS, Windows and Linux. When there's a newer version, it asks before
+updating; your brand work is never touched.
+
+## How it's organized
+
+- [`AGENTS.md`](AGENTS.md) — the rules every agent reads first
+- `skills/` — step-by-step procedures, one folder per skill
+- `tools/` — the scripts the agent runs (each has `--help`)
+- `studio/` — the local web app
+- `workspaces/` — your brands, never committed; local, or synced to the workspace's R2 bucket
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Do whatever you want with this. [MIT License](LICENSE).

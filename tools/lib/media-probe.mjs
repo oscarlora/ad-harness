@@ -1,27 +1,15 @@
-// media-probe.mjs — the probe step of ingest-media: hash a folder of media, skip what the catalog
-// already holds (same bytes, or a near-duplicate re-export), allocate ids, extract technical fields,
-// make light derivatives, place each original into media/, and write its skeleton record
-// (analyze-media then fills the descriptions with Gemini). Zero npm deps. Library only — run it
-// through ingest-media.mjs.
+// media-probe.mjs — catalog-media's probe step (library only): hash new files, skip exact and
+// near-duplicates, allocate ids, extract technical fields, make derivatives, place each original into
+// media/ and write its skeleton record. analyze-media fills the descriptions.
 //
-// Images use `sips` where it exists (macOS — zero-dep, no ffmpeg needed) and fall back to
-// ffmpeg/ffprobe elsewhere (Windows/Linux). Video/audio use ffmpeg/ffprobe. Both degrade
-// gracefully when the tool is missing (record still created, derivatives flagged pending).
-//
-// A video is decoded once: one ffmpeg pass (videoPass) writes the scene cuts, the sprite sheet and
-// analyze-media's inputs (silent picture proxy + audio track, held in a temp work dir until it runs).
-// On macOS the decode and downscale run on the VideoToolbox media engine (a fraction of the CPU);
-// anything it can't take falls back to software. At most MEDIA_JOBS videos are worked at once
-// (env, or ingest --jobs; default 2) so an ingest never saturates the machine.
-//
-// Near-duplicates (re-exports: new bytes, same picture) are skipped like exact copies, conservatively:
-//   image — perceptual hash close in any rotation AND the pixels match (re-exports ≈0.01 of pixels
-//           differ; burst shots of distinct moments ≥0.03 stay new).
+// Images use `sips` on macOS, ffmpeg elsewhere; video/audio use ffmpeg. A missing tool still yields a
+// record, with derivatives flagged pending. A video is decoded once (videoPass), on VideoToolbox where
+// possible; at most MEDIA_JOBS videos (default 2) are worked at once.
+// Near-duplicates (re-exports) are skipped conservatively:
+//   image — perceptual hash close in any rotation AND the pixels match.
 //   video — duration within 0.05 s AND (same original name, or matching frame hashes).
-// Every new record keeps its hash (`phash`); older records get theirs from their thumb/keyframes on
-// first need. The original file name is kept as file.original.
 //
-// Derivatives (keyed by id, written into _catalog/):
+// Derivatives (keyed by id, under _catalog/):
 //   image → thumbs/<id>.jpg (~400px)  proxies/<id>.jpg (~1536px, what Gemini analyzes)
 //   video → thumbs/<id>.jpg (poster)  keyframes/<id>_NN.jpg (one per scene)  sprites/<id>.jpg
 //   audio → peaks/<id>.json (waveform)
@@ -34,7 +22,7 @@ import { readDriveSources } from './drive.mjs';
 import { INLINE_MAX } from './gateway.mjs';
 
 const HAS_FFMPEG = have('ffmpeg') && have('ffprobe');
-const HAS_SIPS = have('sips'); // macOS only — images fall back to ffmpeg elsewhere
+const HAS_SIPS = have('sips');
 const INSTALL_FFMPEG = 'install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)';
 const round1 = (n) => Math.round(n * 10) / 10;
 
@@ -42,7 +30,7 @@ const round1 = (n) => Math.round(n * 10) / 10;
 const jobLimit = () => Math.max(1, parseInt(process.env.MEDIA_JOBS, 10) || 2);
 let active = 0;
 const waiting = [];
-// Run fn with at most MEDIA_JOBS heavy video jobs at once (shared by probe and analyze in a process).
+// At most MEDIA_JOBS heavy video jobs at once, shared by probe and analyze.
 export async function heavy(fn) {
   if (active < jobLimit()) active++; else await new Promise((r) => waiting.push(r));
   try { return await fn(); } finally { const next = waiting.shift(); if (next) next(); else active--; }
@@ -51,8 +39,7 @@ export async function heavy(fn) {
 let VT = null;
 const hasVT = () => (VT ??= process.platform === 'darwin' && HAS_FFMPEG && /videotoolbox/.test(run('ffmpeg', ['-hide_banner', '-hwaccels'], { allowFail: true }).stdout || ''));
 const HW = ['-hwaccel', 'videotoolbox'];
-// One frame of a video at t s (hardware-decoded where possible, else software): `post` = the
-// ffmpeg args after the input. Returns run()'s result, or null.
+// One frame at t s; `post` = the ffmpeg args after the input. Returns run()'s result, or null.
 function grab(file, t, post, opts = {}) {
   for (const hw of hasVT() ? [HW, []] : [[]]) {
     const r = run('ffmpeg', ['-y', '-v', 'error', ...hw, '-ss', String(t), '-i', file, '-frames:v', '1', ...post], { allowFail: true, ...opts });
@@ -84,8 +71,7 @@ function imageDerivatives(file, paths, id) {
 }
 
 // ---------- video (ffmpeg) ----------
-// Display size (rotation applied — iPhone clips are stored landscape with a rotate flag), duration,
-// and what the single pass needs to know.
+// Display size with rotation applied (iPhone clips are stored landscape with a rotate flag).
 export function videoMeta(file) {
   const p = ffprobeJson(file);
   const v = (p.streams || []).find((s) => s.codec_type === 'video') || {};
@@ -107,10 +93,9 @@ const DOWNLOAD = { yuv420p: 'nv12', yuvj420p: 'nv12', nv12: 'nv12', yuv420p10le:
 const TURN = { 90: ',transpose=clock', 180: ',hflip,vflip', 270: ',transpose=cclock' };
 
 // One decode, every derivative asked for: { scenes } → cut times; { sprite: { path, interval, frameH } }
-// → a 10×10 sheet of 192×frameH frames; { work } → work/picture.mp4 (silent proxy) + work/track.mp3 (mono
-// 16 kHz audio, when there is audio). Clips past 90 s encode two proxy rungs in the same pass and
-// keep the first under the inline budget. Tries, in order: decode + scale on the VideoToolbox engine,
-// hardware decode with software filters, all software. Returns { cuts, proxy, track } (null = not made).
+// → a 10×10 sheet; { work } → work/picture.mp4 (silent proxy) + work/track.mp3 (mono 16 kHz).
+// Tries VideoToolbox decode + scale, then hardware decode only, then all software.
+// Returns { cuts, proxy, track } (null = not made).
 export async function videoPass(file, meta, { scenes = false, sprite = null, work = null, rung = 0 }) {
   if (!HAS_FFMPEG) throw new Error(`ffmpeg is required for video — ${INSTALL_FFMPEG}`);
   const tmp = mkdtempSync(join(tmpdir(), 'pass-'));
@@ -159,9 +144,8 @@ export async function videoPass(file, meta, { scenes = false, sprite = null, wor
 // Where the probe leaves a video's analysis inputs for analyze-media (keyed by content).
 export const workDir = (sha) => join(tmpdir(), 'ad-harness-work', String(sha).slice(0, 16));
 
-// Scene boundaries (seconds, 0 … duration) from the pass's cuts — or PySceneDetect's, when it is
-// installed (a second decode, but adaptive). Cuts closer than MIN_SCENE to the previous boundary
-// or to the end are dropped, so no scene is empty or a flash frame.
+// Scene boundaries (s) from the pass's cuts, or PySceneDetect's when installed. Cuts within MIN_SCENE
+// of the previous boundary or the end are dropped (no flash-frame scenes).
 const MIN_SCENE = 0.3;
 function sceneBounds(file, passCuts, duration) {
   let cuts = passCuts;
@@ -195,7 +179,7 @@ async function videoDerivatives(file, paths, id, meta, work) {
   const sprites = existsSync(sheet) ? { sheet: `_catalog/sprites/${id}.jpg`, cols, rows, interval: round1(interval), frameW: 192, frameH } : null;
   return { scenes, sprites };
 }
-// Audio: waveform peaks — decode low-rate PCM and bucket into ~400 max-amplitude samples.
+// ~400 max-amplitude samples from low-rate PCM.
 function audioPeaks(file, paths, id) {
   const N = 400;
   const r = run('ffmpeg', ['-v', 'quiet', '-i', file, '-ac', '1', '-ar', '4000', '-f', 's16le', '-'], { allowFail: true, binary: true });
@@ -256,10 +240,9 @@ function fingerprint(file, tmp) {
   return fp;
 }
 
-// Matches new files against the catalog and against each other. Older records' hashes are computed
-// from their thumb / keyframes on first need and cached in the record.
+// Matches new files against the catalog and each other. Older records get their hash on first need.
 function nearDupFinder(paths, records) {
-  const names = new Map(); // original name → catalog ids (records' file.original + tracked Drive files)
+  const names = new Map(); // original name → catalog ids (records + tracked Drive files)
   const addName = (n, id) => { if (n && id) (names.get(nameKey(n)) || names.set(nameKey(n), new Set()).get(nameKey(n))).add(id); };
   for (const r of records) addName(r.file?.original, r.id);
   for (const src of Object.values(readDriveSources(paths))) for (const f of Object.values(src.files || {})) addName(f.name, f.catalogId);
@@ -323,7 +306,6 @@ function nearDupFinder(paths, records) {
       }
       return null;
     },
-    // A file accepted as new joins the candidates, so later files in the batch are checked against it.
     add(id, file, fp) {
       if (fp.type === 'image' && fp.phash) cands.push({ id, type: 'image', batch: basename(file), gray: fp.gray, rec: { phash: fp.phash } });
       if (fp.type === 'video' && fp.phash) cands.push({ id, type: 'video', batch: basename(file), name: fp.name, duration: fp.duration, exact: true, rec: { phash: fp.phash } });
@@ -331,10 +313,7 @@ function nearDupFinder(paths, records) {
   };
 }
 
-// Probe one new file: technical fields + derivatives, then place the original into media/ under a
-// provisional <id>_<slug>.<ext> name (analyze-media later renames it to a richer descriptor), so
-// the catalog is usable immediately — the gallery serves the local original and
-// sync-brand --originals can push it. Writes the skeleton record.
+// Probe one new file and place the original as <id>_<slug>.<ext> (analyze-media renames it later).
 async function probe({ file, media, id, sha256, phash, sourceType, sourceName }) {
   const paths = catalogPaths(media);
   ensureDirs(paths);
@@ -385,11 +364,9 @@ function collect(dir, out = []) {
   return out.sort();
 }
 
-// Plan + probe a whole folder in ONE process. Planning is sequential and light: hash each file,
-// skip exact copies and near-duplicates (of the catalog or of an earlier file in the folder), and
-// allocate sequential ids (no race). Probing then runs in parallel (heavy video work MEDIA_JOBS at a
-// time). Returns [{ id, src, existing, reason?, type?, name?, warnings? }] — skipped files report
-// the catalog id they duplicate and why. plan only → the same list without probing anything.
+// Planning (hash, dedupe, allocate ids) is sequential so ids never race; probing runs in parallel.
+// Returns [{ id, src, existing, reason?, type?, name?, warnings? }]; skipped files give the id they
+// duplicate. planOnly returns the list without probing.
 export async function planAndProbe({ dir, media, sourceType = 'brand', sourceName = '', planOnly = false, log = console.log }) {
   const paths = catalogPaths(media);
   const records = readRecords(paths);

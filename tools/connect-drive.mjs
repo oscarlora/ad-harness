@@ -1,7 +1,6 @@
 // connect-drive.mjs — one-time OAuth consent → captures a workspace's Drive refresh token into .env.
 // Usage: node tools/connect-drive.mjs <oauth-client.json> <WORKSPACE>
-// Starts a localhost server, prints an auth URL; after you click Allow it writes
-//   <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN to the repo-root .env.
+// Writes <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN to the repo-root .env.
 import fs from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';

@@ -1,16 +1,12 @@
-// extend-to-story.mjs — turn an approved 4:5 static into its 9:16 Story version by AI extension.
-// Centers the 4:5 on a 9:16 canvas with flat bars (ffmpeg; grey, or white with --paste: grey bars
-// read as grey content and leak into a grey subject), then asks the image model to fill
-// only the bars by continuing the scene. The model re-renders the middle too (small text can drift);
-// by default its whole output is the Story file. --paste puts the original 4:5 back over the middle
-// with a 60 px feathered seam, so the approved art stays pixel-identical and only the bars are new
-// (used for illustrated slide frames; make-ai-slides).
+// extend-to-story.mjs — turn an approved 4:5 static into its 9:16 Story version: the image model
+// fills bars above and below (via generate-image.mjs, 2K).
 //
 // Usage:
 //   node tools/extend-to-story.mjs --in <approved 4:5.png> --out <story.png> \
 //     --above "<what continues above>" --below "<what continues below>" [--timeout 600] [--paste] [--dry]
-// --dry prints the prompt and writes the padded canvas without generating.
-// Generation runs through generate-image.mjs (default model, provider order, 2K, 9:16).
+//   --paste  put the original back over the middle (60 px feathered seam), so only the bars are new;
+//            without it the model re-renders the middle and small text can drift
+//   --dry    print the prompt and write the padded canvas, no generation
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +21,7 @@ const tmp = mkdtempSync(join(tmpdir(), 'story-'));
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }));
 // The canvas sits next to --out: Segmind only takes local refs from inside the brand folder.
 const padded = join(dirname(args.out), `.${basename(args.out, '.png')}.canvas.png`);
-const bar = args.paste ? 'white' : 'grey';
+const bar = args.paste ? 'white' : 'grey'; // with --paste, grey bars would read as content and leak into a grey subject
 run('ffmpeg', ['-v', 'error', '-y', '-i', args.in, '-vf', `pad=iw:trunc(iw*16/9/2)*2:0:(oh-ih)/2:color=${args.paste ? '0xFFFFFF' : '0x808080'}`, padded]);
 
 const prompt = `Create 1 2K, 9:16 image by extending the reference image.

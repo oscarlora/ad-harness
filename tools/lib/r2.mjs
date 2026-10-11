@@ -1,11 +1,5 @@
-// r2.mjs — Cloudflare R2 (S3-compatible) client with AWS SigV4 signing from scratch.
-// Zero dependencies (node:crypto + fetch). One bucket per workspace; the bucket mirrors the
-// workspace's whole brand trees 1:1 (<Brand>/...) plus its private extensions (_harness/...);
-// see sync-brand.mjs. Creds, per workspace, in .env:
-//   <WS>_R2_ACCOUNT_ID  <WS>_R2_ACCESS_KEY_ID  <WS>_R2_SECRET_ACCESS_KEY  <WS>_R2_BUCKET
-//
-// Exports the low-level signers (signRequest, presignUrl) so they can be checked against the
-// published AWS SigV4 test vectors (see selftest()), plus createR2() for real calls.
+// r2.mjs — Cloudflare R2 client with AWS SigV4 signing, zero deps. One bucket per workspace.
+// Self-test against AWS's published SigV4 examples: node tools/lib/r2.mjs --selftest
 import { createHash, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -15,7 +9,7 @@ const hmac = (key, d) => createHmac('sha256', key).update(d).digest();
 const hmacHex = (key, d) => createHmac('sha256', key).update(d).digest('hex');
 export const EMPTY_SHA256 = sha256hex('');
 
-// RFC-3986 encoding (AWS-style): encodeURIComponent + the four extra chars it leaves alone.
+// encodeURIComponent leaves !'()* alone; AWS wants them encoded.
 const enc = (s) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 const encPath = (p) => p.split('/').map(enc).join('/');
 const unxml = (s) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -29,8 +23,7 @@ function signingKey(secret, dateStamp, region, service) {
 
 const amzNow = (d = new Date()) => d.toISOString().replace(/[:-]|\.\d{3}/g, '');
 
-// Header-auth SigV4. headers must include host (and any x-amz-* you want signed). Returns the
-// Authorization header value + the signature. payloadHash = hex sha256 of the body (or UNSIGNED-PAYLOAD).
+// headers must include host. payloadHash = hex sha256 of the body (or UNSIGNED-PAYLOAD).
 export function signRequest({ method, path, query = '', headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate }) {
   const dateStamp = amzDate.slice(0, 8);
   const lower = {};
@@ -46,7 +39,7 @@ export function signRequest({ method, path, query = '', headers, payloadHash, re
   return { authorization, signature, signedHeaders };
 }
 
-// Query-auth SigV4 (presigned URL). Returns a full https URL that anyone can GET until it expires.
+// A presigned URL anyone can GET until it expires.
 export function presignUrl({ method = 'GET', host, path, expires = 3600, region, service = 's3', accessKeyId, secretAccessKey, amzDate = amzNow() }) {
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/${region}/${service}/aws4_request`;
@@ -64,7 +57,6 @@ export function presignUrl({ method = 'GET', host, path, expires = 3600, region,
   return `https://${host}${encPath(path)}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-// A thin R2 client. region is "auto" for R2; the S3 endpoint is <accountId>.r2.cloudflarestorage.com.
 export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, region = 'auto', service = 's3' }) {
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket) throw new Error('createR2: missing accountId/accessKeyId/secretAccessKey/bucket');
   const host = `${accountId}.r2.cloudflarestorage.com`;
@@ -86,7 +78,7 @@ export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, regi
   return {
     host, bucket,
     async put(key, body, contentType) {
-      // R2 occasionally returns transient 5xx ("InternalError ... Please try again") — retry with backoff.
+      // R2 sometimes returns transient 5xx.
       for (let attempt = 1; ; attempt++) {
         const res = await send('PUT', key, { body, contentType });
         if (res.ok) return true;
@@ -113,15 +105,13 @@ export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, regi
       if (!res.ok && res.status !== 404) throw new Error(`R2 delete ${key} -> HTTP ${res.status}`);
       return true;
     },
-    // Every object under a prefix, with metadata: [{ key, etag, size, lastModified }]. etag is the
-    // object's md5 hex for single-part PUTs (what put/putFile do); multipart etags contain '-'.
+    // [{ key, etag, size, lastModified }]. etag = md5 hex for single-part PUTs; multipart etags contain '-'.
     async listWithMeta(prefix = '') {
       const out = [];
       let token;
       do {
         const params = new URLSearchParams({ 'list-type': '2', prefix });
         if (token) params.set('continuation-token', token);
-        // canonical query must be sorted + RFC3986-encoded; URLSearchParams gives us a usable form for R2.
         const query = [...params.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => `${enc(k)}=${enc(v)}`).join('&');
         const res = await send('GET', '', { query });
         if (!res.ok) throw new Error(`R2 list -> HTTP ${res.status}`);
@@ -142,7 +132,7 @@ export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, regi
   };
 }
 
-// R2 creds for a workspace from a parsed .env object (returns null if not configured).
+// Reads <WS>_R2_ACCOUNT_ID, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY, _BUCKET; null if not configured.
 export function r2FromEnv(env, workspace) {
   const W = workspace.toUpperCase();
   const accountId = env[`${W}_R2_ACCOUNT_ID`];
@@ -153,7 +143,33 @@ export function r2FromEnv(env, workspace) {
   return createR2({ accountId, accessKeyId, secretAccessKey, bucket });
 }
 
-// Verify the signing against the two published AWS SigV4 examples. Run: node tools/lib/r2.mjs --selftest
+// Workspaces whose bucket anyone can read, without keys (override with <WS>_R2_PUBLIC_URL).
+export const PUBLIC_BUCKETS = { Shared: 'https://pub-c457777d46bc40dcaf37f000903f5a53.r2.dev' };
+export const MANIFEST = '.manifest.json'; // per top-level prefix; a public bucket can't be listed
+
+// Read-only client for a public bucket: lists from <prefix>/.manifest.json, which pushes write.
+export function r2Public(env, workspace) {
+  const base = (env[`${workspace.toUpperCase()}_R2_PUBLIC_URL`] || PUBLIC_BUCKETS[workspace] || '').replace(/\/+$/, '');
+  if (!base) return null;
+  const url = (key) => `${base}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  return {
+    public: true,
+    async get(key) {
+      const res = await fetch(url(key));
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`GET ${key} -> HTTP ${res.status}`);
+      return Buffer.from(await res.arrayBuffer());
+    },
+    async listWithMeta(prefix = '') {
+      const res = await fetch(url(`${prefix.split('/')[0]}/${MANIFEST}`));
+      if (res.status === 404) return [];
+      if (!res.ok) throw new Error(`manifest -> HTTP ${res.status}`);
+      return (await res.json()).filter((o) => o.key.startsWith(prefix));
+    },
+    presignGet: (key) => url(key),
+  };
+}
+
 function selftest() {
   const accessKeyId = 'AKIAIOSFODNN7EXAMPLE';
   const secretAccessKey = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';

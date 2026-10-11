@@ -1,12 +1,11 @@
 'use client';
-// The Workflow page: every ad folder with its current step (no `ad`), or one ad's step bar for its
-// format, each step opening its artifact (animation adds the storyboard strip). Steps are inferred
-// server-side from the files on disk (lib/server/workflow.js) and refresh live over SSE.
+// The Workflow page: the ad list with current steps (no `ad`), or one ad's step bar and artifacts.
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { brandUrl, fileUrl, workflowUrl } from '../../lib/client/api.js';
 import { useBrandData } from '../../lib/client/hooks.js';
 import { LoadError, ToolbarStart } from '../BrandPage.js';
+import Editor from '../edit/Editor.js';
 import ViewerShell from '../ViewerShell.js';
 import { Dot, MdFile, TextDisclosure } from './parts.js';
 import Markdown from './Markdown.js';
@@ -25,8 +24,7 @@ function Lightbox({ ws, brand, images, index, onStep, onClose }) {
   );
 }
 
-// A step's files, by kind: documents rendered, images as a grid (click to enlarge, prompt behind a
-// disclosure), players for video and audio, plain text behind disclosures, anything else as a link.
+// A step's files, rendered by kind.
 function Files({ ws, brand, files }) {
   const [zoom, setZoom] = useState(-1);
   const images = files.filter((f) => f.type === 'image');
@@ -78,8 +76,10 @@ function Files({ ws, brand, files }) {
   );
 }
 
-function Panel({ ws, brand, step, storyboard }) {
+function Panel({ ws, brand, step, data }) {
   const pn = step.panel || {};
+  const { storyboard } = data;
+  if (pn.editor) return <section className="flow-panel"><Editor ws={ws} brand={brand} ad={data.folder} edit={data.edit} /></section>;
   const has = pn.note || pn.md || pn.fields || pn.files || (pn.storyboard && storyboard);
   return (
     <section className="flow-panel">
@@ -98,8 +98,9 @@ function Panel({ ws, brand, step, storyboard }) {
   );
 }
 
-// Opens on the storyboard when there is one, else on the step in progress, else the last one done.
-const defaultStep = (d) => (d.storyboard && 'storyboard')
+// Opens on the edit when there is one, else the storyboard, else the step in progress, else the last one done.
+const defaultStep = (d) => d.steps.find((s) => s.panel?.editor)?.key
+  || (d.storyboard && 'storyboard')
   || d.steps.find((s) => s.state === 'current')?.key
   || [...d.steps].reverse().find((s) => s.done)?.key
   || d.steps[0]?.key;
@@ -135,7 +136,7 @@ function Detail({ ws, brand, ad }) {
               </button>
             ))}
           </nav>
-          {step && <Panel ws={ws} brand={brand} step={step} storyboard={data.storyboard} />}
+          {step && <Panel ws={ws} brand={brand} step={step} data={data} />}
         </div>
       )}
     </div>

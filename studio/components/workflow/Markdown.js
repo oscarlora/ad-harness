@@ -1,11 +1,9 @@
-// Minimal markdown → React, enough for the harness's own docs (storyboards, briefs, voices):
-// headings, paragraphs, bullet/numbered lists (indented continuation lines join their item),
-// tables, and inline bold / italic / code / links. HTML comments are dropped. No raw HTML.
-// Also the table-row helpers the server's own markdown readers share (no client code here).
+// Minimal markdown → React (headings, lists, tables, inline marks; no raw HTML), plus table helpers.
+// Server code imports this file too: keep it free of client-only code.
 
 // "| a | b |" → ['a', 'b'].
 export const tableCells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
-// A header-separator row ("|---|:-:|"), or one with every cell empty.
+// "|---|:-:|", or a row of empty cells.
 export const isSeparator = (cells) => cells.every((c) => /^:?-*:?$/.test(c));
 
 const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)\s]+\)|\*[^*\s][^*]*\*)/g;

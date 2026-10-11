@@ -1,11 +1,6 @@
-// Studio launcher. Runs a BUILT app by default and only rebuilds when the source has
-// actually changed, so starting it twice in a row is nearly instant.
-//
-// Why not `next dev` for everyone: dev mode rebuilds its route manifest continuously, and
-// that manifest drifts. The symptom is brutal to diagnose from the outside, because the
-// page still loads and most things work: only some API routes quietly answer 404. A
-// production build bakes the route table once, so a route that exists on disk is a route
-// that answers. Pass --dev when you are editing the app and want hot reload back.
+// Studio launcher: runs the built app, rebuilding only when the source changed.
+// Usage: node studio/dev.mjs [--dev]   (--dev = `next dev` with hot reload; env PORT, STUDIO_HOST)
+// Default is a production build because `next dev`'s route table drifts and some API routes start answering 404.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -16,21 +11,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 const requestedPort = process.env.PORT || '4179';
 const next = join(here, 'node_modules', 'next', 'dist', 'bin', 'next');
 const devMode = process.argv.includes('--dev');
-// Loopback only by default: the studio can open files and edit records, so it is not for the LAN.
-// Set STUDIO_HOST (e.g. 0.0.0.0) only to deliberately expose it; writes still refuse non-local hosts.
+// Loopback only by default: the studio opens files and edits records. Writes still refuse non-local hosts.
 const host = process.env.STUDIO_HOST || '127.0.0.1';
 const shownHost = host === '127.0.0.1' ? 'localhost' : host;
 
-// Two people (or a person and a Claude session) starting the studio at the same time would
-// otherwise both grab port 4179 and fight over the same `next start` process — the second
-// launch doesn't fail cleanly, it can knock the first one's server down. So: probe the
-// requested port, and if it's taken, walk upward until an actually-free one turns up.
+// Two launches on one port can knock each other's server down, so walk up to a free port.
 function isPortFree(p) {
   return new Promise((resolve) => {
     const srv = net.createServer();
     srv.once('error', () => resolve(false));
     srv.once('listening', () => srv.close(() => resolve(true)));
-    // Probe the exact address Next will bind, so a port read as free is one Next can grab.
+    // Probe the exact address Next will bind.
     srv.listen(p, host);
   });
 }
@@ -45,14 +36,10 @@ if (port !== requestedPort) {
 }
 
 const env = { ...process.env };
-// Next allows one dev server per build dir. Whichever port we actually land on (manually
-// set, or auto-picked because the default was busy) gets its own dist dir so parallel
-// sessions never fight over the same .next lock; the untouched default (4179) keeps .next
-// and its warm cache for the common single-user case.
+// Next allows one server per build dir, so any non-default port gets its own dist dir.
 if (port !== '4179') env.NEXT_DIST_DIR = `.next-dev-${port}`;
 
-// Those per-port dirs pile up. Drop each one whose port nothing answers on (and that has not
-// changed in 10 minutes, so an instance still building before it listens keeps its dir).
+// Remove stale per-port dirs: nothing listening and untouched for 10 minutes (an instance may still be building).
 const answers = (p) => new Promise((res) => {
   const s = net.connect(Number(p), host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host);
   s.once('connect', () => { s.destroy(); res(true); }).once('error', () => res(false));
@@ -63,10 +50,8 @@ for (const name of readdirSync(here).filter((n) => /^\.next-dev-\d+$/.test(n) &&
   rmSync(dir, { recursive: true, force: true });
 }
 
-// Trust the OS certificate store. Corporate networks that intercept TLS install their root
-// there; without this, the build's one fetch (next/font/google downloading Poppins) dies with
-// UNABLE_TO_VERIFY_LEAF_SIGNATURE. Child processes inherit NODE_OPTIONS too. The flag exists from
-// Node 22.15 / 23.8; an older Node refuses to start with it, so only pass it where it exists.
+// Trust the OS certificate store so next/font's download works behind TLS-intercepting proxies.
+// The flag exists from Node 22.15 / 23.8; older Node refuses to start with it.
 const [major, minor] = process.versions.node.split('.').map(Number);
 const hasSystemCa = major > 23 || (major === 23 && minor >= 8) || (major === 22 && minor >= 15);
 if (hasSystemCa && !/--use-system-ca/.test(env.NODE_OPTIONS || '')) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --use-system-ca`.trim();
@@ -74,12 +59,11 @@ if (hasSystemCa && !/--use-system-ca/.test(env.NODE_OPTIONS || '')) env.NODE_OPT
 const distDir = env.NEXT_DIST_DIR || '.next';
 const stampFile = join(here, distDir, '.source-stamp');
 
-// A cheap fingerprint of everything a build depends on: the newest mtime and the file count
-// across the app's own source. Cheaper than hashing contents and enough to notice an edit.
+// Build fingerprint: file count + newest mtime across the app's source.
 function sourceStamp() {
   let newest = 0;
   let files = 0;
-  // Dot-entries (.next, .next-dev-*, .git, and the dist dir's .source-stamp) never count.
+  // Skip dot-entries (.next*, .git, .source-stamp).
   const walk = (dir) => {
     let entries = [];
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -118,7 +102,7 @@ if (devMode) {
     console.log(built ? 'Studio: the app changed, rebuilding once.' : 'Studio: first run, building the app once.');
     console.log('This takes a minute. Every start after this is immediate until the app changes again.\n');
     run(['build'], 'build');
-    try { mkdirSync(join(here, distDir), { recursive: true }); writeFileSync(stampFile, stamp); } catch { /* stamp is an optimisation, not a requirement */ }
+    try { mkdirSync(join(here, distDir), { recursive: true }); writeFileSync(stampFile, stamp); } catch { /* optional */ }
   }
 
   console.log(`\nStudio on http://${shownHost}:${port}\n`);

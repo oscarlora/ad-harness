@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// search-media.mjs — search the media catalog. Node 22+; keyword-only search needs no npm deps.
-// Hard filters narrow. The query is ranked two ways and fused: keywords across the text fields
-// (alias-aware via inputs/products.json) and meaning, via the Gemini vectors from embed-media
-// (any language; matches each asset's full description and each video scene — a scene hit returns
-// its time range). Without vectors or a key it falls back to keywords alone.
+// search-media.mjs — search the media catalog: filters narrow, then keyword and vector rankings are
+// fused. A video scene hit returns its time range. Without vectors or a key, keywords alone (no npm deps).
 //
 // Usage:
 //   node tools/search-media.mjs --media <media dir> [--query "bowl de pollo visto desde arriba"] \

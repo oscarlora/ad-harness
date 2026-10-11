@@ -1,8 +1,5 @@
-// Serves any file inside the brand dir by brand-relative path (?p=…): output renders,
-// media originals, and _catalog derivatives (thumbs, proxies, sprites, keyframes, peaks).
-// Traversal-safe (resolves inside the brand dir or 403s), correct mime, Range support.
-// A media original missing locally (light-synced brand) 302s to a presigned R2 URL when
-// the workspace has creds.
+// Serves a brand file by brand-relative path (?p=…); paths outside the brand dir 403.
+// A media original missing locally (light sync) redirects to a presigned R2 URL when creds exist.
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { within } from '../../../../../lib/server/brands.js';

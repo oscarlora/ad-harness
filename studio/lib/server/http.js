@@ -1,5 +1,4 @@
-// Small HTTP helpers shared by the route handlers: brand-scoped route wrapping (and its guarded
-// write form), JSON responses, and Range-aware file streaming (video seeks without re-downloading).
+// Route helpers: brand-scoped handlers, guarded writes, JSON responses, Range-aware file streaming.
 import { createReadStream, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { brandCtx } from './brands.js';
@@ -8,8 +7,7 @@ import { catalogLib } from './harness.js';
 export const jsonRes = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 
-// Wrap an /api/[ws]/[brand]/* handler: resolves the brand (404 when unknown) and turns a throw
-// into a 500. The handler gets (req, ctx) with ctx = { ws, brand, dir }.
+// Wrap an /api/[ws]/[brand]/* handler: 404 on unknown brand, 500 on throw. ctx = { ws, brand, dir }.
 export const brandRoute = (handler) => async (req, { params }) => {
   try {
     const ctx = await brandCtx(params);
@@ -20,9 +18,8 @@ export const brandRoute = (handler) => async (req, { params }) => {
   }
 };
 
-// Writes (and opening files) come only from this machine's own pages. A JSON content type cannot
-// be sent cross-site without a CORS preflight, which is never granted; Origin and Host must both
-// be local, which also stops DNS rebinding and LAN access when STUDIO_HOST widens the bind.
+// Writes come only from this machine's pages: requiring JSON forces a CORS preflight (never granted) for
+// cross-site requests, and local Origin + Host checks stop DNS rebinding and LAN access.
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 function refuseForeign(req) {
   const type = (req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
@@ -36,10 +33,9 @@ function refuseForeign(req) {
   return null;
 }
 
-// brandRoute for any non-GET handler: refuses non-local or non-JSON requests first.
+// brandRoute for non-GET handlers.
 export const brandPost = (handler) => brandRoute((req, ctx) => refuseForeign(req) || handler(req, ctx));
 
-// Stream a local file, honouring Range requests (206 + Content-Range).
 export async function fileResponse(req, abs) {
   let st = null;
   try { st = abs && statSync(abs); } catch {}

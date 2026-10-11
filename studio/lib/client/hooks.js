@@ -1,10 +1,8 @@
 'use client';
-// Hooks shared by the Board, Media and Workflow pages.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiBase, getJson } from './api.js';
 
-// Load /api/[ws]/[brand]/<kind> and reload it whenever the brand's SSE watch stream reports a
-// `change`. updatedAt bumps after each live update — key an "Updated" flash off it.
+// Load /api/[ws]/[brand]/<kind>; reload on each `change` from the watch stream (updatedAt bumps then).
 export function useBrandData(ws, brand, kind) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -27,7 +25,7 @@ export function useBrandData(ws, brand, kind) {
   return { data, setData, error, load, updatedAt };
 }
 
-// Full-screen viewer keys: Esc closes, arrows step. Ignored while typing in a field.
+// Viewer keys: Esc closes, arrows step; ignored while typing.
 export function useViewerKeys(onStep, onClose) {
   useEffect(() => {
     const onKey = (e) => {
@@ -41,7 +39,7 @@ export function useViewerKeys(onStep, onClose) {
   }, [onStep, onClose]);
 }
 
-// Copy-to-clipboard with a brief "Copied" state: const [copied, copy] = useCopied().
+// const [copied, copy] = useCopied()
 export function useCopied() {
   const [copied, setCopied] = useState(false);
   const copy = (text) => navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }).catch(() => {});

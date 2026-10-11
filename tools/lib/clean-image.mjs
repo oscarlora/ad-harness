@@ -1,9 +1,6 @@
-// clean-image.mjs — strip embedded metadata from generated images (provenance manifests such as
-// C2PA "Content Credentials", EXIF, XMP, text chunks) without touching a single pixel.
-// PNG and JPEG are cleaned; other formats pass through unchanged. Zero deps.
-//
-// generate-image.mjs runs every saved file through this. To clean existing files by hand:
-//   node tools/lib/clean-image.mjs <file> [file …]
+// clean-image.mjs — strip metadata (C2PA, EXIF, XMP, text chunks) from PNG/JPEG without touching
+// pixels; other formats pass through. generate-image.mjs runs every saved file through it.
+// Usage: node tools/lib/clean-image.mjs <file> [file …]
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 

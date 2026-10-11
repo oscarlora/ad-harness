@@ -1,21 +1,12 @@
 #!/usr/bin/env node
-// ingest-media.mjs — one command from a pile of media to a searchable library:
-// pull → probe (skip exact copies and near-duplicate re-exports, ids, thumbnails, scenes; one
-// hardware-decoded pass per video, --jobs at a time, default 2) → analyze (Gemini: picture, sound,
-// and a sentence-level transcript of any speech) → embed (Gemini vectors) → index → push to R2.
-// Models via Vercel AI Gateway; nothing runs locally but ffmpeg.
-// Idempotent: files already in the catalog (same bytes, or the same picture re-exported) are skipped,
-// each with its reason, so re-running an inbox is safe.
-// Without --source it finishes what is pending (unanalyzed files, stale vectors) and pushes.
-//
-// A Drive folder source is tracked: the brand's inputs/media/_catalog/drive-sources.json records
-// every Drive file ingested from it (a skipped duplicate points at the id it duplicates), so re-runs
-// download only files it hasn't seen (safe on a daily schedule), and the folder's --source-type /
-// --source-name are remembered for later runs. Ends with a one-line summary for logs. --dry-run
-// lists what would be downloaded and stops.
+// catalog-media.mjs — media to searchable library in one command: pull → probe → analyze → embed →
+// index → push to R2. Idempotent: duplicates are skipped with their reason. Without --source it
+// finishes what is pending and pushes. A Drive folder is tracked in drive-sources.json, so re-runs
+// download only new files and remember its --source-type / --source-name. --dry-run lists what would
+// be downloaded and stops. --jobs = videos probed at once.
 //
 // Usage:
-//   node tools/ingest-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] \
+//   node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] \
 //        [--source-type brand|generated|external] [--source-name "Sept shoot"] [--jobs 2] [--no-push] [--dry-run]
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -35,18 +26,17 @@ const TOOLS = fileURLToPath(new URL('.', import.meta.url));
 const node = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: 'inherit' });
 
 const a = parseArgs(process.argv.slice(2));
-if (!a.brand) { console.error('Usage: node tools/ingest-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] [--source-type ..] [--source-name ..] [--jobs 2] [--no-push] [--dry-run]'); process.exit(1); }
+if (!a.brand) { console.error('Usage: node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] [--source-type ..] [--source-name ..] [--jobs 2] [--no-push] [--dry-run]'); process.exit(1); }
 if (a.jobs) process.env.MEDIA_JOBS = String(a.jobs);
 const brand = resolve(a.brand);
 const paths = catalogPaths(brand);
 const media = paths.media;
-if (!a['dry-run']) requireKey(media); // fail before any work if analysis can't run
+if (!a['dry-run']) requireKey(media); // fail before any work
 
-// 1. Pull — local folders are probed in place; links go through pull-media into a temp cache
-// (Drive folders incrementally, against drive-sources.json).
+// 1. Pull — local folders are probed in place; links go through pull-media into a temp cache.
 let dir = null, cache = null, drive = null;
 if (a.source && !existsSync(a.source)) {
-  cache = mkdtempSync(join(tmpdir(), 'ingest-'));
+  cache = mkdtempSync(join(tmpdir(), 'catalog-'));
   const ok = node('pull-media.mjs', ['--source', a.source, '--out', cache, '--workspace', inferWorkspace(brand), '--brand', brand, ...(a['dry-run'] ? ['--dry-run'] : [])]).status === 0;
   if (!ok || a['dry-run']) { rmSync(cache, { recursive: true, force: true }); process.exit(ok ? 0 : 1); }
   try { drive = JSON.parse(readFileSync(join(cache, '.drive-pull.json'), 'utf8')); } catch {}
@@ -74,7 +64,7 @@ try {
     for (const m of manifest.filter((x) => x.existing && /^same bytes/.test(x.reason))) console.log(`skip ${basename(m.src)} — ${m.reason}`);
     console.log(`${manifest.length} files · ${fresh} new · ${manifest.length - fresh} already cataloged`);
 
-    // Record what came from Drive now that it has catalog ids, so no later run downloads it again.
+    // Record Drive files now that they have catalog ids.
     if (drive) {
       const idOf = new Map(manifest.map((m) => [basename(m.src), m.id]));
       const now = new Date().toISOString();
@@ -85,7 +75,7 @@ try {
     }
   }
 
-  // 3. Analyze new files, plus any earlier ones left unanalyzed (speech is transcribed here too).
+  // 3. Analyze new files plus any left unanalyzed.
   const res = await analyzeMany({ media, all: true });
 
   // 4. Vectors + index.

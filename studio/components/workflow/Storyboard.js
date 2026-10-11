@@ -1,25 +1,21 @@
 'use client';
-// The animation storyboard as a horizontal, swipeable strip (CSS scroll-snap; trackpad, touch,
-// arrow keys, prev/next): one card per shot with its storyboard row, its frame, its clip (model
-// takes as chips), how each frame and clip was generated (from its .gen.json sidecar: parameters,
-// references, prompt behind a disclosure), scene dividers between
-// the cards. Media loads lazily: a frame as it nears view, a clip only once played.
+// The storyboard as a swipeable scroll-snap strip: one card per shot (row, frame, clip takes, generation details).
+// Media loads lazily: a frame as it nears view, a clip only once played.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../lib/client/api.js';
-import { IcCal, IcCamera, IcChip, IcClock, IcCut, IcEye, IcFile, IcFilm, IcFrame, IcGrid, IcImage, IcMotion, IcQuote, IcServer, IcSound, IcSpark, IcText, IcX } from '../media/icons.js';
+import { IcCal, IcCamera, IcChip, IcClock, IcCut, IcEye, IcFile, IcFilm, IcFrame, IcGrid, IcImage, IcMotion, IcPlay, IcQuote, IcServer, IcSound, IcSpark, IcText, IcX } from '../media/icons.js';
 import Markdown, { Inline } from './Markdown.js';
 
 const MODEL = { s25: 'Seedance 2.5', minimax: 'MiniMax', mini: 'Seedance Mini', orig: 'First take', preview: 'Preview' };
 
-// Takes arrive newest first; Seedance 2.5 is the chosen model, so it leads when present.
-// A preview (the clip mixed with voiceover and music) is never the default take.
+// Seedance 2.5 leads when present; a preview (clip + voice + music mix) is never the default.
 const defaultTake = (clips) => clips.find((c) => c.model === 's25') || clips.find((c) => c.model !== 'preview') || clips[0];
 
 const PROVIDER = { kie: 'kie.ai', segmind: 'Segmind', gateway: 'AI Gateway' };
 const span = (ns) => (ns.length > 1 ? `${Math.min(...ns)}–${Math.max(...ns)}` : '');
 const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); };
 
-// One row per parameter: [icon, name, value]; empty values are dropped.
+// [icon, name, value] per non-empty parameter.
 const genRows = (g, shots) => [
   [IcChip, 'Model', g.model],
   [IcServer, 'Provider', PROVIDER[g.provider] || g.provider],
@@ -34,8 +30,7 @@ const genRows = (g, shots) => [
   [IcCal, 'Generated', g.at && when(g.at)],
 ].filter(([, , v]) => v);
 
-// Hovering a reference thumbnail shows it large beside the pointer, fixed to the viewport so no
-// card or strip overflow clips it; it flips to the pointer's other side near the right edge.
+// Hover preview is fixed to the viewport so card overflow can't clip it; flips side near the right edge.
 function Peek({ peek }) {
   if (!peek) return null;
   const w = Math.min(360, window.innerWidth * 0.4), gap = 16;
@@ -44,8 +39,7 @@ function Peek({ peek }) {
   return <img className="gen__peek" src={peek.src} alt="" style={{ left, top, width: w }} />;
 }
 
-// How a frame or clip was generated: its sidecar's parameters, references (thumbnail + name, each
-// opening the file, hover to enlarge) and prompt. Nothing without a sidecar.
+// How a frame or clip was generated (its sidecar); nothing without one.
 function GenInfo({ ws, brand, label, gen, shots }) {
   const [peek, setPeek] = useState(null);
   if (!gen) return null;
@@ -114,7 +108,7 @@ function ShotMedia({ ws, brand, shot, take, onTake, ratio, onRatio }) {
         )}
         {!playing && take && (
           <button type="button" className="sb-play" aria-label={`Play clip ${shot.n}`} onClick={() => setPlaying(true)}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z" fill="currentColor" /></svg>
+            <IcPlay />
           </button>
         )}
       </div>
@@ -133,7 +127,7 @@ function ShotMedia({ ws, brand, shot, take, onTake, ratio, onRatio }) {
 
 function ShotCard({ ws, brand, shot }) {
   const isShot = shot.n != null;
-  const [ratio, setRatio] = useState(null); // the frame's own shape, so a 16:9 slide isn't cropped to 9:16
+  const [ratio, setRatio] = useState(null); // so a 16:9 slide isn't cropped to 9:16
   const [chosen, setChosen] = useState(null);
   const take = isShot ? shot.clips.find((c) => c.model === chosen) || defaultTake(shot.clips) : null;
   const scene = shot.scene.split(/\s+[—(]/)[0];
@@ -173,7 +167,7 @@ function ShotCard({ ws, brand, shot }) {
 
 export default function Storyboard({ ws, brand, sb }) {
   const strip = useRef(null);
-  // Scroll to the card d away from the one at the strip's snap edge (before the first: the start).
+  // Scroll d cards from the one at the snap edge.
   const step = (d) => {
     const el = strip.current;
     if (!el) return;
@@ -187,7 +181,7 @@ export default function Storyboard({ ws, brand, sb }) {
   const stepRef = useRef(step);
   stepRef.current = step;
 
-  // Arrow keys step the strip, except while a field or a player has focus.
+  // Arrow keys step the strip unless a field or player has focus.
   useEffect(() => {
     const onKey = (e) => {
       if (e.target?.closest?.('input, textarea, select, video, audio')) return;

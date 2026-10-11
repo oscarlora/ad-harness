@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// record-ad.mjs — the per-ad records system: owns the record schema and builds the ads index.
-// Zero dependencies.
+// record-ad.mjs — owns the ad record schema and builds the ads index.
+// One record per ad at <Brand>/outputs/json/<id>.json. The agent writes the creative fields;
+// generate-image.mjs --record stamps the generation.
 //
-// Each ad is one record at  workspaces/<Workspace>/<Brand>/outputs/json/<id>.json  — the single
-// source of truth for that ad. The agent writes the creative fields; generate-image.mjs --record
-// stamps the actual generation payload + output back into it.
-//
-// Record schema:
 //   {
 //     "id": 41,
 //     "status": "planned | generated | approved | synced",
@@ -26,8 +22,7 @@
 // Usage:
 //   node tools/record-ad.mjs --index <brand outputs/ dir>   rebuild outputs/index.md from json/*.json
 //
-// The index refresh also strips embedded metadata (C2PA, EXIF, XMP) from the images of every
-// approved or synced ad (lib/clean-image.mjs; pixels untouched), so an approved file is always clean.
+// --index also strips metadata (lib/clean-image.mjs) from the images of approved and synced ads.
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { cleanImage } from './lib/clean-image.mjs';
@@ -69,8 +64,7 @@ const md = [
 writeFileSync(join(outputs, 'index.md'), md);
 console.log(`wrote ${join(outputs, 'index.md')} (${recs.length} ads)`);
 
-// Approved/synced images leave the machine clean of provenance metadata. Output paths are as the
-// generator stamped them: repo-relative (workspaces/...) or absolute.
+// Output paths are repo-relative or absolute, as the generator stamped them.
 const locate = (p) => { const abs = resolve(REPO_ROOT, p); return existsSync(abs) ? abs : null; };
 let cleaned = 0;
 for (const r of recs.filter((x) => ['approved', 'synced'].includes(x.status))) {

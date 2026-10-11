@@ -1,10 +1,7 @@
-﻿# setup.ps1 — Ad Harness machine setup (Windows twin of setup.sh). Idempotent: run it on a fresh
-# machine, or any time something seems off. Installs Node LTS via winget when missing, installs
-# npm deps, points git at the repo's hooks (.githooks: the never-commit-client-data check), then
-# prints a plain-language health check.
+﻿# setup.ps1 — Windows twin of setup.sh, idempotent: Node LTS via winget when missing, npm deps and
+# the git hooks, then a health check. Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
-# (Works in stock Windows PowerShell 5.1 on Windows 10/11; PowerShell 7 works too.)
 
 $ErrorActionPreference = 'Continue'
 Set-Location (Split-Path -Parent $PSScriptRoot)   # repo root (this script lives in tools\)
@@ -46,8 +43,9 @@ if (Test-NodeOk) {
   }
 }
 
-# ── npm deps (the Vercel AI Gateway: media library + third generation provider after Segmind, kie) ──
-if (Test-Path 'node_modules') {
+# ── npm deps (Vercel AI Gateway, the video export) — again whenever package.json changed ──
+$fresh = { param($dir) (Test-Path "$dir\node_modules\.package-lock.json") -and ((Get-Item "$dir\node_modules\.package-lock.json").LastWriteTime -gt (Get-Item "$dir\package.json").LastWriteTime) }
+if (& $fresh '.') {
   Ok 'npm deps present'
 } else {
   npm install --no-fund --no-audit 2>&1 | Out-Null
@@ -55,7 +53,7 @@ if (Test-Path 'node_modules') {
   else { Warn "npm install failed — the media library and the Vercel AI Gateway provider won't work until it succeeds" }
 }
 
-# ── git hooks (only inside the repo; repeating it is harmless) ────────────────
+# ── git hooks ─────────────────────────────────────────────────────────────────
 if ((Test-Path '.githooks') -and (Has 'git')) {
   git rev-parse --is-inside-work-tree 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) {
@@ -64,11 +62,20 @@ if ((Test-Path '.githooks') -and (Has 'git')) {
   }
 }
 
-# ── studio app deps (only when the app exists) ───────────────────────────────
-if ((Test-Path 'studio\package.json') -and -not (Test-Path 'studio\node_modules')) {
+# ── studio app deps ───────────────────────────────────────────────────────────
+if ((Test-Path 'studio\package.json') -and -not (& $fresh 'studio')) {
   npm install --prefix studio --no-fund --no-audit 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Ok 'studio app deps installed' }
   else { Warn "npm install for studio failed — the studio app won't run until it succeeds" }
+}
+
+# ── video export browser: an installed Chrome or Edge, else Playwright's Chromium ──
+node -e "import('playwright-core').then(async({chromium})=>{for(const channel of['chrome','msedge','chromium'])try{await(await chromium.launch({channel})).close();process.exit(0)}catch{}process.exit(1)})" 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) { Ok 'video export browser present' }
+else {
+  npx --no-install playwright-core install --no-shell chromium 2>&1 | Out-Null
+  if ($LASTEXITCODE -eq 0) { Ok 'Chromium installed for video export' }
+  else { Warn 'Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium' }
 }
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -76,26 +83,14 @@ Write-Host 'Health check'
 if (Test-Path '.env') {
   Ok '.env present'
 } else {
-  Bad '.env missing — create a file named .env here and paste your block from the team vault'
+  Bad '.env missing — copy .env.example to .env and add your keys'
 }
 
-# The GitHub CLI is optional — updates work without it; it's only needed to propose harness changes (PRs).
-if (Has 'gh') {
-  gh auth status 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Ok 'GitHub CLI signed in' }
-  else {
-    Warn 'GitHub CLI not signed in — optional, only needed to propose harness changes (PRs)'
-    Write-Host "    signing in is a human step — run gh auth login yourself in a terminal (it needs a real keyboard; agents can't drive it)"
-  }
-} else {
-  Warn 'GitHub CLI missing — optional, only needed to propose harness changes (PRs): winget install GitHub.cli'
-}
-
-# ffmpeg is required on Windows: images and video both catalog through it (macOS has sips, Windows doesn't).
+# Required on Windows: images catalog through ffmpeg too (no sips).
 if (Has 'ffmpeg')   { Ok 'ffmpeg present' }   else { Bad 'ffmpeg missing (needed for media cataloging): winget install Gyan.FFmpeg' }
 if (Has 'yt-dlp')   { Ok 'yt-dlp present' }   else { Warn 'yt-dlp missing (optional — URL/social pulls): winget install yt-dlp.yt-dlp' }
 
-# Python + Pillow (brand type sheets: make-type-sheet.py; song/animation captions: song-edit.py).
+# Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
 # The bare "python" on Windows can be the Microsoft Store stub, so check that it actually runs.
 $pyv = ''
 try { $pyv = (& python --version 2>&1 | Out-String).Trim() } catch { }
@@ -103,9 +98,9 @@ if ($LASTEXITCODE -eq 0 -and $pyv -match '^Python 3') {
   Ok "$pyv present"
   python -c 'import PIL' 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Ok 'Pillow present' }
-  else { Warn 'Pillow missing (needed for type sheets and song-edit.py): pip install pillow' }
+  else { Warn 'Pillow missing (needed for pull-fonts.py): pip install pillow' }
 } else {
-  Warn 'Python missing (needed for type sheets and song-edit.py): winget install Python.Python.3.12   (then: pip install pillow)'
+  Warn 'Python missing (needed for pull-fonts.py and edit-song.py): winget install Python.Python.3.12   (then: pip install pillow)'
 }
 
 Write-Host 'Done.'

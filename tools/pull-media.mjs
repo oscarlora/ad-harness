@@ -1,18 +1,12 @@
 #!/usr/bin/env node
-// pull-media.mjs — fetch a brand's media into a local cache for catalog-media to ingest.
-// Zero npm deps. Sources:
-//   - local   : a folder or file already on disk            → copied into the cache
-//   - drive   : a Google Drive folder/file link or id       → the workspace's Drive creds (API), or the
-//               public link when the workspace has none and the item is link-shared
-//   - air     : an Air.inc board share link (app.air.inc/a/<short>/b/<board>) → its public share API, no key
-//   - url     : a direct media URL, or a YouTube/social link → yt-dlp if present, else a direct fetch
-// (Dropbox / OneDrive are recognized and reported as not-yet-wired connectors.)
+// pull-media.mjs — fetch media into a local cache for catalog-media. Sources: a local folder/file, a
+// Google Drive link or id (workspace creds, else the public link), an Air.inc board share link, or a
+// URL (yt-dlp if present, else a direct fetch). Dropbox / OneDrive are reported as not wired yet.
 //
 // Usage:
 //   node tools/pull-media.mjs --source "<link|path>" --out <cache dir> [--workspace <WS>] [--brand <dir>] [--dry-run]
-// The workspace (for Drive creds) is inferred from --out under workspaces/<WS>/..., --brand, or --workspace.
-// --brand makes a Drive folder pull incremental against the brand's drive-sources.json (see pullDrive);
-// --dry-run lists what a Drive pull would download, without downloading.
+// The workspace comes from --out, --brand, or --workspace. --brand makes a Drive folder pull
+// incremental (drive-sources.json); --dry-run lists what a Drive pull would download.
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,11 +32,7 @@ function driveId(source) {
   const m = source.match(/\/folders\/([\w-]+)/) || source.match(/\/file\/d\/([\w-]+)/) || source.match(/[?&]id=([\w-]+)/);
   return m ? m[1] : (/^[\w-]{20,}$/.test(source) ? source : null);
 }
-// A Drive file or folder (recursing into subfolders). With the workspace's Drive creds it uses the
-// API; without, a link-shared folder/file is read through the public link. With `brand`, a folder is
-// pulled incrementally: files already in the brand's drive-sources.json are skipped (unless the API
-// reports a newer modifiedTime). Writes <out>/.drive-pull.json (what was listed, downloaded, skipped,
-// failed) for ingest-media to record. `dryRun` lists what would be downloaded and stops.
+// Writes <out>/.drive-pull.json (listed, downloaded, skipped, failed) for catalog-media to record.
 async function pullDrive(source, out, W, { brand, dryRun } = {}) {
   const id = driveId(source);
   if (!id) { console.error('Could not parse a Drive folder/file id from the source.'); process.exit(1); }
@@ -86,8 +76,7 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
   return downloaded.length;
 }
 
-// An Air.inc board share link. The share's short id opens Air's public API (no key): page through
-// the board's clips and fetch each original file (not the transcoded stream). Sub-boards aren't walked.
+// Air's public share API (no key): fetch each clip's original, not the transcode. Sub-boards aren't walked.
 async function pullAir(source, out, { dryRun } = {}) {
   const m = source.match(/air\.inc\/a\/([\w-]+)\/b\/([\w-]+)/);
   if (!m) { console.error('Air: pass a board share link (app.air.inc/a/<id>/b/<board id>).'); process.exit(1); }

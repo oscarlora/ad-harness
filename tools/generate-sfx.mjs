@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // generate-sfx.mjs — generate isolated sound effects with Seed Audio 1.0.
-// Runs through the shared Seed Audio helper (lib/providers.mjs runSeedAudio).
 
 import { die, parseArgs } from './lib/catalog.mjs';
 import { runSeedAudio } from './lib/providers.mjs';

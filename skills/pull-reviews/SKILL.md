@@ -1,18 +1,11 @@
 ---
 name: pull-reviews
-description: Get a brand's reviews into a CSV when none was supplied. Detects the store's review platform (Okendo, Stamped, Judge.me, Loox, Yotpo, Reviews.io) and pulls the public review feed to inputs/reviews.csv. Use at the start of research when the brand is a DTC/Shopify store and no reviews CSV was handed over.
+description: Get a brand's reviews into a CSV when none was supplied. Detects the store's review platform (Okendo, Stamped, Judge.me, Loox, Yotpo, Reviews.io) and pulls the public review feed to inputs/reviews.csv. Use at the start of research when the brand is a DTC/Shopify store and no reviews CSV was handed over, or when asked to pull or refresh reviews.
 ---
 
 # Pull reviews
 
-Pull a store's public reviews into `inputs/reviews.csv` — only what the storefront already
-serves; never invent reviews, quotes, or counts. Run before the **research-brand** skill, which
-assumes the CSV exists.
-
-## When to use
-
-- A DTC/Shopify brand with no reviews CSV.
-- The user asks to pull or refresh a brand's reviews.
+Pull a store's public reviews into `inputs/reviews.csv`, before **research-brand**.
 
 ## Pull
 
@@ -22,28 +15,20 @@ assumes the CSV exists.
    ```
    `--detect-only` prints the platform + id without writing.
 2. Sanity-check the printed count and average against the public product page.
-3. Hand off to research.
 
 ## If it doesn't pull
 
-Route by what detection reports:
+- **Listed, not built yet** (tool exits 2) — build the adapter (below), then pull. No need to ask.
+- **Unlisted / UNKNOWN** (tool exits 1) — don't grind:
+  1. Ask whether to attempt a one-time pull.
+  2. If yes, try once (its public feed, or reading the reviews page by hand) and write the CSV.
+  3. If that fails, say so and ask the user for the CSV, else screenshots or a counts + key-quotes summary.
 
-- **Listed, adapter built** (Okendo, Stamped, Judge.me, Loox) — the pull just works.
-- **Listed, not built yet** (Yotpo, Reviews.io; tool exits 2) — build the
-  adapter (below), then pull. Expected work; no need to ask.
-- **Unlisted / UNKNOWN** (tool exits 1) — don't grind. Escalate in order:
-  1. **Ask first** — the platform is unrecognized; ask whether to attempt a one-time pull.
-  2. **One attempt** — if yes, try once to get the reviews (its public feed, or by reading the
-     reviews page by hand) and write the CSV.
-  3. **Hand back** — if that fails, say plainly it couldn't be pulled and ask the user to supply
-     them instead: the CSV (best), else screenshots or a counts + key-quotes summary.
-
-  Don't turn an unknown one-off into a permanent adapter — only listed platforms earn one.
+  Never turn an unlisted one-off into a permanent adapter.
 
 ## Platforms
 
-Reviews live in a third-party widget. Its store id sits in the page HTML, served by a public
-feed (no API key — the same one the widget reads).
+Each platform's store id sits in the page HTML; its public feed needs no API key.
 
 | Platform | Status | Key fact |
 |---|---|---|
@@ -56,20 +41,18 @@ feed (no API key — the same one the widget reads).
 
 ## Adding an adapter
 
-Building a new adapter for a listed platform is expected work — the full guide (finding the feed,
-wiring it in, verifying the count) lives in the header of `tools/pull-reviews.mjs`. When one lands,
-flip its row to "Working" in the table above.
+The guide is in the header of `tools/pull-reviews.mjs`. When one lands, flip its row to "Working".
 
 ## CSV
 
 `review_number, date, product, rating, reviewer, verified, recommended, incentivized, title, body,
 helpful_count, language, review_id, product_url` — newest first (`review_number` 1..N), one row
-per review, all products store-wide (sister-product reviews share the persona).
+per review, all products store-wide.
 
 ## Rules
 
 - **Never fabricate.** Only rows the feed returns. If it's unreachable, say so.
 - **Verify provenance** when a set looks too clean: re-fetch a few `review_id`s live, confirm the
   bodies match, and cross-check the total + star breakdown against the public count.
-- **Flag incentivized reviews.** Sets often mix organic with templated, incentivized ones. Use the
-  `incentivized` column, quote the concrete reviews, and note the caveat in the product's `-research.md`.
+- **Flag incentivized reviews** via the `incentivized` column, quote the concrete reviews, and note
+  the caveat in the product's `-research.md`.

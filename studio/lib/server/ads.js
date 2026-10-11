@@ -1,8 +1,5 @@
-// Board data layer. Reads outputs/json/*.json ad records, merges outputs/batches/*.json plan slots
-// (a slot with no record yet = a synthetic `planned` row), attaches persona details
-// parsed from inputs/*research*.md, and resolves each record's rendered image.
-// All paths returned to the client are brand-relative (POSIX slashes) so the
-// /api/[ws]/[brand]/file route can serve them.
+// Board data: ad records plus unmade batch-plan slots (as `planned` rows), with persona details and renders.
+// Returned paths are brand-relative (POSIX), for the /file route.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isSeparator, tableCells } from '../../components/workflow/Markdown.js';
@@ -20,9 +17,8 @@ const readJsonDir = (dir) => {
 const readAds = (outputs) => readJsonDir(join(outputs, 'json')).sort((x, y) => (x.id || 0) - (y.id || 0));
 const readPlans = (outputs) => readJsonDir(join(outputs, 'batches'));
 
-// ---- persona details (from the `## Personas` markdown table in inputs/*research*.md) ----
-// Table names are human-form ("The Morning Routine"); records use slugs ("MorningRoutine"),
-// so matching is tolerant: strip "The ", compare lowercase alphanumerics, expand digits to words.
+// ---- persona details (the `## Personas` table in inputs/*research.md) ----
+// Table names ("The Morning Routine") vs record slugs ("MorningRoutine"): drop "The ", compare alphanumerics, digits as words.
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 const norm = (s) => String(s || '').toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
 const wordy = (s) => s.replace(/\d/g, (d) => WORDS[+d]);
@@ -67,12 +63,9 @@ function personaDetail(list, slug) {
   return best;
 }
 
-// ---- path normalization ----
 const posix = (p) => p.split(sep).join('/');
 
-// A record's render: generation.output / outputs hold the path as the generator stamped it
-// (its --out: repo-relative "workspaces/WS/Brand/outputs/…", or absolute). The first that exists,
-// as { abs, mtime }, or null.
+// A record's render: the first existing generation.output(s) path (repo-relative or absolute), as { abs, mtime }.
 function renderOf(rec) {
   for (const p of [rec?.generation?.output, ...(rec?.generation?.outputs || [])].filter(Boolean)) {
     const abs = resolve(repoRoot(), p);
@@ -90,15 +83,13 @@ function brandRel(brandDirAbs, p) {
   return posix(String(p));
 }
 
-// Exact generation prompt, from the record.
 function promptOf(rec) {
   const p = rec?.generation?.prompt;
   if (!p) return '';
   return typeof p === 'string' ? p : JSON.stringify(p, null, 2);
 }
 
-// The board view = made ads (records) + still-planned slots. Records are tagged with their
-// batch; a plan slot with no record yet becomes a synthetic planned row.
+// Records tagged with their batch, plus a planned row for each plan slot with no record yet.
 function adsWithPlan(outputs, plans) {
   const recs = readAds(outputs);
   const byId = new Map(recs.map((r) => [String(r.id), r]));
@@ -124,13 +115,12 @@ function adsWithPlan(outputs, plans) {
   return [...recs, ...planned].sort((x, y) => (x.id || 0) - (y.id || 0));
 }
 
-// Ad folders in outputs/ (write-prompt naming: "<id>_<Concept>_<Format>_…"), by name.
+// Ad folders in outputs/ ("<id>_<Concept>_<Format>_…").
 export function adFolders(outputs) {
   try { return readdirSync(outputs, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+_/.test(d.name)).map((d) => d.name); } catch { return []; }
 }
 
-// Records in the wild drift from the documented schema (design as a structured object,
-// copy slots as arrays) — normalize every display field to a string before it reaches React.
+// Records may hold objects or arrays where strings are expected; flatten them for React.
 export function displayText(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
@@ -139,7 +129,6 @@ export function displayText(v) {
   return String(v);
 }
 
-// Everything the board page needs for one brand.
 export function boardData(brandDirAbs) {
   const outputs = join(brandDirAbs, 'outputs');
   const plans = readPlans(outputs);
@@ -157,7 +146,7 @@ export function boardData(brandDirAbs) {
     const render = renderOf(r);
     if (render) {
       ad.img = posix(relative(brandDirAbs, render.abs));
-      ad.imgVersion = render.mtime; // cache-buster: changes when the render is overwritten
+      ad.imgVersion = render.mtime; // cache-buster
     }
     const pd = personaDetail(personaList, r.concept?.persona);
     if (pd) ad.personaDetail = pd;

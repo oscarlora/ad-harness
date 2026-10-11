@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
-# make-type-sheet.py — render ALL of a brand's fonts onto ONE typography reference image,
-# to attach as a --ref on image-ad generations so headlines render in the real fonts.
+# pull-fonts.py — render all of a brand's fonts onto one reference image, attached as a --ref so
+# image ads render headlines in the real fonts. Needs Pillow; .woff/.woff2 also need fontTools
+# (woff2 also brotli).
 #
-# Requires Pillow (`pip install pillow`; tools/setup.sh / setup.ps1 check for it). Each font's source can be:
-#   - a Google Fonts family name  ("Big Shoulders Display")  -> fetched automatically as TTF
-#   - a direct URL to a font file ("https://brand.com/Brand.otf")
-#   - a local font file path      ("workspaces/<WS>/Acme/inputs/media/brand/Brand-Bold.ttf")
-# Pillow reads .ttf/.otf directly. .woff/.woff2 are converted via fontTools if installed
-# (woff2 also needs brotli); if not, the tool says so and tells you how to proceed.
-#
-# Usage (one --font per brand font; all land on one image):
-#   python3 tools/make-type-sheet.py --out "workspaces/<WS>/Acme/inputs/media/brand/type_sheet.png" \
+# Usage (one --font per brand font):
+#   python3 tools/pull-fonts.py --out "workspaces/<WS>/Acme/inputs/media/brand/type_sheet.png" \
 #     --font "Big Shoulders Display|700|H1 / headline|Point it at the tension" \
 #     --font "Poppins|500|Body / UI|Pinpoint recovery, wherever you need relief"
 #
-# Each --font is "Source|weight|role|sample" (only Source required; weight is used only for
-# Google families). See the pull-fonts skill for handling non-Google and paid fonts.
-#
-# Python (not .mjs like the other tools) because rasterizing text needs a graphics library,
-# which Pillow provides without adding one to the Node side.
+# Each --font is "Source|weight|role|sample" (only Source required; weight only for Google families).
+# Source: a Google Fonts family name, a font file URL, or a local font path.
+# --bg / --fg: background and text hex colors (default 0a0a0a / ffffff).
 
 import argparse, hashlib, os, re, tempfile, urllib.parse, urllib.request
 from PIL import Image, ImageDraw, ImageFont

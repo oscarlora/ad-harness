@@ -1,6 +1,5 @@
 'use client';
-// Waveform helpers shared by grid cards and the audio viewer. Peaks live at
-// _catalog/peaks/<id>.json; a deterministic placeholder wave draws when absent.
+// Waveform helpers. Peaks come from _catalog/peaks/<id>.json; a deterministic placeholder draws when absent.
 import { fileUrl } from '../../lib/client/api.js';
 
 const cache = new Map();

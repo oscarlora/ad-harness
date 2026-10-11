@@ -1,6 +1,4 @@
-// Media data layer — reads the brand's catalog (inputs/media/_catalog) through the harness's
-// own helpers, and persists record edits through the existing tool (tools/record-media.mjs)
-// so merge semantics stay single-source.
+// Media data: reads the catalog via tools/lib/catalog.mjs and saves edits via tools/record-media.mjs.
 import { existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,8 +9,7 @@ import { repoRoot } from './root.js';
 
 const mediaDirOf = (brandDirAbs) => join(brandDirAbs, 'inputs', 'media');
 
-// Catalog ids are zero-padded sequence numbers (tools/lib/catalog.mjs padId: "00042"). Anything
-// else from a client is refused, so an id can never walk out of the catalog (`../`).
+// Catalog ids are zero-padded numbers ("00042"); anything else is refused so an id can't walk out (`../`).
 export const isMediaId = (id) => typeof id === 'string' && /^\d{5,}$/.test(id);
 
 async function mediaPaths(brandDirAbs) {
@@ -33,7 +30,7 @@ export async function mediaRecord(brandDirAbs, id) {
   return readJson(p, null);
 }
 
-// Known people ledger (…/_catalog/people.json). Read tolerantly; write pretty.
+// Known people ledger (_catalog/people.json).
 const readPeopleAt = (file) => readJson(file, []);
 
 export async function readPeople(brandDirAbs) {
@@ -56,8 +53,7 @@ export async function addPeople(brandDirAbs, entries) {
   return people;
 }
 
-// Merge a patch into a media record by spawning the existing tool — never reimplement its merge.
-// The patch is written to a temp file first (the tool's --merge entry point takes a file).
+// Merge via the tool (its --merge takes a file), never a reimplementation.
 export async function mergeMediaRecord(brandDirAbs, id, patch) {
   const dir = await mkdtemp(join(tmpdir(), 'studio-patch-'));
   const patchFile = join(dir, 'patch.json');
@@ -67,7 +63,6 @@ export async function mergeMediaRecord(brandDirAbs, id, patch) {
     const tool = join(repoRoot(), 'tools', 'record-media.mjs');
     const media = mediaDirOf(brandDirAbs);
     await runAsync(process.execPath, [tool, '--media', media, '--merge', patchFile], { cwd: repoRoot() });
-    // Keep the human-readable index in step with the records.
     if (existsSync(media)) await runAsync(process.execPath, [tool, '--index', media], { cwd: repoRoot() }).catch(() => {});
     return mediaRecord(brandDirAbs, id);
   } finally {

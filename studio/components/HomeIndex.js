@@ -1,6 +1,5 @@
 'use client';
-// `/`: redirect to the last-used brand (localStorage) unless ?all=1 (the toolbar's wordmark
-// link), otherwise list every brand grouped by workspace.
+// `/`: redirect to the last-used brand unless ?all=1, else list every brand by workspace.
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';

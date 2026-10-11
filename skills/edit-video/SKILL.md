@@ -1,110 +1,73 @@
 ---
 name: edit-video
-description: Assemble the final video ad from rendered clips — in Palmier Pro on macOS when it's installed, otherwise with an edit-plan JSON (clip timeline with trims and punch-in zooms, product-graphic overlays, burned-in captions, a music bed, a finishing grade) and render it in one ffmpeg pass with tools/edit-video.mjs. Use when assembling, stitching, or cutting generated clips into a finished video, finishing a podcast ad in the harness (make-ai-podcast's self-edit route), adding the product graphic, captions, or music to footage, or revising a cut ("tighten the pacing", "move the overlay", "add grain"). Captions come from caption-video, music from add-music; a revision is a JSON tweak plus a re-render — seconds, free.
+description: Assemble and revise a video ad in the harness's own editor — an edit document (outputs/<ad>/edit.json) that Studio previews live and tools/edit-video.mjs exports to MP4 with the same engine. Use when cutting rendered clips into a finished video, adding the hook, captions, music, sound effects, transitions, zooms, color or an end card, applying the user's review notes from Studio, or exporting ("tighten the pacing", "fade between these", "grade them to match", "duck the music", "export it").
 ---
 
 # Edit video
 
-## Editor: Palmier Pro or ffmpeg
+An ad's edit is one JSON document, `outputs/<ad>/edit.json` (a version the user keeps, such as a
+second hook, is `edit-v2.json`, `edit-v3.json`…). Studio's Workflow page shows it live in the ad's
+**Edit** step: preview, timeline, review notes and an Export button. Change the document and the
+preview follows within a second. Schema, flags and every subcommand: `node tools/edit-video.mjs --help`.
 
-**Palmier Pro** (a Mac video editor the agent drives over MCP) is the recommended editor on macOS
-when it's installed; the song, animation and slides workflows are written around it. Without it,
-and always on Windows or Linux, edit with this skill's ffmpeg plan (the rest of this file). Every
-video workflow's edit step points here.
+## Build
 
-**Connect.** If the Palmier tools aren't connected, open the app (macOS: `open -a PalmierPro`) and
-talk to `http://127.0.0.1:19789/mcp` directly. Start with `initialize`, keep the `Mcp-Session-Id`
-header, then `tools/call`; replies come back as SSE `data:` lines.
+1. **Gather:** clips in `clips/`, voiceover, music (**add-music**), sound effects (**generate-sfx**),
+   product graphics (**search-media**). A higher-tier final needs clips generated at that tier
+   (AGENTS.md, Video).
+2. **Write the document:** tracks top to bottom (hook and text, captions, video, voice, music, SFX),
+   every time on the timeline clock. Clips trim with `in`, play at `rate` and get `transition`s.
+   Anything that changes over time (zoom, volume, saturation…) takes keyframes.
+3. **Captions:** `captions --words <transcript or song timing>` writes word-timed lines (**caption-video**).
+4. **Check:** `check` (missing files, black gaps). `frames --at …` makes a contact sheet when you
+   need to see a moment.
+5. **Show it** right away: open Studio on the ad (**open-studio**).
 
-**Pitfalls** (they hold for every Palmier edit):
+## Revise: live review
 
-- **Track indexes shift** when text tracks are added on top; read `get_timeline` and target tracks by
-  name or id before any `trackIndex` edit, or a clip lands on the hook's track and overwrites it.
-- **`add_clips` may report the clip it trimmed**, not the one it added: read the new clip's id back
-  from the timeline by its start frame before `edit_speed`.
-- **`edit_speed` ripples** the clips right after it and refuses when they have no room: add and speed
-  shots one at a time, in order. `swap_clip_media` can reset a clip's volume; set it again.
-- **Media is linked by path.** Renaming or moving a file or folder breaks the project: import the new
-  path and `swap_clip_media` every clip that used it, in every timeline, then delete the old assets.
-- One text box takes one color: to color one line of a hook, make each line its own text box.
-- **The user edits in the app too.** A setting that changed since your last write is theirs: never
-  restore it on your own. Re-read the timeline before each change and ask if something looks off.
+The user leaves notes on the preview (a moment, optionally a box on the frame). Work through them as
+they come:
 
-**What the ffmpeg plan can't do yet.** Its sound is the clips' own audio plus one music bed: no
-separate voiceover, song or SFX track, and no muting a clip. Until it can, strip the clips' audio
-(`ffmpeg -i in.mp4 -an -c:v copy out.mp4`), premix voiceover or song, SFX and music into one track,
-and pass that as the music block with `gain_db` 0 and `duck_db` 0. Captions take one style: no
-highlighted active word, and no second text style (render the hook as a PNG overlay instead).
+1. `node tools/edit-video.mjs comments outputs/<ad> --wait` as a tracked background command: it
+   returns the open notes (and marks them seen) the moment there is one, each with what was on
+   screen then and a contact sheet of the moments with the marked spots outlined.
+2. Look at the sheet: the box says which word, face or object the note means. Make each change on
+   what it's about: a clip's look on the clip (it then starts and ends with it), keyframes only for
+   change over time, timed to cuts or word times, never by ear.
+3. When a change moves or retimes something (a cut, a keyframe, a position), check one `frames`
+   sheet for the whole batch at the first and last frame of each change and just outside it. A
+   change of wording, color or volume needs no sheet.
+4. `comments outputs/<ad> --done <id> --reply "<what changed, in a few words>" --span <from>-<to>`
+   (the changed stretch, which Studio's watch button plays). The user watches it and approves it,
+   which moves it to the note history, or leaves a new note.
+5. Start the wait again.
 
-## The ffmpeg plan
+Notes are one file each in `outputs/<ad>/comments/`, in the language the user writes in; reply in it.
 
-Turn rendered clips into the finished ad through one **edit-plan JSON**: the clip timeline (trims,
-zooms), still overlays, burned-in captions, a music bed, and a finishing grade, rendered in a
-single ffmpeg pass by `tools/edit-video.mjs`. The plan schema and flags live in the tool's header
-and `--help` — read them there. The economics drive the workflow: generation costs money, the edit
-costs nothing — a revision is a JSON tweak and a re-render measured in seconds, so iterate freely.
+## What to reach for
 
-### Procedure
+- **Cuts and pacing** — shots on the voiceover's lines (`place`); `cut` removes a stretch (a pause,
+  a line) from every track and closes the gap, captions and keyframes included.
+- **Transitions** — `transition` on the incoming clip. Hard cuts by default; fade for a mood shift, a
+  directional slide, push or wipe for a jump in place or time; zoom, blur and flip sparingly.
+- **Zooms** — keyframe `scale` with an `origin` on the subject: on one clip, or on the track's
+  `transform` for punch-ins across cuts (1.06–1.10 on the key words, a handful per 30 s).
+- **Color** — `match` grades every clip toward the median look (`--ref` toward one clip); `grade`
+  takes exposure, contrast, saturation, temperature, grain, vignette, each keyframable.
+- **Sound** — music about −18 dB under speech; `duck` dips a track under speech (`--speaker` for one
+  voice in a transcript); `moves` lists where the picture moves, for sound effects on actions.
+- **Text** — hook and end card as `text` / `rect` / `image` clips with `enter`/`exit` animations.
+  Every graphic sits in clear space, never over a face or the caption band.
+- **Other placements** — `reframe --size 1080x1350` (4:5) or `1080x1080` into a new version, then
+  check its text on a `frames` sheet.
+- **Anything else** — the ad's own `fx.js` (custom layers, transitions, animations; the contract is in
+  `studio/engine/draw.js`). Something a second ad needs moves into the engine.
 
-1. **Gather inputs.** The rendered clips sit in the ad's working folder (`outputs/<ad-name>/`).
-   Product graphic or brand footage to overlay: **search-media**. Captions: **caption-video**.
-   Music, if the ad wants any: **add-music**. A higher-tier final needs source clips generated at
-   that tier — never a resize or upscale of 480p drafts (AGENTS.md, video quality ladder).
-2. **Build the plan** at `outputs/<ad-name>/edit-plan.json`, applying the craft rules below —
-   **one plan per ad, edited in place**: no versioned copies, no variant plans (a version the
-   user keeps, such as a second hook, gets its own plan and output); a transient A/B pair gets
-   deleted the moment the user picks. Relative paths resolve against the plan's
-   directory; `output.path` is `edit-final.mp4` — the single canonical render, overwritten on
-   every iteration (the ad's folder name already carries **write-prompt**'s filename convention).
-3. **Show the plan; the user signs off.** A readable summary in chat, never raw JSON: a timeline
-   table (clip · trim · zoom · seconds), the caption text **verbatim**, and the overlay, music,
-   and finish choices. `--dry-run` sanity-checks the plan without writing anything. Render only
-   after the sign-off.
-4. **Render** with a generous timeout: `node tools/edit-video.mjs --plan <…>/edit-plan.json
-   --timeout 1800` (how to run long renders: AGENTS.md, operating principles).
-5. **Verify silently.** `ffprobe` the output — duration, streams, resolution — and hand over the
-   path. No frame extractions, no QA images, no QA pass of any kind unless the user explicitly
-   asks to see frames; the speed of the iteration loop wins. The user judges the render itself;
-   never grade your own.
-6. **Revise.** Every note maps to a plan tweak — retime a caption, nudge an overlay, cut a beat —
-   then re-render over the same `edit-final.mp4`. Delete superseded takes and renders as the user
-   replaces them — the working folder stays lean; R2 and the ad record carry history. Loop until
-   approved.
+## Export
 
-### Craft
+`node tools/edit-video.mjs export outputs/<ad>/edit.json` (or the user's Export button): H.264 + AAC at
+−14 LUFS into `final/<id>_V<n>_…mp4`, about 20 s for 80 s of 1080p. `--scale 0.5` makes a quick
+draft, `--from`/`--to` a section. Never grade your own render; hand over the path.
 
-- **Pacing** — cut on the dialogue's beats and trim dead air at clip heads and tails; the word
-  timestamps from **caption-video**'s transcript mark the exact cut points. Hard cuts stay the
-  default for podcast-style ads; where a beat needs softening, a `transition` earns its place at
-  0.12–0.2s (fade for a mood shift, a directional wipe for a location/time jump) — much longer
-  reads as slow, not smooth.
-- **Punch-ins** — `zoomEvents` on emphasis beats: the key claim, a reaction, the payoff, aligned to
-  the claim word via the clips' transcripts. Subtle wins: `to` 1.06–1.10; stronger reads as a
-  glitch, not emphasis. A handful per 30s at most — every beat punched is no beat punched.
-- **Slow-mo** — a product beat (the pour, the unboxing, the reveal) can drop to 50–70% `speed`;
-  much slower starts to look like a technical glitch rather than a deliberate hold.
-- **Stills as motion** — a still used as b-roll (product shot, screenshot) wants Ken Burns
-  (`zoom` at 1.03–1.08 drift) instead of sitting frozen — as a full timeline segment or an overlay,
-  either way barely-there drift reads as intentional, anything faster reads as an effect.
-- **Overlays** — every graphic overlay (product, hook text, stat pop-ups, badges) goes in clear
-  negative space: never over a face, never over the caption band. Legible at thumbnail size but
-  supporting, not dominating; a short fade in/out (~0.2s) keeps it from popping on, and a graphic
-  entering the frame reads better sliding in (`slideIn`, ~0.3s) than appearing on the spot. When two
-  overlays meet with zero gap, drop the earlier one's `fadeOut` and the later one's `fadeIn` at that
-  seam — otherwise both cross alpha 0 together and the layer beneath flashes through. A transparent
-  overlay PNG must actually carry alpha: `ffprobe` its `pix_fmt` (`rgba`), don't trust the command.
-  **design-ad**'s legibility and hierarchy principles apply on video exactly as on image.
-- **CTA end card** — bake it as one designed still, never a caption event over a product shot (the
-  plan has one caption style, built for footage, so it goes illegible on a light card). Compose it
-  in one ffmpeg pass: logo top, real product photo centre, headline in near-black and CTA in a
-  darkened brand color at the bottom, with real side margin (on 1080 wide, ~62px for a seven-word
-  line; 74px overran). `drawtext` needs `expansion=none` or a `%` in the copy errors. Save as PNG —
-  JPEG rings around a logo on flat white. Run it as a plain still with a 1.0→1.05 Ken Burns.
-- **Finish** — a light pass takes the AI edge off: grain 0.2–0.4 plus a light contrast touch.
-  It should read as footage, not a filter.
-
-## After approval
-
-Final cuts are heavy-class in R2 — a plain push skips them. Push with
-`node tools/sync-brand.mjs --push workspaces/<WS>/<Brand> --originals`, or the mp4 strands on this
-machine.
+With R2, final cuts are heavy files a plain push skips: push with
+`node tools/sync-brand.mjs --push workspaces/<WS>/<Brand> --originals`.

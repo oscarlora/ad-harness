@@ -5,9 +5,9 @@ description: Build and grow a product's persona set — the specific people its 
 
 # Ideate personas
 
-A persona is one specific person an ad targets — grounded in the product's reviews and market, never
-"everyone". They live in the product's `[product]-personas.md`, a living table: **seed ≥5 during
-research**, then append new ones as ads call for fresh targeting.
+A persona is one specific person an ad targets, grounded in the product's reviews and market, never
+"everyone". They live in `[product]-personas.md`: **seed ≥5 during research**, then append as ads
+call for fresh targeting.
 
 ## The table
 
@@ -26,6 +26,5 @@ Awareness stages: unaware · problem-aware · solution-aware · product-aware ·
 
 ## Ideating new ones
 
-Ground every persona in the reviews and market, not invention. When a new ad needs one, propose
-**3 deliberately differentiated** personas (different awareness stage, pain, or life situation), then
-append the chosen one to `[product]-personas.md` so the set grows.
+Propose **3 deliberately differentiated** personas (different awareness stage, pain, or life
+situation), then append the chosen one to `[product]-personas.md`.

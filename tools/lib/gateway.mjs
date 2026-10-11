@@ -1,11 +1,9 @@
-// gateway.mjs — the model seam for the media catalog, through Vercel AI Gateway (AI SDK 7):
-// structured JSON analysis of an image/video/audio file (analyze-media, transcribe), text
-// embeddings (embed-media, search-media), and word-timestamped transcription (caption word
-// timings, lib/transcribe.mjs). Key: <WS>_AI_GATEWAY_API_KEY in .env, the workspace inferred
-// from the path being worked on. The Gateway calls Google's paid API: media is not trained on.
-// The AI SDK loads lazily (providers.gatewayClient), so keyword-only search runs without npm deps.
+// gateway.mjs — the media catalog's model calls via Vercel AI Gateway: JSON analysis of a file,
+// text embeddings, and word-timestamped transcription. Key: <WS>_AI_GATEWAY_API_KEY.
+// The AI SDK loads lazily, so keyword-only search needs no npm deps.
 import { readFileSync } from 'node:fs';
 import { loadEnv, inferWorkspace } from './catalog.mjs';
+import { PUBLIC_BUCKETS } from './r2.mjs';
 import { gatewayClient } from './providers.mjs';
 
 export const ANALYSIS_MODEL = 'google/gemini-3.1-flash-lite';
@@ -13,14 +11,18 @@ export const EMBED_MODEL = 'google/gemini-embedding-2';
 const EMBED_DIMS = 768; // requested; the model auto-normalizes truncated dims
 export const WORDS_MODEL = 'google/gemini-3.5-transcribe'; // word timestamps only (Flash Lite keeps the text)
 
-// Running total of Gateway-reported spend in this process (USD), for end-of-run summaries.
+// Gateway-reported spend in this process (USD).
 export const spend = { usd: 0 };
 const tally = (meta) => { const c = +(meta?.gateway?.cost ?? 0); if (c) spend.usd += c; };
 
+// A public workspace (the shared library) borrows any workspace's key when it has none of its own.
 export function gatewayKey(anyPath) {
-  const W = inferWorkspace(anyPath).toUpperCase();
+  const ws = inferWorkspace(anyPath);
+  const W = ws.toUpperCase();
   const env = { ...loadEnv(), ...process.env };
-  return (W && env[`${W}_AI_GATEWAY_API_KEY`]) || '';
+  const own = (W && env[`${W}_AI_GATEWAY_API_KEY`]) || '';
+  if (own || !PUBLIC_BUCKETS[ws]) return own;
+  return Object.entries(env).find(([k, v]) => k.endsWith('_AI_GATEWAY_API_KEY') && v)?.[1] || '';
 }
 export function requireKey(anyPath) {
   const key = gatewayKey(anyPath);
@@ -34,15 +36,13 @@ export function requireKey(anyPath) {
 // Media travels inline in the request (base64, +33%): keep each file under this.
 export const INLINE_MAX = 14 * 1024 * 1024;
 
-const clients = new Map(); // key -> Promise<{ ai, gw }>, one client per key per process
+const clients = new Map(); // key -> Promise<{ ai, gw }>
 const client = (key) => { if (!clients.has(key)) clients.set(key, gatewayClient(key)); return clients.get(key); };
 
-// A message part carrying a local file (image, video or audio).
 export const filePart = (path, mediaType) => ({ type: 'file', data: readFileSync(path), mediaType });
 
-// One structured JSON reply validated against a JSON Schema, at temperature 0 unless given.
-// Retries transient failures (a repeated analysis only costs the same fraction of a cent again).
-// A reply that isn't valid JSON (e.g. cut off by a repetition loop) throws NoObjectGeneratedError.
+// Retrying is fine here: a repeated analysis costs a fraction of a cent. Invalid JSON throws
+// NoObjectGeneratedError.
 export async function generateJSON(key, { parts, schema, model = ANALYSIS_MODEL, temperature = 0, maxOutputTokens }) {
   const { ai, gw } = await client(key);
   const { output, providerMetadata } = await ai.generateText({
@@ -57,8 +57,7 @@ export async function generateJSON(key, { parts, schema, model = ANALYSIS_MODEL,
   return output;
 }
 
-// Word-timestamped transcript of an audio buffer: [{ word, start, end }]. Speakers don't come
-// through the Gateway, and custom vocabulary can't be combined with word timestamps (400).
+// → [{ word, start, end }]. No speakers via the Gateway; vocabulary + word timestamps is a 400.
 export async function transcribeWords(key, audio) {
   const { ai, gw } = await client(key);
   const r = await (ai.transcribe || ai.experimental_transcribe)({

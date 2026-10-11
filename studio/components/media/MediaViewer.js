@@ -1,8 +1,5 @@
 'use client';
-// Full-screen media viewer: image (proxy → original swap), video (poster + range-aware
-// playback), audio (waveform + synced transcript), plus the Notion-style editable sidebar.
-// Edits persist through /api/[ws]/[brand]/record (which shells out to record-media.mjs);
-// naming an unknown person also updates _catalog/people.json.
+// Full-screen media viewer (image, video, audio + transcript) with the editable sidebar; edits save via /record.
 import { useEffect, useRef, useState } from 'react';
 import { apiBase, fileUrl, postJson } from '../../lib/client/api.js';
 import ViewerShell from '../ViewerShell.js';
@@ -19,7 +16,7 @@ function ImageStage({ ws, brand, rec }) {
     setSrc(proxy);
     const full = new Image();
     full.onload = () => setSrc(original);
-    full.src = original; // placeholder → original swap once it arrives (may 302 to R2)
+    full.src = original; // may 302 to R2
     return () => { full.onload = null; };
   }, [proxy, original]);
   return <img src={src} alt={rec.file?.name || rec.id} />;
@@ -188,7 +185,7 @@ function SidePanel({ ws, brand, rec, onSaved, toast }) {
   );
 }
 
-// actions: Gallery's per-asset actions (useRef, download, open) — shared, not duplicated.
+// actions: Gallery's per-asset actions.
 export default function MediaViewer({ ws, brand, rec, hasR2, sideOpen, onToggleSide, onNav, onClose, onSaved, actions, toast }) {
   if (!rec) return null;
   const t = rec.file?.type;

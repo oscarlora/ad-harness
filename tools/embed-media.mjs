@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// embed-media.mjs — semantic vectors for the media catalog (Gemini Embedding 2 through Vercel AI
-// Gateway, 768 dims). Node 22+, AI SDK. Run after analyze-media; search-media uses the result.
-//
-// Per record, into _catalog/vectors.json (light: travels with the catalog to R2):
-//   text   — the record's words (description, sound, tags, products, people, on-media text, transcript)
-//   scenes — one per video scene description, so search can return a time range
-// Only records whose content changed since the last run are re-embedded.
+// embed-media.mjs — semantic vectors for the media catalog, into _catalog/vectors.json: one for each
+// record's text, one per video scene. Run after analyze-media; only changed records are re-embedded.
 //
 // Usage:
 //   node tools/embed-media.mjs --media <media dir> [--force]
@@ -42,7 +37,7 @@ export async function embedAll({ media, force = false, log = console.log }) {
   const sigOf = (r) => sha256(JSON.stringify([recordText(r), (r.scenes || []).map((s) => s.description)]));
   const todo = recs.filter((r) => store.items[r.id]?.sig !== sigOf(r));
   const live = new Set(recs.map((r) => r.id));
-  for (const id of Object.keys(store.items)) if (!live.has(id)) delete store.items[id]; // drop removed records
+  for (const id of Object.keys(store.items)) if (!live.has(id)) delete store.items[id];
 
   const jobs = [];
   for (const r of todo) {

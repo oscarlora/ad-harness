@@ -1,27 +1,12 @@
 #!/usr/bin/env node
-// analyze-media.mjs — catalog analysis with Gemini 3.1 Flash Lite through Vercel AI Gateway: describe
-// every image, video and audio file; match known products/people; OCR; tags; transcribe speech;
-// rename the original to <id>_<descriptor>.<ext>. Node 22+, AI SDK. Prompts: lib/analysis-prompt.mjs.
-//
-//   image — one picture call on the proxy.
-//   video — two calls in parallel, merged into one record: a picture call on a light silent proxy
-//           (≤480p short side, 1–2 fps — a 4-minute clip is a few MB) and a sound call on the audio
-//           track (lib/transcribe.mjs; long tracks go in parts). Both come from the probe's single
-//           decode pass when it ran in this session, else from a fresh pass. Scenes are the probe's
-//           detected cuts, clamped to the clip.
-//   audio — one sound call (also names and tags the file).
-// A silent or missing audio track skips the sound call.
-//
-// Reads  inputs/products.json ([{ name, aliases, look }] or { products, vocabulary }) and
-//        _catalog/people.json ([{ name, description }]).
-// Writes into each record: visual_description, audio_description (the sound portrait),
-// scenes[].description, products, people, unknown_people, tags, text_in_media, has_speech,
-// audio_transcript (sentence-level: language, text, segments [{start,end,speaker,text}]),
-// analysis { model, at }; status → cataloged.
+// analyze-media.mjs — describe each cataloged file with ANALYSIS_MODEL (products, people, OCR, tags,
+// speech), fill its record, and rename the original to <id>_<descriptor>.<ext>.
+// Image: one picture call. Video: a picture call on a silent proxy and a sound call on its track, in
+// parallel. Audio: one sound call. Reads inputs/products.json and _catalog/people.json.
 //
 // Usage:
 //   node tools/analyze-media.mjs --media <media dir> [--ids 00001,00002 | --all] [--force] [--concurrency 4]
-//   --all = every record not analyzed yet (add --force to redo analyzed ones too)
+//   --all = every record not analyzed yet; --force redoes analyzed ones too
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -38,8 +23,7 @@ function loadRoster(media) {
   return { products: readProducts(media), people: Array.isArray(people) ? people : [] };
 }
 
-// The silent picture proxy (≤480p short side, 1–2 fps): the one the probe's single video pass left
-// in the work dir, else a fresh proxy-only pass (heavy work pool, hardware decoding — lib/media-probe).
+// The proxy the probe left in the work dir, else a fresh proxy-only pass.
 async function pictureProxy(src, work) {
   const made = join(work, 'picture.mp4');
   if (existsSync(made)) return made;
@@ -51,8 +35,7 @@ async function pictureProxy(src, work) {
 const joinSections = (sections) => sections.map((s) => `${s.label}: ${s.text}`).join('\n\n');
 const t = (n) => Math.round(n * 10) / 10;
 
-// Scenes: the probe's detected cuts (clamped, empty ones dropped) carry the model's descriptions
-// by index; without detected cuts, the model's own scenes, clamped and ordered.
+// The probe's cuts take the model's descriptions by index; without cuts, the model's own scenes.
 function cleanScenes(scenes, duration) {
   const cl = (x) => t(Math.min(duration || Infinity, Math.max(0, +x || 0)));
   return (scenes || []).map((s) => ({ ...s, start: cl(s.start), end: cl(s.end) })).filter((s) => s.end > s.start);
@@ -78,8 +61,7 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
     const patch = { id, analysis: { model: ANALYSIS_MODEL, at: new Date().toISOString() }, status: 'cataloged' };
     let pic = null, snd = null, track = null;
 
-    // Sound: every audio file and video track, unless silent or absent. A video's track and proxy
-    // usually wait in the probe's work dir.
+    // Silent or missing tracks skip the sound call.
     const work = workDir(rec.sha256);
     if (type === 'video') temps.push(work);
     if (type !== 'image') { track = audioTrack(original, type === 'video' ? join(work, 'track.mp3') : null); if (track) temps.push(track.dir); }
@@ -112,14 +94,13 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
     }
     if (type !== 'image') {
       patch.audio_description = soundOf(track, snd);
-      // A transcript is replaced whole (undefined drops a stale one when the file has no speech).
+      // undefined drops a stale transcript when the file has no speech.
       patch.audio_transcript = (snd && toTranscript(snd, duration)) || undefined;
       patch.has_speech = !!patch.audio_transcript;
     }
     const tags = type === 'audio' ? snd?.tags || ['silence'] : pic.tags;
     patch.tags = [...new Set((tags || []).map((x) => String(x).toLowerCase().trim()).filter(Boolean))];
 
-    // Rename the original to its descriptive name.
     const descriptor = (type === 'audio' ? snd?.descriptor || 'silent audio' : pic.descriptor);
     const name = `${id}_${slugify(descriptor)}${extname(rec.file.name).toLowerCase()}`;
     if (name !== rec.file.name && existsSync(original) && !existsSync(join(media, name))) { renameSync(original, join(media, name)); patch.file = { name }; }

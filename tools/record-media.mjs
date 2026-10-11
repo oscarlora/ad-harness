@@ -1,12 +1,9 @@
 #!/usr/bin/env node
-// record-media.mjs — the per-file catalog records system: owns the media record schema and builds
-// the catalog index. Zero dependencies. Mirror of record-ad.mjs for the media library.
+// record-media.mjs — owns the media record schema and builds the catalog index.
+// One record per file at inputs/media/_catalog/json/<id>.json. lib/media-probe.mjs writes the
+// technical fields, analyze-media.mjs the descriptions, embed-media.mjs the vectors.
 //
-// Each media file is one record at  <brand>/inputs/media/_catalog/json/<id>.json  — the single
-// source of truth for that asset. lib/media-probe.mjs writes the technical fields; analyze-media.mjs
-// (Gemini) fills the descriptions, products / people / tags; embed-media.mjs writes its vectors.
-//
-// Record schema (image shown; video/audio add scenes, audio_transcript, sprites):
+// Schema (video/audio add scenes, audio_transcript, sprites):
 //   {
 //     "id": "00042", "sha256": "<hex>",
 //     "file": { "name","type":"image|video|audio","mime","bytes","width","height",
@@ -44,9 +41,8 @@ export function writeRecord(paths, rec) {
   return rec;
 }
 
-// Merge a patch into an existing record (shallow at top level; file/source/sprites/generation
-// merged one level deep; a transcript is replaced whole, and a key set to undefined drops it).
-// Stamps status=cataloged once a visual_description or transcript exists.
+// Shallow merge; file/source/sprites/generation one level deep; a transcript is replaced whole; an
+// undefined key is dropped. Stamps status=cataloged once a description or transcript exists.
 export function mergeRecord(paths, patch) {
   const id = patch.id;
   if (!id) throw new Error('patch needs an id');

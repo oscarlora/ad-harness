@@ -1,7 +1,5 @@
 'use client';
-// The ads board: records + planned slots in one table (thumbnail · status · batch · concept ·
-// type · refs · copy · design · prompt), status/batch filters, text search, and a full-screen
-// viewer. Data refreshes live over SSE.
+// The ads board: records + planned slots in one table, with filters, search and a full-screen viewer.
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 import { fileUrl, openFile, workflowUrl } from '../../lib/client/api.js';
@@ -11,8 +9,7 @@ import ViewerShell from '../ViewerShell.js';
 
 const STATUS_ORDER = ['planned', 'generated', 'draft', 'revision', 'approved', 'synced'];
 
-// Photo- vs graphic-centric: stored if the record says so, else inferred from the refs — a real
-// library photo that is not brand-kit material (the type sheet, inputs/media/brand/) means photo-centric.
+// Photo- vs graphic-centric: from the record, else photo-centric when a ref is a library photo outside the brand kit.
 function imageType(rec) {
   const t = rec?.concept?.imageType;
   if (t) return /photo/i.test(t) ? 'Photo' : 'Graphic';
@@ -21,7 +18,6 @@ function imageType(rec) {
   return scene ? 'Photo' : 'Graphic';
 }
 
-// A render is an image or a video ad; videos show their first frame as the thumbnail.
 const isVideo = (p) => /\.(mp4|mov|webm|m4v)$/i.test(p || '');
 function Render({ video, src, alt, ...props }) {
   return video
@@ -91,7 +87,6 @@ function PromptCell({ prompt }) {
   );
 }
 
-// A copyable text field in the viewer: label + Copy button, then the text.
 function CopyField({ label, text, className = '' }) {
   const [copied, copy] = useCopied();
   return (

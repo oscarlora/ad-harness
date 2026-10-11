@@ -1,8 +1,6 @@
 'use client';
-// The full-screen viewer frame shared by the Board, Media and Workflow pages: a stage with a top
-// bar (Close, then `tools` on the right), prev/next arrows around the content, an optional side
-// panel, and the viewer keys (Esc closes, arrows step).
-// backdrop: clicking empty space closes — 'outer' (the frame), 'stage' (the stage too), or false.
+// Full-screen viewer frame: top bar, prev/next arrows, optional side panel, viewer keys.
+// backdrop: what a click on empty space closes from — 'outer' (the frame), 'stage' (the stage too), or false.
 import { useViewerKeys } from '../lib/client/hooks.js';
 
 export default function ViewerShell({ onStep, onClose, close = 'Esc · Close', closeTitle, tools, nav = true, backdrop = 'outer', side, children }) {

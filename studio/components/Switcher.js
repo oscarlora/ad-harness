@@ -1,7 +1,5 @@
 'use client';
-// Workspace / brand switcher, first in each page's toolbar. The brand list comes from the
-// server layout through BrandsProvider; selection is URL-driven, and the current brand is
-// remembered in localStorage for `/`.
+// Workspace / brand switcher. Selection is URL-driven; the current brand is remembered in localStorage for `/`.
 import { createContext, useContext, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { brandUrl } from '../lib/client/api.js';
@@ -9,7 +7,7 @@ import { tabOr } from './BrandPage.js';
 
 export const LAST_KEY = 'ad-harness-studio:last';
 
-// [{ workspace, brand }] → Map(workspace → [brand names]), in list order.
+// [{ workspace, brand }] → Map(workspace → [brand names])
 export function groupByWorkspace(brands) {
   const groups = new Map();
   for (const b of brands) groups.set(b.workspace, [...(groups.get(b.workspace) || []), b.brand]);
@@ -25,7 +23,7 @@ export default function Switcher({ ws, brand }) {
   const brands = useContext(BrandsContext);
   const router = useRouter();
   const pathname = usePathname();
-  // /<ws>/<brand>/<tab>[/<ad>]: a brand switch lands on the same tab's top level.
+  // A brand switch lands on the same tab's top level.
   const tab = tabOr(pathname?.split('/')[3]);
 
   useEffect(() => {

@@ -1,32 +1,23 @@
 #!/usr/bin/env node
-// pull-reviews.mjs — detect a store's review platform and pull its public reviews to CSV.
-// Zero deps (global fetch). No API key: reads the same public feed the on-page widget uses.
+// pull-reviews.mjs — detect a store's review platform and pull its public reviews to CSV, from the
+// same public feed the on-page widget uses (no API key). Run with --help for options.
+// Okendo, Stamped, Judge.me and Loox work; Yotpo / Reviews.io are detect-only (exit 2).
 //
-// Run with --help for options. See the pull-reviews skill for the workflow.
-// Adapters: Okendo + Stamped + Judge.me + Loox work; Yotpo / Reviews.io are detect-only (exit 2).
-//
-// ADDING AN ADAPTER (for a detect-only platform — listed platforms only, never one-off stores):
-// You won't know the feed up front — finding it is research. Hypothesize, test cheaply, escalate;
-// stop as soon as one request returns the reviews as JSON.
-//   1. Hypothesize from the platform: search "<platform> reviews api" / its docs for the public
-//      widget endpoint shape and which id it needs.
-//   2. Watch the widget: load a product page, inspect the network calls the review widget makes —
-//      it fetches its own public feed; copy that exact request (URL, params, pagination).
-//   3. Verify with one curl: does the candidate return JSON reviews? Tune page size + pagination
-//      until a full pull works.
-//   4. No public feed (e.g. Loox renders server-side)? Scrape the rendered widget, or read the
-//      reviews page by hand and write the CSV directly — without wiring an adapter.
-// Then wire it in below: confirm the platform's SIGNATURES entry, write an id-extractor (like
-// extractOkendoSubscriber), write pull<Platform> that paginates and maps each review to the shared
-// CSV row, dispatch it in main, and keep the same columns. Match your total to the public on-page
-// count before trusting it. Finally flip the platform's row to "Working" in the pull-reviews
-// skill's table — the next brand is one command.
+// ADDING AN ADAPTER (listed platforms only, never one-off stores). Stop as soon as one request
+// returns the reviews:
+//   1. Search the platform's docs for the public widget endpoint and the id it needs.
+//   2. Load a product page and copy the review widget's own network request (URL, params, paging).
+//   3. Verify with one curl; tune page size and pagination until a full pull works.
+//   4. No public feed? Scrape the rendered widget, or write the CSV by hand without an adapter.
+// Then: confirm its SIGNATURES entry, add an id-extractor (like extractOkendoSubscriber) and a
+// pull<Platform> mapping to the shared CSV columns, dispatch it in main, and check the total against
+// the on-page count.
 
 import { writeFile } from 'node:fs/promises';
 import { die, parseArgs } from './lib/catalog.mjs';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
-const MAX_PAGES = 100;          // safety cap on pagination
+const MAX_PAGES = 100;
 const OKENDO_API = 'https://api.okendo.io/v1';
 const STAMPED_API = 'https://stamped.io/api';   // public widget feed: getappkey + /widget (per page)
 const JUDGEME_API = 'https://api.judge.me';     // v3 widget JSON feed: reviews/reviews_for_widget
@@ -48,11 +39,9 @@ Overrides (skip auto-detection):
   --shop-domain <domain>   Judge.me: the store's .myshopify.com domain (if detection misses it)
   --loox-store <id>        Loox store id, from the loox.io/widget/<id>/loox.js URL (if detection misses it)
 
-Notes:
-  'okendo', 'stamped', 'judgeme' and 'loox' adapters are implemented. Other platforms are detected
-  and reported, then the script exits 2 — see the pull-reviews skill for the manual path.`;
+Other platforms are detected and reported, then the script exits 2.`;
 
-const log = (...a) => console.error(...a);   // progress on stderr, data on stdout/file
+const log = (...a) => console.error(...a);
 
 // ---------- platform signatures (substring -> platform) ----------
 const SIGNATURES = {
@@ -157,8 +146,7 @@ async function pullOkendo({ subscriber, productId, limit }) {
 }
 
 // ---------- Stamped adapter ----------
-// The widget script fetches its public key from getappkey, then renders reviews as HTML
-// per page via /widget. There's no JSON review feed, so we parse the rendered widget HTML.
+// No JSON feed: get the public key from getappkey, then parse /widget's rendered HTML per page.
 const htmlText = (s) => (s || '')
   .replace(/<[^>]+>/g, ' ')
   .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -209,10 +197,8 @@ async function pullStamped({ apiKey, sId, storeUrl, limit }) {
 }
 
 // ---------- Loox adapter ----------
-// No JSON feed: the widget iframe loads server-rendered HTML from loox.io/widget/<storeId>/reviews,
-// 20 per page (limit is capped), keyed by the store id in the loox.js script URL. Two tabs share
-// the endpoint: product reviews (default) and store reviews (&currentTab=store, no product). The
-// first page embeds each tab's total ("const total = (currentTab === 'store') ? 'N' : 'M'").
+// No JSON feed: server-rendered HTML from loox.io/widget/<storeId>/reviews, 20 per page. Product
+// reviews by default, store reviews with &currentTab=store; the first page embeds each tab's total.
 function extractLooxStoreId(html) {
   const m = html.match(/loox\.io\\?\/widget\\?\/([A-Za-z0-9_-]+)\\?\/loox/i);
   return m ? m[1] : null;
@@ -271,20 +257,13 @@ async function pullLoox({ storeId, limit }) {
 }
 
 // ---------- Judge.me adapter ----------
-// The v3 widget (loader.js -> review_widget.js -> review_api) reads a JSON feed at
-// api.judge.me/reviews/reviews_for_widget, keyed by the store's .myshopify.com domain.
-// The feed serves at most ~1000 rows per query ordering (offset+per_page <= 1000,
-// Elasticsearch-style; deeper pages silently repeat the last window). To pull complete
-// sets we partition: per product x rating bucket (histogram gives exact targets), each
-// crawled newest-first and — when the bucket exceeds one window — oldest-first too,
-// then a verified_only pass and a common-word `search` ladder for anything still in the
-// middle. Coverage is verified against the histogram and any shortfall is reported.
-// Reviews are shared across grouped sister products (is_for_product_from_group), so we
-// crawl every product from the storefront's public /products.json, skip already-covered
-// groups, and dedupe by review uuid. Judge.me has no public incentivized flag; we
-// surface its transparency badge instead: reviews collected via the post-purchase
-// invitation email carry 'store_invitation' in the incentivized column (stores often
-// attach a coupon to those — check jdgmSettings.coupon_* in the page HTML).
+// JSON feed at api.judge.me/reviews/reviews_for_widget, keyed by the .myshopify.com domain. It
+// serves at most ~1000 rows per ordering (deeper pages silently repeat the last window), so we
+// partition per product x rating (the histogram gives targets), crawl newest- and oldest-first,
+// then a verified_only pass and a common-word `search` ladder; shortfalls are reported.
+// Sister products share reviews, so every product in /products.json is crawled, covered groups
+// skipped, and rows deduped by uuid. No public incentivized flag: invitation-email reviews get
+// 'store_invitation' in that column.
 const JM_PER_PAGE = 25;          // 40 pages x 25 = 1000, the full window
 const JM_WINDOW_PAGES = 40;
 const JM_SEARCH_LADDER = ['love', 'stretch', 'oil', 'skin', 'use', 'marks', 'smell', 'recommend',

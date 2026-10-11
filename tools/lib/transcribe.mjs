@@ -1,14 +1,8 @@
-// transcribe.mjs — speech for the media catalog and for captions. Two steps, used at different times:
-//
-//   transcribeAudio — the sound call (catalog time): Gemini 3.1 Flash Lite (ANALYSIS_MODEL) on a
-//     compact mono 16 kHz track → sentence-level transcript (language, speakers S1, S2…) plus a
-//     portrait of the sound. Best text of every engine benchmarked (2.1% WER, brand vocabulary
-//     hinted); sentence times are ±1 s — enough for search, not for captions. analyze-media runs it
-//     on every audio file and video track; transcribe-media runs it on any clip.
-//   alignWords — word timings (caption/edit time only): gemini-3.5-transcribe word timestamps via
-//     the Gateway, mapped onto that sentence text (text, spellings and speakers stay Flash Lite's),
-//     then each word edge snapped to where speech energy starts/stops (word starts median ~0-30 ms
-//     off; the model's own ends run ~0.15 s late at pauses, the snap fixes that).
+// transcribe.mjs — speech for the media catalog and for captions.
+//   transcribeAudio (catalog time) — ANALYSIS_MODEL on a mono 16 kHz track → sentence transcript
+//     (speakers S1, S2…) plus a portrait of the sound. Sentence times are ±1 s: fine for search, not captions.
+//   alignWords (caption time only) — WORDS_MODEL word timestamps mapped onto that sentence text, then
+//     each word edge snapped to speech energy (the model's ends run ~0.15 s late at pauses).
 //
 // Shapes:
 //   catalog transcript  { language, text, segments:[{start,end,speaker,text}], model }
@@ -24,9 +18,8 @@ const round2 = (n) => Math.round(n * 100) / 100;
 const SILENT_DB = -50; // a track whose loudest peak is below this is silence (digital silence reads -91)
 
 // ---------- audio track ----------
-// A file's audio as a compact mono 16 kHz mp3 in a temp dir: { path, dir, silent, duration }, or
-// null when it has no audio stream. `made` = that mp3 already extracted (the probe's single video
-// pass); its dir is then the track's dir. Remove `dir` when done.
+// Mono 16 kHz mp3 in a temp dir: { path, dir, silent, duration }, or null without audio. `made` = an
+// mp3 the probe already extracted. Caller removes `dir`.
 export function audioTrack(src, made = null) {
   if (!have('ffmpeg')) throw new Error('ffmpeg is required for audio (macOS: bash tools/setup.sh · Windows: winget install Gyan.FFmpeg)');
   const p = ffprobeJson(src);
@@ -47,9 +40,8 @@ export function audioTrack(src, made = null) {
 }
 
 // ---------- the sound call ----------
-// Names the model should spell right: the brand, products (+ aliases), known people, and an
-// optional free-form `vocabulary` list in inputs/products.json ({ products, vocabulary }), e.g.
-// 'Acme (said "Ack-mee")'.
+// Names to spell right: brand, products (+ aliases), known people, and products.json `vocabulary`
+// (e.g. 'Acme (said "Ack-mee")').
 export function vocabulary(mediaDir) {
   let extra = [], people = [];
   try { const d = JSON.parse(readFileSync(join(dirname(mediaDir), 'products.json'), 'utf8')); if (Array.isArray(d?.vocabulary)) extra = d.vocabulary; } catch { /* none */ }
@@ -58,11 +50,9 @@ export function vocabulary(mediaDir) {
   return [...new Set(names.filter(Boolean).map(String))];
 }
 
-// A track from audioTrack() → { has_speech, language, sentences, sound (, descriptor, tags) }.
-// Up to LONG s it is one call. Longer tracks (long talky clips make one call loop on a word until the
-// JSON is cut off) go in parts of ~PART s, split at the quietest moment near each boundary, sent in
-// parallel with OVERLAP s either side; each sentence is kept by the part that owns its midpoint, and
-// one text-only merge call maps every part's S1, S2… onto one numbering and merges the portraits.
+// → { has_speech, language, sentences, sound (, descriptor, tags) }. Tracks past LONG s go in ~PART s
+// parts (one long call loops until its JSON is cut off), split at quiet moments, with OVERLAP s either
+// side; a text-only merge call unifies speaker numbering and portraits.
 const LONG = 180, PART = 150, OVERLAP = 2, SNAP_WINDOW = 15;
 export async function transcribeAudio(key, track, { brand, vocab = [], standalone = false } = {}) {
   const dur = track.duration;
@@ -78,9 +68,8 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
   });
   const outs = await Promise.all(parts.map((p) => call(p.path, p.to - p.from, p)));
 
-  // Keep each sentence once: the part whose own range holds its midpoint (absolute time). A time
-  // past the part's length that fits as a time in the whole track is read as one; others are held
-  // at the part's end.
+  // Keep each sentence once, in the part that holds its midpoint. A time past the part's length that
+  // fits the whole track is read as absolute; others are held at the part's end.
   const kept = outs.map((o, k) => {
     const { from, to } = parts[k];
     const at = (x) => { x = +x || 0; return round2(Math.min(to, x > to - from + 1 && x >= from && x <= to ? x : x + from)); };
@@ -99,9 +88,8 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
   };
 }
 
-// One sound call, guarded against runaway repetition: output is capped well above real speech, and
-// a reply that is cut off (unparseable) or loops on a word is retried once with a repetition limit
-// at temperature 1; a retry that still loops is kept with the loops collapsed.
+// A cut-off or looping reply is retried once with a repetition limit at temperature 1; loops left
+// after that are collapsed.
 async function soundCall(key, path, { brand, vocab, standalone, duration, part }) {
   const secs = duration ? Math.round(duration * 10) / 10 : null;
   const ask = (strict) => generateJSON(key, {
@@ -137,8 +125,7 @@ function loops(sentences = []) {
 }
 const collapseLoops = (text) => { let t = String(text); for (let m; (m = loopIn(t));) t = t.replace(m[0], `${Array(5).fill(m[1]).join(' ')}…`); return t; };
 
-// Where to split a long track into n parts: near each even boundary, the middle of the quietest
-// half second within ±SNAP_WINDOW s (a pause between sentences). Returns [0, …cuts, duration].
+// Split near each even boundary at the quietest half second within ±SNAP_WINDOW s. → [0, …cuts, duration]
 function splitPoints(path, dur, n) {
   const db = loudness(path) || [];
   const cuts = [0];
@@ -165,8 +152,7 @@ function numberSpeakers(sentences) {
   return sentences.map((x) => ({ ...x, speaker: ids.get(x.speaker) || ids.set(x.speaker, `S${ids.size + 1}`).get(x.speaker) }));
 }
 
-// The text-only merge call: one speaker numbering and one portrait for a track sent in parts.
-// Falls back to the parts' own labels and joined portraits when it fails.
+// Falls back to the parts' own labels and joined portraits when the merge call fails.
 async function mergeParts(key, parts, outs, kept, standalone) {
   const input = parts.map((p, k) => {
     const lines = {};
@@ -193,8 +179,7 @@ export function toTranscript(out, duration) {
 }
 
 // ---------- word timings ----------
-// Carry timings from another transcript's words onto ours: longest common subsequence on
-// normalized words, unmatched runs spread evenly between their matched neighbours.
+// LCS on normalized words; unmatched runs spread evenly between matched neighbours.
 const norm = (w) => w.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^\p{L}\p{N}]/gu, '');
 function mapTimings(words, timed) {
   const a = words.map(norm), b = timed.map((w) => norm(w.word));
@@ -226,9 +211,8 @@ function loudness(file) {
   return db;
 }
 
-// The model's word times sit on a 0.1 s grid. Keep them in order and inside the audio, then move
-// each word edge within ±SNAP s to where speech starts/stops: the first/last sustained (≥50 ms)
-// stretch within 30 dB of the loudest frame, never across a neighbouring word.
+// The model's times sit on a 0.1 s grid. Move each word edge within ±SNAP s to where sustained (≥50 ms)
+// speech within 30 dB of the peak starts/stops, never across a neighbouring word.
 const SNAP = 0.25, RUN = 5;
 function tidyTimes(times, db) {
   const dur = db.length / 100, F = (s) => Math.round(s * 100), thr = Math.max(...db) - 30, loud = (f) => db[f] > thr;
@@ -252,9 +236,8 @@ function tidyTimes(times, db) {
   return w;
 }
 
-// Add word timings to a sentence transcript (catalog shape).
 export async function alignWords({ file, transcript, key }) {
-  // Words = whitespace tokens of the sentence text; punctuation-only tokens ride on their neighbour.
+  // Punctuation-only tokens ride on their neighbour.
   const words = [];
   transcript.segments.forEach((s, si) => {
     for (const w of String(s.text).split(/\s+/).filter(Boolean)) {

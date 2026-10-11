@@ -1,5 +1,4 @@
-// "Use as reference": returns a presigned R2 URL for a catalog asset's original
-// (?id=<catalog id>), or the local file route when the workspace has no R2 creds.
+// Presigned R2 URL for a catalog original (?id=…), or the local file route without R2 creds.
 import { r2For } from '../../../../../lib/server/harness.js';
 import { brandRoute, jsonRes } from '../../../../../lib/server/http.js';
 import { isMediaId, mediaRecord } from '../../../../../lib/server/media.js';

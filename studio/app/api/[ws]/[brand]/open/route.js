@@ -1,5 +1,4 @@
-// Open a brand file in its default app, or reveal it in the file manager.
-// Body: { path (brand-relative), mode?: 'open' | 'reveal' }
+// Open a brand file, or reveal it in the file manager. Body: { path (brand-relative), mode?: 'open' | 'reveal' }
 import { brandPost, jsonRes } from '../../../../../lib/server/http.js';
 import { openPath } from '../../../../../lib/server/openers.js';
 

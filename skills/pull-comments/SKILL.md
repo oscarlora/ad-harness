@@ -1,69 +1,60 @@
 ---
 name: pull-comments
-description: Pull the client's review comments on a batch of ads — from Google Drive or the Notion Ads Board — and turn them into a per-ad revision plan. Use when the client has reviewed ads and left comments, and you want to act on them. Pulls the comments, maps each to its ad record, and proposes the fixes for approval.
+description: Pull review comments (a client's or a teammate's) on a batch of ads — from Google Drive or the Notion Ads Board — and turn them into a per-ad revision plan. Use when someone has reviewed ads and left comments, and you want to act on them. Pulls the comments, maps each to its ad record, and proposes the fixes for approval.
 ---
 
 # Pull comments
 
-The client reviews a batch and comments on the ads — either on the files in their Drive folder, or on
-the ad pages in their Notion Ads Board. This pulls those comments and turns them into a **revision
-plan** — one entry per ad, grouped by ad ID — for you to approve before anything is regenerated. It
-does **not** regenerate on its own.
+Pull reviewers' comments (on Drive files or Notion Ads Board pages) and turn them into a
+**revision plan**, one entry per ad ID, for approval. It does **not** regenerate on its own.
 
-## 1. Pull — from the source the client reviewed in
+## 1. Pull — from where they reviewed
 
-**Drive** (client commented on files in the Drive folder). Run on any sync spec for the batch
-(`_sync_*.json` carries the brand + `driveSubfolder`), or point straight at a folder:
+**Drive.** Run on any upload spec for the batch (`_upload_*.json` carries the brand + `driveSubfolder`),
+or point straight at a folder:
 
 ```bash
-node tools/pull-drive-comments.mjs workspaces/<WS>/Acme/outputs/_sync_41.json
-node tools/pull-drive-comments.mjs --folder <driveFolderId> <any-spec-under-the-brand>.json
+node tools/pull-comments.mjs drive workspaces/<WS>/Acme/outputs/_upload_41.json
+node tools/pull-comments.mjs drive --folder <driveFolderId> <any-spec-under-the-brand>.json
 ```
 
-Writes `outputs/comments.json`. Resolved comments are flagged, not dropped. When the client drew a box
-on the image, the comment carries a `region` (the marked box as fractions of width/height plus a coarse
-label like `bottom-center`) — use it to pin which element a comment means; it's the box they drew, not
-the freehand strokes.
+Writes `outputs/comments.json`. Resolved comments are flagged, not dropped. A comment with a box drawn
+on the image carries a `region` (fractions of width/height plus a label like `bottom-center`) — use
+it to pin which element the comment means.
 
-**Notion** (client commented on pages in the Ads Board). Resolve the board by brand, optionally
-filtering to the statuses under review:
+**Notion.** Resolve the board by brand, optionally filtering by status:
 
 ```bash
-node tools/pull-notion-comments.mjs <WS> "Acme" --status "Revision Needed" --status "Pending Client Review"
+node tools/pull-comments.mjs notion <WS> "Acme" --status "Revision Needed" --status "Pending Client Review"
 ```
 
-Writes `outputs/notion-comments.json`. Comments come back grouped into threads per page. The board's
-Status property tells you which stage each ad is at. Needs the integration's **"Read comments"**
-capability (Notion → integration settings → Capabilities); without it the tool says so and exits.
+Writes `outputs/notion-comments.json`, threads grouped per page. Needs the integration's **"Read
+comments"** capability (Notion → integration settings → Capabilities).
 
-Each tool prints a per-file/per-page summary so you can read it without opening the file.
+Each run prints a summary, so you needn't open the file.
 
 ## 2. Map each comment to its ad
 
-The ad **ID** keys everything: in Drive it's the leading number in the filename (`41_V2_...png` → ad `41`,
-variation `V2`); in Notion it's the page's ID property. Open that ad's record at
-`outputs/json/<id>.json` — its concept, copy, design, and the `generation.prompt` are the source of
-truth (see **write-prompt**). If a record doesn't exist yet for an older ad, fall back to the `.png` in
-`outputs/` and any legacy prompt file.
+The ad **ID** is the leading number in the Drive filename (`41_V2_...png` → ad `41`, variation `V2`)
+or the Notion page's ID property. Open `outputs/json/<id>.json` — its fields and `generation.prompt`
+are the source of truth (**write-prompt**). For an older ad with no record, fall back to the `.png`
+in `outputs/` and any legacy prompt file.
 
 ## 3. Propose the plan
 
-Present one block per ad **in the chat**, plainly — no separate review UI:
+One block per ad **in the chat**:
 
 - The ad ID + file/page, and each comment verbatim (mark resolved ones).
-- For each comment, the concrete change: which field moves (copy slot, design, composition) and what
-  it becomes. Tie it to the record, never to the rendered pixels.
-- When a comment is **vague or open-ended** (e.g. "make it pop"), don't guess — offer **3
-  differentiated options** for that fix, per the house style.
+- For each comment, the concrete change: which record field moves (copy slot, design, composition)
+  and what it becomes — never the rendered pixels.
+- For a **vague** comment ("make it pop"), offer **3 differentiated options** instead of guessing.
 
-Then stop and let the user lock the changes. Do not regenerate until they approve.
+Then stop. Do not regenerate until the user approves.
 
 ## 4. On approval — hand to write-prompt
 
-Apply the locked fixes by the **write-prompt** rule: *fixes = rewrite the prompt from scratch, never
-amend*. Update the ad's record fields, rebuild `generation.prompt` fresh so the fix is encoded without
-contradicting anything else, then regenerate (`generate-image.mjs --record`) and re-index
-(`record-ad.mjs --index`). Resync only what changed (**sync-to-drive** / **sync-to-notion**).
+Fixes rewrite the prompt from scratch, never amend (**write-prompt**). Update the record's fields,
+rebuild `generation.prompt` fresh, regenerate (`generate-image.mjs --record`), and re-index
+(`record-ad.mjs --index`). Re-upload only what changed (**upload-ads**).
 
-If any comment carried a **durable lesson** (a rule for future ads, not just this fix), hand it to
-**capture-feedback** to fold into the brand's `inputs/feedback.md`.
+Hand any **durable lesson** (a rule for future ads) to **save-brand-memory**.

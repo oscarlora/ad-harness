@@ -1,8 +1,7 @@
-// catalog.mjs — shared helpers for every tool: .env loading, arg parsing, binaries (ffmpeg et al.),
-// workspace inference, and the media catalog (content hashing, 5-digit ids, path layout, the record
-// skeleton). Zero dependencies.
+// catalog.mjs — shared helpers: .env, arg parsing, binaries, workspace inference, and the media
+// catalog (hashing, 5-digit ids, paths, the record skeleton).
 //
-// On-disk layout (mirrored 1:1 to R2):
+// Layout:
 //   workspaces/<WS>/<Brand>/inputs/media/
 //     brand/                      reserved — brand kit, skipped by the catalog
 //     _catalog/                   reserved — generated catalog (json, thumbs, sprites, proxies, keyframes, peaks)
@@ -20,15 +19,12 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 export function die(message, code = 1) { console.error(`ERROR: ${message}`); process.exit(code); }
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---------- external binaries (cross-platform) ----------
-// ffmpeg/ffprobe/yt-dlp may be on PATH (brew/winget) or in ~/.local/bin; extend PATH once, here,
-// so spawned tools find them too. The unix
-// dirs are harmless candidates on Windows.
+// ---------- external binaries ----------
+// Extend PATH once so spawned tools find binaries in ~/.local/bin and brew dirs too.
 process.env.PATH = [process.env.PATH || '', join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].join(delimiter);
 
-// Resolve a binary to a spawnable full path by scanning PATH ourselves (`where`/`command -v`
-// equivalent — no /bin/sh, which Windows lacks). On Windows also tries <name>.exe, since
-// spawn() of a plain name doesn't append it without a shell. Returns the path or null.
+// Scans PATH ourselves (Windows has no /bin/sh) and tries <name>.exe there, since spawn() won't
+// append it without a shell.
 const BIN_CACHE = {};
 export function findBin(name) {
   if (name in BIN_CACHE) return BIN_CACHE[name];
@@ -49,7 +45,7 @@ export function run(bin, args, { allowFail = false, binary = false, cwd } = {}) 
   if (r.status !== 0 && !allowFail) throw new Error(`${bin} ${args.join(' ')} failed: ${r.stderr || r.error}`);
   return r;
 }
-// run() without blocking the event loop, so several heavy jobs can overlap: { status, stdout, stderr }.
+// run() without blocking the event loop: { status, stdout, stderr }.
 export function runAsync(bin, args, { allowFail = false, cwd } = {}) {
   return new Promise((res, rej) => {
     const p = spawn(findBin(bin) || bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -75,11 +71,10 @@ const MIME = {
   heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp', avif: 'image/avif',
   mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
   mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/opus',
-  json: 'application/json', md: 'text/markdown', pdf: 'application/pdf', html: 'text/html', vtt: 'text/vtt', txt: 'text/plain',
+  json: 'application/json', js: 'text/javascript', mjs: 'text/javascript', md: 'text/markdown', pdf: 'application/pdf', html: 'text/html', vtt: 'text/vtt', txt: 'text/plain',
 };
 
-// MIME type -> extension: the inverse of MIME (first extension wins: jpg, tif), plus aliases some
-// providers send. Takes a Content-Type header as is (parameters after ';' ignored); undefined if unknown.
+// Takes a Content-Type header as is; first extension wins (jpg, tif); undefined if unknown.
 const EXT_FOR_MIME = {
   ...Object.fromEntries(Object.entries(MIME).reverse().map(([e, m]) => [m, e])),
   'image/jpg': 'jpg', 'audio/mp3': 'mp3', 'audio/x-wav': 'wav', 'audio/wave': 'wav',
@@ -91,12 +86,12 @@ export const mimeOf = (p) => MIME[extOf(p)] || 'application/octet-stream';
 export function typeOf(p) {
   const e = extOf(p);
   for (const t of ['image', 'video', 'audio']) if (EXT[t].includes(e)) return t;
-  return null; // not a media file we catalog
+  return null;
 }
 export const isMedia = (p) => typeOf(p) !== null && !basename(p).startsWith('.');
 
 // ---------- .env ----------
-// The repo-root .env (found from this file, so tools work from any cwd), else one in `root`.
+// The repo-root .env (found from this file, so any cwd works), else one in `root`.
 export function loadEnv(root = REPO_ROOT) {
   for (const f of [...new Set([join(root, '.env'), join(REPO_ROOT, '.env'), resolve('.env')])]) {
     if (existsSync(f)) {
@@ -118,25 +113,42 @@ export function inferWorkspace(p) {
   return m ? m[1] : '';
 }
 
-// Brand name from any path under workspaces/<WS>/<Brand>/... (or the brand root itself).
 export function inferBrand(p) {
   const m = resolve(p).replace(/\\/g, '/').match(/workspaces\/[^/]+\/([^/]+)(\/|$)/);
   return m ? m[1] : '';
 }
 
-// The brand root dir (workspaces/<WS>/<Brand>) from any path under it, or the brand root itself.
 export function brandDirFrom(p) {
   const m = resolve(p).replace(/\\/g, '/').match(/^(.*\/workspaces\/[^/]+\/[^/]+)(\/.*)?$/);
   return m ? m[1] : resolve(p);
 }
 
-// The brand's product fingerprints (inputs/products.json: [{ name, aliases, look }] or { products }).
+// A brand folder by its name in another system ("Acme Skincare" → workspaces/<WS>/Acme), matched
+// loosely; null when none.
+export function findBrandDir(workspace, name) {
+  const wsDir = join(REPO_ROOT, 'workspaces', workspace);
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const target = norm(name || '');
+  if (!target || !existsSync(wsDir)) return null;
+  const dirs = readdirSync(wsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  const hit = dirs.find((d) => norm(d) === target) || dirs.find((d) => norm(d).includes(target) || target.includes(norm(d)));
+  return hit ? join(wsDir, hit) : null;
+}
+
+// inputs/uploads.json pins where a brand's ads upload: { drive: { folder }, notion: { board | boardId } }.
+// `p` is any path inside the brand; {} when the file is missing.
+export function readUploads(p) {
+  const f = join(brandDirFrom(p), 'inputs', 'uploads.json');
+  if (!existsSync(f)) return {};
+  try { return JSON.parse(readFileSync(f, 'utf8')); } catch (e) { die(`${f}: ${e.message}`); }
+}
+
+// inputs/products.json: [{ name, aliases, look }] or { products }.
 export function readProducts(mediaDir) {
   try { const d = JSON.parse(readFileSync(join(dirname(mediaDir), 'products.json'), 'utf8')); return Array.isArray(d) ? d : d.products || []; }
   catch { return []; }
 }
 
-// Resolve the brand's inputs/media dir from any path under it (or a brand root).
 export function mediaDirFrom(p) {
   const norm = resolve(p).replace(/\\/g, '/');
   const m = norm.match(/^(.*\/inputs\/media)(\/.*)?$/);
@@ -152,7 +164,7 @@ export function catalogPaths(p) {
     json: join(catalog, 'json'), thumbs: join(catalog, 'thumbs'), sprites: join(catalog, 'sprites'),
     proxies: join(catalog, 'proxies'), keyframes: join(catalog, 'keyframes'), peaks: join(catalog, 'peaks'),
     index: join(catalog, 'index.md'), people: join(catalog, 'people.json'),
-    driveSources: join(catalog, 'drive-sources.json'), // tracked Drive folders (see lib/drive.mjs)
+    driveSources: join(catalog, 'drive-sources.json'),
   };
 }
 export function ensureDirs(paths) {
@@ -161,7 +173,7 @@ export function ensureDirs(paths) {
 
 // ---------- hashing + ids ----------
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
-export async function sha256File(p) { // streamed: a 500 MB video never sits in memory
+export async function sha256File(p) { // streamed: videos can be huge
   const h = createHash('sha256');
   for await (const chunk of createReadStream(p, { highWaterMark: 1 << 22 })) h.update(chunk);
   return h.digest('hex');
@@ -186,8 +198,7 @@ function snapAspect(w, h) {
   return bestD / (w / h) < 0.04 ? `${best[0]}:${best[1]}` : `${Math.round(r * 100) / 100}:1`;
 }
 
-// A fresh record skeleton from probe output. analyze-media (Gemini) fills visual_description /
-// products / people / tags; record-media.mjs persists it.
+// analyze-media fills visual_description / products / people / tags.
 export function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, width, height, duration, sourceType = 'brand', sourceName = '' }) {
   const rec = {
     id, sha256: hash,
@@ -204,8 +215,8 @@ export function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, widt
   return rec;
 }
 
-// Minimal shared arg parser: --key value, repeatable keys collected into arrays, --flag => true.
-// `flags` lists keys that never take a value, so the word after them stays a positional (in `_`).
+// --key value, repeated keys → arrays, bare --flag → true. `flags` never take a value, so the next
+// word stays a positional (in `_`).
 export function parseArgs(argv, { repeat = [], flags = [] } = {}) {
   const out = {}; const positionals = [];
   for (let i = 0; i < argv.length; i++) {

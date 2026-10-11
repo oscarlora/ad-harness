@@ -1,18 +1,15 @@
 'use client';
-// Pieces shared by the Board, Media and Workflow pages: the tab list, the toolbar's opening run
-// (wordmark → all brands, brand switcher, Board | Media | Workflow tabs, count, live "Updated"
-// flash) and the load-error block.
+// Shared brand-page pieces: the tab list, the toolbar's opening run, and the load-error block.
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { brandUrl } from '../lib/client/api.js';
 import Switcher from './Switcher.js';
 
-// Every brand page, by URL segment → label. The first is the default.
+// URL segment → label; the first is the default.
 export const TABS = { board: 'Board', media: 'Media', workflow: 'Workflow' };
 export const tabOr = (t) => (Object.hasOwn(TABS, t || '') ? t : 'board');
 
-// The subtle "Updated" flash (auto-clears via JS so reduced-motion users aren't left with a
-// stuck label).
+// Cleared by JS, not CSS, so reduced-motion users aren't left with a stuck label.
 function UpdatedFlash({ at }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {

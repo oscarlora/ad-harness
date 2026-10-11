@@ -5,10 +5,10 @@ description: Find and use media from a brand's library — by meaning in any lan
 
 # Search media
 
-The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`).
-
-Reusable assets for every brand (meme SFX, stock sounds) live in the **shared library**,
-`workspaces/Shared/Library` — search it the same way, with `--media workspaces/Shared/Library/inputs/media`.
+The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). Assets for every
+brand (music, SFX, references) live in the public **shared library** — pull it if it isn't local
+(`node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`, no keys needed), then
+search it the same way with `--media workspaces/Shared/Library/inputs/media`.
 
 ## Agent search — retrieve, then judge
 
@@ -19,23 +19,20 @@ Reusable assets for every brand (meme SFX, stock sounds) live in the **shared li
      [--product "<name>"] [--person "<name>"] [--source brand|generated|external] [--limit 20] [--json]
    node tools/search-media.mjs --media <brand>/inputs/media --like 00042 [filters]
    ```
-   Queries are ranked by meaning (Gemini vectors over the words, the pixels/sound, and every video
-   scene) fused with keywords. A video hit shows `scene N @ start–end s`: the moment to cut. `--like`
-   finds assets that look or sound like one you already picked. Without vectors or a key it falls
-   back to keywords (`[keywords]` in the output); run `embed-media` to fix that.
-2. **Judge** — Read the top candidates' proxies (`_catalog/proxies/<id>.jpg`) or keyframes and keep
-   only true matches.
-3. **Use** — a local original is `inputs/media/<name>`. To feed a generator from R2, presign it:
+   Queries match by meaning and keyword, in any language. A video hit shows `scene N @ start–end s`:
+   the moment to cut. `--like` finds assets that look or sound like one you picked. If the output
+   says `[keywords]`, vectors are missing; run `embed-media`.
+2. **Judge** — look at the top candidates' proxies (`_catalog/proxies/<id>.jpg`) or keyframes and
+   keep only true matches.
+3. **Use** — pass the original's path (`inputs/media/<name>`) to the generator. If it isn't
+   local (a light pull), presign it from R2:
    `node tools/sync-brand.mjs --presign workspaces/<WS>/<Brand> <id>`.
 
 ## Human search — the gallery
 
-The **studio** Media page (`/<Workspace>/<Brand>/media`): grid with filters, search, a full-screen
-viewer with editable tags/products and people naming, sprite-scrub for video, waveform + transcript
-for audio.
+Studio's Media page (**open-studio**), `/<Workspace>/<Brand>/media`.
 
 ## Wiring
 
-Any ad workflow that needs a reference photo, footage, music, or a sound searches here first instead
-of hunting raw folders. Anything new the ad makes (renders, voiceovers, music) that is worth reusing
-goes back in through **catalog-media** with `--source-type generated`.
+Ad workflows search here first for reference photos, footage, music, or sounds, instead of hunting
+raw folders.

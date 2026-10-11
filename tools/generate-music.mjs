@@ -1,38 +1,12 @@
 #!/usr/bin/env node
-// generate-music.mjs — generate music beds, or a full sung song from given lyrics (--lyrics).
-// Seed Audio 1.0 is the default; Suno is available only when explicitly requested with --provider suno.
-// Zero npm dependencies. Node 22+. ffprobe verifies the output; ffmpeg is
-// needed only for --duration trimming.
-//
-// Seed Audio makes a purpose-length bed from one text prompt. Prompt-craft for ad beds:
-// micro-genre + BPM + production markers, and always end with
-// "hook-first, loopable, no intro" (the slow stock-music intro is the boring tell). Instrumental
-// is the DEFAULT — beds sit under dialogue; vocal chops belong in the prompt, never sung lyrics.
-// Suno has no length parameter and returns two full tracks (~2-4 min) per roll; use it only when
-// explicitly requested for a full song or long-form track.
-//
-// --lyrics <file> makes a full song on Suno sung with those exact words (section tags like [Chorus]
-// are structure, not sung); --prompt becomes the style. Custom mode, default model V6 (V5_5 is
-// discontinued on kie); each take also gets Suno's own word timings as <take>.suno-words.json.
-// Never trimmed — the song sets its length (tools/song-edit.py timing trims it to the sung part).
-//
-// Example prompts:
-//   "jersey club, 140bpm, pitched-up vocal chops, sidechained kicks, bouncy triplet bed, hook-first, loopable, no intro"
-//   "phonk house, 128bpm, cowbell lead, distorted 808s, tape hiss, dark bounce, hook-first, loopable, no intro"
-//   "afrobeats amapiano blend, 108bpm, log drum bass, airy shakers, warm keys, hook-first, loopable, no intro"
-//   "indie sleaze dance-punk, 118bpm, gritty bass riff, four-on-the-floor claps, lo-fi saturation, hook-first, loopable, no intro"
-//
-// Flow: default Seed Audio requests are delegated to generate-voice.mjs's shared Seed Audio client.
-// Explicit Suno requests create a task, poll, download both takes, optionally trim, then verify.
+// generate-music.mjs — generate a music bed (Seed Audio 1.0), or a song on Suno when asked for.
 //
 // Usage:
-//   node tools/generate-music.mjs \
-//     --prompt "jersey club, 140bpm, pitched-up vocal chops, sidechained kicks, hook-first, loopable, no intro" \
-//     --out workspaces/<WS>/Acme/inputs/media/acme-bed-jerseyclub.mp3
+//   node tools/generate-music.mjs --prompt "<style>" --out <bed.mp3> [--duration 30]
+//   node tools/generate-music.mjs --lyrics <lyrics.txt> --prompt "<style>" --out <song.mp3>
 //
-// Defaults: --provider seed-audio  --duration 30  instrumental (unless --vocals / --lyrics)  --num 1
-//
-// Auth: per-workspace <WORKSPACE>_SEGMIND_API_KEY by default; <WORKSPACE>_KIE_API_KEY for Suno.
+// Seed Audio beds are always instrumental. Suno returns two full takes per run and has no length
+// setting. Prompt craft: skills/add-music.
 
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
@@ -47,27 +21,25 @@ const CALLBACK_PLACEHOLDER = 'https://example.com/suno-callback';
 const HELP = `generate-music.mjs — ad-bed / song generator: Seed Audio 1.0 (default) or Suno (explicit)
 
 Required:
-  --prompt "<text>"        Style description: micro-genre + BPM + production markers, ending
-                           "hook-first, loopable, no intro" (see the header for examples)
-  --out <path>             Output audio path (e.g. workspaces/<WS>/Acme/inputs/media/bed.mp3)
+  --prompt "<text>"        Style: micro-genre + BPM + production markers
+  --out <path>             Output audio path
 
 Optional:
   --provider <name>        seed-audio (default; alias segmind) | suno (alias kie)
   --vocals                 Suno only: a full song with vocals, Suno writing the lyrics
-  --lyrics <file>          Suno (implied): a full song sung with these exact lyrics ([Section]
-                           tags allowed); --prompt becomes the style. Also writes
-                           <take>.suno-words.json (Suno's word timings). No trimming.
-  --duration <seconds>     Seed Audio target length (default 30, best-effort). With Suno, trim
-                           each full track to the first N seconds; omit to keep full tracks.
+  --lyrics <file>          Suno (implied): a song sung with these exact lyrics ([Section] tags are
+                           structure, not sung); --prompt becomes the style. Also writes
+                           <take>.suno-words.json (Suno's word timings). Never trimmed
+  --duration <seconds>     Seed Audio target length (default 30, best-effort). Suno: trim each take
+                           to the first N seconds; omit to keep full tracks
   --model <name>           Suno only: V4_5 (default; V6 with --lyrics) | V4 | V4_5PLUS | V4_5ALL |
                            V5 | V5_5 | V6 | V6_MINI | V6_WILD
-  --title <text>           Suno only: track title metadata (default derived from --out)
+  --title <text>           Suno only: track title (default from --out)
   --negative-tags "<text>" Suno only: styles to avoid
-  --num <n>                Generations to run (default 1). Seed Audio returns one take per
-                           generation; Suno returns two.
+  --num <n>                Generations (default 1). Seed Audio: one take each; Suno: two
   --timeout <seconds>      Max wait per task (default 600)
 
-Env:  <WORKSPACE>_SEGMIND_API_KEY by default; <WORKSPACE>_KIE_API_KEY for --provider suno.`;
+Env:  <WORKSPACE>_SEGMIND_API_KEY by default; <WORKSPACE>_KIE_API_KEY for Suno.`;
 
 // Suno endpoints report failures in a `code` field as well as the HTTP status.
 async function suno(path, opts) {
@@ -82,10 +54,8 @@ function resolveModel(model) {
 }
 
 async function createTask(opts) {
-  // Instrumental beds ride custom mode: `style` carries the prompt, `title` is metadata, no
-  // lyrics field. --lyrics is custom mode with vocals: `prompt` is sung verbatim (`lyrics`, which
-  // V6 reads first, carries the same text). --vocals flips to non-custom mode where `prompt` is a
-  // song description and Suno writes its own lyrics.
+  // Custom mode: `prompt` is sung verbatim (V6 reads `lyrics` first, so both carry it). Non-custom
+  // mode (--vocals): `prompt` describes the song and Suno writes the lyrics.
   const input = opts.lyrics
     ? { model: opts.model, customMode: true, instrumental: false, prompt: opts.lyrics, lyrics: opts.lyrics, style: opts.prompt, title: opts.title }
     : opts.instrumental
@@ -128,11 +98,9 @@ async function pollResult(taskId, timeoutSec) {
   }
 }
 
-// Suno's own word timings for one take (kie "Get Timestamped Lyrics": market model
-// ai-music-api/timeStamped-lyrics, input task_id + audio_id) -> <take>.suno-words.json.
-// Answers synchronously; live the words come back camelCase inside a second {code,msg,data}
-// envelope (alignedWords[{word,startS,endS}], hootCer), not the docs' aligned_words.
-// Best-effort: a failure warns, since the song itself is already saved.
+// Suno's word timings for one take -> <take>.suno-words.json. Live responses nest a second
+// {code,msg,data} envelope and use camelCase (alignedWords, hootCer), unlike the docs.
+// A failure only warns: the song is already saved.
 async function saveWords(track, saved) {
   try {
     const json = await suno('/api/v1/jobs/createTask', {
@@ -151,7 +119,7 @@ async function saveWords(track, saved) {
   }
 }
 
-// Trim to the first N seconds in place (stream copy — lossless, fast).
+// Trim to the first N seconds in place (stream copy).
 async function trimTo(file, seconds) {
   if (!findBin('ffmpeg')) die('--duration needs ffmpeg (macOS: static build in ~/.local/bin — bash tools/setup.sh installs it)');
   const tmp = file.replace(/(\.[^./]+)$/, '.trim$1');
@@ -192,7 +160,7 @@ async function main() {
   const { W, keys } = workspaceKeys(args.out);
   if (!keys.kie) die(`Workspace ${W} has no kie.ai key. Add ${W}_KIE_API_KEY to .env (get one at https://kie.ai/api-key).`);
 
-  const instrumental = !args.vocals && !lyrics; // beds are instrumental unless --vocals / --lyrics
+  const instrumental = !args.vocals && !lyrics;
   const model = resolveModel(String(args.model || (lyrics ? 'V6' : 'V4_5')));
   const styleLimit = ['V3_5', 'V4'].includes(model) ? 200 : 1000;
   if ((instrumental || lyrics) && prompt.length > styleLimit) die(`prompt is ${prompt.length} chars; ${model} allows ${styleLimit} for style`);

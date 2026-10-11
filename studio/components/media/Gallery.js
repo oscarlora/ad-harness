@@ -1,7 +1,5 @@
 'use client';
-// The media library: true-aspect justified grid, floating filter bar (type · source · person · ratio · sort + keyword search), hover pills,
-// multi-select actions, sprite-strip scrub on video, waveform cards for audio, and the
-// full-screen viewer with the editable sidebar. Live-refreshes over SSE.
+// The media library: justified grid, filter bar, multi-select actions, video scrub, audio waves, and the viewer.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiBase, fileUrl, getJson, openFile } from '../../lib/client/api.js';
 import { useBrandData } from '../../lib/client/hooks.js';
@@ -60,8 +58,7 @@ function Scrub({ ws, brand, rec, w, cardRef }) {
   const sp = rec.sprites;
   const scale = w / sp.frameW;
   const [pos, setPos] = useState('0px 0px');
-  // The sheet only holds as many frames as the clip has at this interval — clamp so we never
-  // land on empty cells.
+  // Clamp to the frames the clip actually filled, so we never land on empty sprite cells.
   const frames = Math.max(1, Math.min(sp.cols * sp.rows, Math.round((rec.file?.duration || 0) / (sp.interval || 1)) || 1));
 
   useEffect(() => {

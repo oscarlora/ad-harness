@@ -1,21 +1,6 @@
 #!/usr/bin/env node
-// transcribe-media.mjs — any audio/video clip -> transcript JSON (no catalog needed). Engines live in
-// lib/transcribe.mjs (shared with analyze-media.mjs).
-//
-//   default  sentence-level transcript: Gemini 3.1 Flash Lite via the Vercel AI Gateway (language,
-//            speakers S1, S2…, brand vocabulary hinted) — the text truth.
-//   --words  + word timings for captions and cuts: gemini-3.5-transcribe word timestamps via the
-//            Gateway, mapped onto that text and snapped to the speech energy.
-// A clip that is already a library item (inside a brand's inputs/media/) reuses its catalog
-// transcript instead of a new call. Key: <WS>_AI_GATEWAY_API_KEY, the workspace from the input's
-// workspaces/<WS>/ path (or --workspace); without one it exits 3 (SKIP).
-//
-// Output JSON (written to --out, default <input dir>/<input name>.transcript.json):
-//   { model, language, has_speech, text, sound?, segments:[{start,end,speaker,text}],
-//     words?:[{start,end,word,speaker}], words_model? }
-//
-// Usage:
-//   node tools/transcribe-media.mjs --in <audio/video> [--out <json>] [--words] [--workspace <WS>]
+// transcribe-media.mjs — any audio/video clip -> transcript JSON (lib/transcribe.mjs). Run with --help.
+// A library item reuses its catalog transcript. Without a Gateway key it exits 3 (SKIP).
 
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -36,7 +21,6 @@ Optional:
 Output: { model, language, has_speech, text, sound?, segments:[{start,end,speaker,text}],
           words?:[{start,end,word,speaker}], words_model? }`;
 
-// A library item's catalog record (by file name in its brand's inputs/media), or null.
 function libraryRecord(input) {
   if (!/[\\/]inputs[\\/]media[\\/]/.test(input)) return null;
   return readRecords(catalogPaths(mediaDirFrom(input))).find((r) => r.file?.name === basename(input)) || null;

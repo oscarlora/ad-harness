@@ -1,29 +1,20 @@
-// drive.mjs — the Google Drive plumbing shared by pull-media, ingest-media, lib/media-probe, sync-to-drive
-// and pull-drive-comments: token refresh from the workspace's creds, checked API calls (driveApi),
-// folder listing (API, or the public embedded view for link-shared folders without creds), streamed
-// downloads (any URL), uploads, the brand's tracked-folder record, and the brand → ad-group folder
-// resolution. Zero npm deps (plain fetch).
+// drive.mjs — shared Google Drive helpers: auth, API calls, folder listing, downloads, uploads,
+// tracked folders, and brand/group folder resolution.
 //
-// Per-workspace creds in .env (written by connect-drive.mjs, plus the destination folder id):
-//   <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN / _FOLDER
-//
-// Folder resolution (no silent creation):
-//   - The brand folder is matched under the workspace folder by *contains* (case-insensitive), so a
-//     brand of "Acme" lands in an existing "Acme Ads" folder. An exact match wins; otherwise a single
-//     contains-match is used; multiple matches error and ask you to disambiguate.
-//   - The group folder is matched by exact name inside the brand folder.
+// Creds in .env (from connect-drive.mjs): <WS>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN / _FOLDER
+// Folder resolution never creates silently (brandFolders, resolveGroupFolder); group folders match by
+// exact name.
 import { createWriteStream, existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { loadEnv, die, sleep, mimeOf } from './catalog.mjs';
+import { loadEnv, die, sleep, mimeOf, inferWorkspace, readUploads } from './catalog.mjs';
 
 const API = 'https://www.googleapis.com/drive/v3';
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const ALL_DRIVES = 'supportsAllDrives=true&includeItemsFromAllDrives=true';
 
 export const auth = (token) => ({ Authorization: `Bearer ${token}` });
-// One Drive API call → its JSON. Throws with the HTTP status and Drive's own message on failure.
 export async function driveApi(url, token, { method = 'GET', headers = {}, body } = {}) {
   const r = await fetch(url, { method, headers: { ...auth(token), ...headers }, body });
   const text = await r.text();
@@ -36,9 +27,7 @@ export const driveGet = (url, token) => driveApi(url, token);
 const credKeys = (W) => ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'].map((k) => `${W.toUpperCase()}_DRIVE_${k}`);
 export const hasDriveCreds = (workspace) => { const env = loadEnv(); return credKeys(workspace).every((k) => env[k]); };
 
-// Refresh the workspace's access token. Exits with setup help when creds are missing or revoked.
-// needFolder: also require <WS>_DRIVE_FOLDER (the workspace's destination folder). Returns
-// { token, folder }.
+// Exits with setup help when creds are missing or revoked. needFolder: also require <WS>_DRIVE_FOLDER.
 export async function driveToken(workspace, { needFolder = false } = {}) {
   const W = workspace.toUpperCase();
   const env = loadEnv();
@@ -64,7 +53,6 @@ export async function driveToken(workspace, { needFolder = false } = {}) {
   return { token: tk.access_token, folder: env[keys.folder] };
 }
 
-// The children of a folder (paginated, sorted by name): [{ id, name, mimeType, modifiedTime, size }].
 export async function listChildren(folderId, token, { foldersOnly = false } = {}) {
   const out = [];
   let pageToken;
@@ -77,9 +65,9 @@ export async function listChildren(folderId, token, { foldersOnly = false } = {}
   return out;
 }
 
-// ---------- tracked folders: list everything, download only what's new ----------
-// Without creds a link-shared ("anyone with the link") folder is read through Drive's public
-// embedded view: ids + names only (no modifiedTime/size), Google-native docs show as non-files.
+// ---------- tracked folders ----------
+// Without creds a link-shared folder is read through Drive's public embedded view: ids + names only
+// (no modifiedTime/size), Google-native docs show as non-files.
 const NATIVE = 'application/vnd.google-apps.native';
 const unescape = (s) => s.replace(/&#x([\da-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
   .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
@@ -94,8 +82,7 @@ async function publicFolder(folderId) {
   return { name, files };
 }
 
-// A folder's name and every file under it, recursing into subfolders. `token` null → public view.
-// Returns { name, files: [{ id, name, mimeType, modifiedTime, size, native }] }.
+// `token` null → public view. Returns { name, files: [{ id, name, mimeType, modifiedTime, size, native }] }.
 export async function listTree(folderId, token) {
   const name = token ? (await driveGet(`${API}/files/${folderId}?fields=name&supportsAllDrives=true`, token)).name : null;
   const files = [], seen = new Set();
@@ -112,9 +99,8 @@ export async function listTree(folderId, token) {
   return { name: rootName, files };
 }
 
-// Download a URL to `dest` (streamed, up to 3 tries). A web page in place of the file (not shared,
-// quota, virus-scan wall) counts as failure. Returns { bytes, filename } (filename from
-// Content-Disposition, for files whose name isn't known).
+// Up to 3 tries. A web page in place of the file (not shared, quota, virus-scan wall) counts as failure.
+// Returns { bytes, filename } (filename from Content-Disposition).
 export async function downloadFile(url, dest, headers = {}) {
   mkdirSync(dirname(dest), { recursive: true });
   let last;
@@ -133,14 +119,12 @@ export async function downloadFile(url, dest, headers = {}) {
   }
   throw last;
 }
-// A Drive file: with a token via the API; without, via the public link.
 export const downloadDriveFile = (fileId, dest, token) => downloadFile(
   token ? `${API}/files/${fileId}?alt=media&supportsAllDrives=true` : `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`,
   dest, token ? auth(token) : {});
 
-// Upload a local file into `parent`: replaces the content of a same-named file there, else creates
-// it. Drive keeps the mime we send, so it comes from the extension (videos must not land as
-// image/png). Returns { id, name, updated }.
+// Replaces a same-named file in `parent`, else creates it. Drive keeps the mime we send, so it comes
+// from the extension. Returns { id, name, updated }.
 export async function uploadFile(parent, path, token) {
   const name = basename(path);
   const buf = readFileSync(path);
@@ -157,14 +141,12 @@ export async function uploadFile(parent, path, token) {
   return { ...created, updated: false };
 }
 
-// The brand's tracked Drive folders (inputs/media/_catalog/drive-sources.json, synced with the
-// catalog): { <folderId>: { folderId, sourceType, sourceName, lastCheckedAt,
+// _catalog/drive-sources.json: { <folderId>: { folderId, sourceType, sourceName, lastCheckedAt,
 //   files: { <driveFileId>: { name, modifiedTime, size, ingestedAt, catalogId } } } }.
-// A file listed there is never downloaded again unless the API reports a newer modifiedTime.
+// A listed file is downloaded again only when Drive reports a newer modifiedTime.
 export const readDriveSources = (paths) => (existsSync(paths.driveSources) ? JSON.parse(readFileSync(paths.driveSources, 'utf8')) : {});
 export const writeDriveSources = (paths, data) => { mkdirSync(paths.catalog, { recursive: true }); writeFileSync(paths.driveSources, JSON.stringify(data, null, 2) + '\n'); };
 
-// The first child named exactly `name` (optionally folders only), or undefined.
 export async function findChild(parent, name, token, { foldersOnly = false } = {}) {
   const q = `'${parent}' in parents and name='${name.replace(/'/g, "\\'")}' and trashed=false` + (foldersOnly ? ` and mimeType='${FOLDER_MIME}'` : '');
   return ((await driveGet(`${API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&${ALL_DRIVES}`, token)).files || [])[0];
@@ -179,33 +161,43 @@ export async function createFolder(parent, name, token) {
   return created;
 }
 
-// The brand folders under the workspace folder: every one, the contains-matches, and the resolved
-// match (exact name, else the single contains-match, else null).
-export async function brandFolders(parent, brand, token) {
+// The brand folder matches spec.brand by exact name, else by a single case-insensitive contains-match
+// ("Acme" → "Acme Ads"); `exact` (a name pinned in inputs/uploads.json) allows only the exact name.
+export async function brandFolders(parent, brand, token, { exact = false } = {}) {
   const all = await listChildren(parent, token, { foldersOnly: true });
   const contains = all.filter((f) => f.name.toLowerCase().includes(brand.toLowerCase()));
-  return { all, contains, match: all.find((f) => f.name === brand) || (contains.length === 1 ? contains[0] : null) };
+  return { all, contains, match: all.find((f) => f.name === brand) || (!exact && contains.length === 1 ? contains[0] : null) };
 }
 
-// Resolve <workspace folder> / <brand> / <group>. Missing folders exit with what exists, or are
-// created when `create` is set. `hint` is appended to the not-found errors (e.g. how to --create).
-// Returns { brandFolder, groupFolder }.
-export async function resolveGroupFolder({ parent, brand, group, token, create = false, hint = '' }) {
-  const { all, contains, match } = await brandFolders(parent, brand, token);
+// A spec under workspaces/<WS>/<Brand>/: the spec, its workspace's Drive token and parent folder, and the
+// brand folder to look for (inputs/uploads.json drive.folder, else spec.brand).
+export async function driveForSpec(specPath) {
+  const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+  const workspace = inferWorkspace(specPath).toUpperCase();
+  if (!workspace) die('Run on a spec under workspaces/<Workspace>/<Brand>/... so the workspace can be inferred.');
+  const pinned = readUploads(specPath).drive?.folder;
+  const { token, folder: parent } = await driveToken(workspace, { needFolder: true });
+  return { spec, workspace, token, parent, brand: pinned || spec.brand, exact: !!pinned };
+}
+
+// Missing folders exit listing what exists, or are created when `create` is set; with `plan` as well,
+// they come back as { name, id: null } instead.
+export async function resolveGroupFolder({ parent, brand, exact = false, group, token, create = false, plan = false, hint = '' }) {
+  const { all, contains, match } = await brandFolders(parent, brand, token, { exact });
   let brandFolder = match;
   if (brandFolder && brandFolder.name !== brand) console.log(`using existing brand folder "${brandFolder.name}" (matched "${brand}")`);
   if (!brandFolder) {
-    if (contains.length > 1) die(`Multiple brand folders contain "${brand}": ${contains.map((f) => `"${f.name}"`).join(', ')}. Set spec.brand to the exact folder name you want.`);
-    if (!create) die(`No brand folder under the parent contains "${brand}". Existing: ${all.map((f) => `"${f.name}"`).join(', ') || '(none)'}.${hint ? ' ' + hint : ''}`);
-    brandFolder = await createFolder(parent, brand, token);
+    if (contains.length > 1 && !exact) die(`Multiple brand folders contain "${brand}": ${contains.map((f) => `"${f.name}"`).join(', ')}. Pin the right one in the brand's inputs/uploads.json ({ "drive": { "folder": "<name>" } }).`);
+    if (!create) die(`No brand folder under the parent ${exact ? `is named "${brand}" (pinned in inputs/uploads.json)` : `contains "${brand}"`}. Existing: ${all.map((f) => `"${f.name}"`).join(', ') || '(none)'}.${hint ? ' ' + hint : ''}`);
+    brandFolder = plan ? { name: brand, id: null } : await createFolder(parent, brand, token);
   }
-  let groupFolder = await findChild(brandFolder.id, group, token, { foldersOnly: true });
+  let groupFolder = brandFolder.id && await findChild(brandFolder.id, group, token, { foldersOnly: true });
   if (!groupFolder) {
     if (!create) {
       const kids = await listChildren(brandFolder.id, token, { foldersOnly: true });
       die(`Group folder "${group}" not found in brand "${brandFolder.name}". Existing groups: ${kids.map((f) => `"${f.name}"`).join(', ') || '(none)'}.${hint ? ' ' + hint : ''}`);
     }
-    groupFolder = await createFolder(brandFolder.id, group, token);
+    groupFolder = plan ? { name: group, id: null } : await createFolder(brandFolder.id, group, token);
   }
   return { brandFolder, groupFolder };
 }

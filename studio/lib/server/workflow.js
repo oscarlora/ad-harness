@@ -1,13 +1,11 @@
-// Workflow data layer: where each ad (one folder in outputs/, named by the write-prompt filename
-// convention) stands in its format's workflow, inferred from the files on disk plus its record
-// (outputs/json/<id>.json) when there is one. Step lists follow the workflow skills; animation
-// (make-ai-animation) also gets its storyboard.md parsed into shots matched to frames and clips.
-// All paths returned to the client are brand-relative (POSIX), for the /file route.
+// Workflow data: each ad's progress through its format's steps, inferred from its outputs/ folder and record.
+// Returned paths are brand-relative (POSIX), for the /file route.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isSeparator, tableCells } from '../../components/workflow/Markdown.js';
 import { adFolders, displayText } from './ads.js';
 import { readJson } from './brands.js';
+import { editInfo } from './edit.js';
 
 const IMG = /\.(png|jpe?g|webp|gif|avif)$/i;
 const VID = /\.(mp4|mov|m4v|webm)$/i;
@@ -60,9 +58,8 @@ function present(files, all) {
   return list.filter((f) => !prompts.has(f.name));
 }
 
-// ---- storyboard.md (make-ai-animation step 4) ----
-// A header, an optional **Blocking** section, then one markdown table: # | Setting | On screen |
-// What we see | Line(s) | s (and optional Start | End in seconds, What moves, What we hear, Camera, Transition), with bold scene-divider rows ("| **Scene 1 — The open** |||||").
+// ---- storyboard.md ----
+// A header, an optional **Blocking** section, then one table (columns in COLS) with bold scene-divider rows ("| **Scene 1** |||||").
 const COLS = { '#': 'n', setting: 'setting', 'on screen': 'onScreen', 'what we see': 'see', 'line(s)': 'lines', lines: 'lines', line: 'lines', s: 'secs', sec: 'secs', seconds: 'secs', start: 'from', end: 'to', 'what moves': 'moves', 'what we hear': 'hear', transition: 'transition', camera: 'camera' };
 
 // "ALEX: Stop. / SAM: I swear." → [{ who, text }]; "—" → [].
@@ -91,7 +88,7 @@ function parseStoryboard(md) {
     let scene = '';
     for (const l of lines.slice(start + 1, end)) {
       const c = tableCells(l);
-      if (isSeparator(c)) continue; // separator / empty row
+      if (isSeparator(c)) continue;
       if (/^\*\*/.test(c[0]) && c.slice(1).every((x) => !x)) { scene = c[0].replace(/\*\*/g, '').trim(); continue; }
       const r = {};
       keys.forEach((k, i) => { if (k) r[k] = c[i] || ''; });
@@ -102,9 +99,7 @@ function parseStoryboard(md) {
   return { header, blocking, rows };
 }
 
-// A generated file's sidecar (<stem>.gen.json, written by generate-image / generate-video): what
-// was sent — model, provider, params, prompt — with each ref resolved to a servable brand file
-// ({ p, v, type }) when it is one. null when there is none.
+// A generated file's <stem>.gen.json sidecar (model, provider, params, prompt, refs), or null.
 function readGen(brandDirAbs, byRel, f) {
   const side = byRel.get(f.rel.replace(/\.[^./]+$/, '.gen.json'));
   const g = side && readJson(join(brandDirAbs, side.p), null);
@@ -117,10 +112,8 @@ function readGen(brandDirAbs, byRel, f) {
   return { model: g.model, provider: g.provider, at: g.at, params: g.params || {}, refs, prompt: g.prompt || '' };
 }
 
-// Shots matched to frames/frame-NN.* (else its 4:5 draft frame-NN-4x5.*, made before the 9:16 extension;
-// make-ai-slides) and clips/clip-NN[-<model>].* or chunk-NN[-<model>].* (several model takes per shot),
-// each with its sidecar (`gen`). A clip whose sidecar sent frames/frame-NN.* as refs covers each of
-// those shots (one clip per chunk of shots); without one, it belongs to shot NN.
+// Shots matched to frames/frame-NN.* (else the 4:5 draft frame-NN-4x5.*) and clips/{clip,chunk}-NN[-<model>].*.
+// A clip whose sidecar sent frame refs covers each of those shots; otherwise it belongs to shot NN.
 const FRAME = /^frames\/frame-0*(\d+)\.(png|jpe?g|webp)$/i;
 const FRAME_4X5 = /^frames\/frame-0*(\d+)-4x5\.(png|jpe?g|webp)$/i;
 function shotsWithMedia(brandDirAbs, folder, sb, files) {
@@ -161,8 +154,7 @@ const under = (dir, ...types) => (f) => f.rel.startsWith(`${dir}/`) && (!types.l
 const any = (...preds) => (f) => preds.some((p) => p(f));
 const count = (files) => { const n = files.filter((f) => ['image', 'video', 'audio'].includes(f.type)).length; return n > 1 ? String(n) : ''; };
 
-// Generic families: each step lists the files that evidence it (and optionally record fields).
-// An optional step is shown only when something for it exists.
+// Each step lists the files that evidence it (and optionally record fields); optional steps show only when they have files.
 const FAMILIES = {
   image: [ // make-image-ad
     { key: 'copy', label: 'Copy', fields: (rec) => Object.entries(rec?.copy || {}).map(([k, v]) => [k, displayText(v)]) },
@@ -179,7 +171,7 @@ const FAMILIES = {
     { key: 'clips', label: 'Clips', files: under('clips', 'video') },
     { key: 'edit', label: 'Edit', files: ROOT_VIDEO },
   ],
-  voice: [ // voiceover / audio-story ads (generate-voiceover)
+  voice: [ // voiceover / audio-story ads (generate-voice)
     { key: 'script', label: 'Script', files: any(ROOT_MD, under('voice', 'txt')) },
     { key: 'voice', label: 'Voice', files: under('voice', 'audio') },
     { key: 'broll', label: 'B-roll', optional: true, files: under('broll', 'image', 'video') },
@@ -268,13 +260,22 @@ function adWorkflow(brandDirAbs, folder) {
   const { steps, storyboard = null } = family === 'animation'
     ? animationSteps(brandDirAbs, folder, files)
     : { steps: genericSteps(family, files, rec) };
-  return { ...head, status: rec?.status || '', steps: withStates(steps), storyboard };
+  // An edit document turns the last video step into the editor.
+  const edit = family === 'image' ? null : editInfo(brandDirAbs, folder);
+  if (edit) {
+    const last = steps[steps.length - 1];
+    const open = edit.notes.filter((n) => n.status === 'open' || n.status === 'seen').length;
+    const review = edit.notes.filter((n) => n.status === 'done').length;
+    const count = open ? `${open} note${open === 1 ? '' : 's'}` : review ? `${review} to review` : last.count;
+    Object.assign(last, { done: true, count, panel: { editor: true } });
+  }
+  return { ...head, status: rec?.status || '', steps: withStates(steps), storyboard, edit };
 }
 
 // The ad list: newest (highest id) first, each with its current step.
 export function workflowList(brandDirAbs) {
   const ads = adFolders(join(brandDirAbs, 'outputs')).map((folder) => {
-    const { steps, storyboard, ...head } = adWorkflow(brandDirAbs, folder);
+    const { steps, storyboard, edit, ...head } = adWorkflow(brandDirAbs, folder);
     const cur = steps.find((s) => s.state === 'current');
     return { ...head, step: cur ? { label: cur.label, count: cur.count } : null, states: steps.map((s) => s.state) };
   });

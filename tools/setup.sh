@@ -1,9 +1,6 @@
 #!/bin/bash
-# setup.sh — Ad Harness machine setup. Idempotent: run it on a fresh machine, or any time
-# something seems off. Installs Node LTS into ~/.local/node, and the GitHub CLI and ffmpeg 8 into
-# ~/.local/bin when missing (no admin password or Homebrew needed), installs npm deps, points git at
-# the repo's hooks (.githooks: the never-commit-client-data check), then prints a plain-language
-# health check.
+# setup.sh — machine setup, idempotent, no admin password or Homebrew. Installs Node and ffmpeg 8
+# under ~/.local when missing, npm deps and the git hooks, then prints a health check.
 #
 # Usage: bash tools/setup.sh
 set -u
@@ -52,8 +49,8 @@ if [ "$NEED_NODE" = 1 ]; then
   ok "Installed Node $(node -v)$NOTE"
 fi
 
-# ── npm deps (the Vercel AI Gateway: media library + third generation provider after Segmind, kie) ──
-if [ -d node_modules ]; then
+# ── npm deps (Vercel AI Gateway, the video export) — again whenever package.json changed ──
+if [ -d node_modules ] && [ node_modules/.package-lock.json -nt package.json ]; then
   ok "npm deps present"
 else
   npm install --no-fund --no-audit >/dev/null 2>&1 \
@@ -61,43 +58,29 @@ else
     || warn "npm install failed — the media library and the Vercel AI Gateway provider won't work until it succeeds"
 fi
 
-# ── git hooks (only inside the repo; repeating it is harmless) ───────────────
+# ── git hooks ────────────────────────────────────────────────────────────────
 if [ -d .githooks ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   git config core.hooksPath .githooks && ok "git hooks on (blocks commits that mention a client workspace or brand)"
 fi
 
-# ── studio app deps (only when the app exists) ──────────────────────────────
-if [ -f studio/package.json ] && [ ! -d studio/node_modules ]; then
+# ── studio app deps ──────────────────────────────────────────────────────────
+if [ -f studio/package.json ] && ! [ studio/node_modules/.package-lock.json -nt studio/package.json ]; then
   npm install --prefix studio --no-fund --no-audit >/dev/null 2>&1 \
     && ok "studio app deps installed" \
     || warn "npm install for studio failed — the studio app won't run until it succeeds"
 fi
 
-# ── GitHub CLI (optional; installs to ~/.local/bin when missing — no Homebrew needed) ──
-if ! command -v gh >/dev/null 2>&1; then
-  echo "  Installing the GitHub CLI to ~/.local/bin (no admin password needed)…"
-  GH_ARCH=$(uname -m); [ "$GH_ARCH" = "x86_64" ] && GH_ARCH=amd64
-  GHV=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest 2>/dev/null \
-    | grep -oE '"tag_name": *"v[0-9.]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-  GH_TMP=$(mktemp -d)
-  if [ -n "${GHV:-}" ] \
-    && curl -fL --progress-bar "https://github.com/cli/cli/releases/download/v${GHV}/gh_${GHV}_macOS_${GH_ARCH}.zip" -o "$GH_TMP/gh.zip" \
-    && unzip -q "$GH_TMP/gh.zip" -d "$GH_TMP" \
-    && mkdir -p "$HOME/.local/bin" \
-    && mv "$GH_TMP/gh_${GHV}_macOS_${GH_ARCH}/bin/gh" "$HOME/.local/bin/gh" \
-    && chmod +x "$HOME/.local/bin/gh"; then
-    ensure_path_line
-    ok "Installed GitHub CLI v$GHV to ~/.local/bin"
-  else
-    warn "GitHub CLI install didn't finish — it's optional; you can install it later from https://cli.github.com"
-  fi
-  rm -rf "$GH_TMP"
+# ── video export browser: an installed Chrome or Edge, else Playwright's Chromium ──
+if node -e "import('playwright-core').then(async({chromium})=>{for(const channel of['chrome','msedge','chromium'])try{await(await chromium.launch({channel})).close();process.exit(0)}catch{}process.exit(1)})" >/dev/null 2>&1; then
+  ok "video export browser present"
+else
+  npx --no-install playwright-core install --no-shell chromium >/dev/null 2>&1 \
+    && ok "Chromium installed for video export" \
+    || warn "Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium"
 fi
 
-# ── ffmpeg 8+ (static builds into ~/.local/bin when missing or old — no Homebrew needed) ──
-# Media tools (cataloging, video edit, captions) need ffmpeg + ffprobe 8+. macOS builds
-# come from ffmpeg.martin-riedl.de (one of the providers ffmpeg.org links to; native arm64 +
-# amd64). Linux machines skip this and get the health-check hint below instead.
+# ── ffmpeg 8+ (macOS static builds from ffmpeg.martin-riedl.de, linked by ffmpeg.org) ──
+# Linux skips this and gets the health-check hint instead.
 FF_MAJ=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE 'version [nN]?[0-9]+' | grep -oE '[0-9]+' | head -1)
 if [ "$(uname)" = "Darwin" ] && [ "${FF_MAJ:-0}" -lt 8 ]; then
   echo "  Installing ffmpeg 8 + ffprobe to ~/.local/bin (no admin password needed)…"
@@ -140,18 +123,7 @@ echo "Health check"
 if [ -f .env ]; then
   ok ".env present"
 else
-  bad ".env missing — create a file named .env here and paste your block from the team vault"
-fi
-# The GitHub CLI is optional — updates work without it; it's only needed to propose harness changes (PRs).
-if command -v gh >/dev/null 2>&1; then
-  if gh auth status >/dev/null 2>&1; then
-    ok "GitHub CLI signed in"
-  else
-    warn "GitHub CLI not signed in — optional, only needed to propose harness changes (PRs)"
-    printf "    signing in is a human step — run gh auth login yourself in Terminal (it needs a real keyboard; agents can't drive it)\n"
-  fi
-else
-  warn "GitHub CLI missing — optional, only needed to propose harness changes (PRs): https://cli.github.com"
+  bad ".env missing — copy .env.example to .env and add your keys"
 fi
 FF_V=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
 if [ -z "$FF_V" ]; then
@@ -162,13 +134,13 @@ else
   warn "ffmpeg $FF_V is older than 8 — video tools may misbehave; on macOS re-run this setup, on Linux update it with your package manager"
 fi
 command -v yt-dlp  >/dev/null 2>&1 && ok "yt-dlp present"  || warn "yt-dlp missing (optional — URL/social pulls): brew install yt-dlp, or drop a static build into ~/.local/bin (media tools already look there)"
-# Python + Pillow (brand type sheets: make-type-sheet.py; song/animation captions: song-edit.py).
+# Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
 if PYV=$(python3 --version 2>&1) && [[ "$PYV" == "Python 3"* ]]; then
   ok "$PYV present"
   python3 -c 'import PIL' >/dev/null 2>&1 && ok "Pillow present" \
-    || warn "Pillow missing (needed for type sheets and song-edit.py): python3 -m pip install --user pillow"
+    || warn "Pillow missing (needed for pull-fonts.py): python3 -m pip install --user pillow"
 else
-  warn "Python 3 missing (needed for type sheets and song-edit.py): install it from https://www.python.org, then: python3 -m pip install --user pillow"
+  warn "Python 3 missing (needed for pull-fonts.py and edit-song.py): install it from https://www.python.org, then: python3 -m pip install --user pillow"
 fi
 
 echo "Done."

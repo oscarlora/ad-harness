@@ -1,28 +1,28 @@
-// sync-to-notion.mjs — sync ONE local ad/idea to a brand's Notion Ads Board.
-// Declarative upsert (matched by Name). Auto-sequences the board ID for new pages.
+// upload-to-notion.mjs — upsert ONE ad/idea (matched by Name) on a brand's Notion Ads Board; new pages
+// get the next board ID.
 //
 // Usage:
-//   node tools/sync-to-notion.mjs <spec.json>             PLAN (dry-run): resolve board + map properties, write nothing
-//   node tools/sync-to-notion.mjs --confirm <spec.json>   execute the sync (only after the plan is confirmed)
-//   node tools/sync-to-notion.mjs --list <spec.json>      list boards whose title contains the brand, with their schema
-//   node tools/sync-to-notion.mjs next-id <Workspace> "<brand>"   print the next free board ID
+//   node tools/upload-to-notion.mjs [--list] [--confirm] <spec.json>
+//     --list     list boards whose title contains the brand, with their schema; writes nothing
+//     (plain)    plan: resolve the board and map properties; writes nothing
+//     --confirm  write (only after the plan is confirmed). Upserts by Name, so re-runs never duplicate
+//   node tools/upload-to-notion.mjs next-id <Workspace> "<brand>"   print the next free board ID
 //
-// No silent writes: a plain run prints the plan and stops. Boards are matched by *contains* on the
-// brand name (case-insensitive), and properties are mapped to each board's actual schema (names and
-// types vary per board) — so confirm the plan before adding --confirm. Map oddly-named properties with
-// spec.propertyMap, e.g. { "primaryText": "Body", "adCode": "Link" }.
-// The workspace selects the Notion token (<WORKSPACE>_NOTION_TOKEN in .env). Notion is per-workspace and optional.
-import { readFileSync } from 'node:fs';
+// Board = spec.board (title) or spec.boardId, else the brand's inputs/uploads.json notion.board /
+// notion.boardId, else a search on spec.brand. Properties map to each board's own schema; map odd
+// names with spec.propertyMap, e.g. { "primaryText": "Body", "adCode": "Link" }.
+import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { inferWorkspace, parseArgs } from './lib/catalog.mjs';
-import { notionClient, resolveBoard as findBoard, titleOf } from './lib/notion.mjs';
+import { inferWorkspace, parseArgs, findBrandDir, die } from './lib/catalog.mjs';
+import { notionClient, resolveBoard as findBoard, boardQuery, titleOf } from './lib/notion.mjs';
 
+const USAGE = 'Usage: node tools/upload-to-notion.mjs [--list] [--confirm] <spec.json>  |  next-id <Workspace> "<brand>"';
 const args = parseArgs(process.argv.slice(2), { flags: ['list', 'confirm'] });
 const LIST = !!args.list;
 const CONFIRM = !!args.confirm;
 const positional = args._;
 
-if (!positional.length) { console.error('Usage: node tools/sync-to-notion.mjs [--list|--confirm] <spec.json>  |  next-id <Workspace> "<brand>"'); process.exit(1); }
+if (!positional.length) { console.error(USAGE); process.exit(1); }
 const isNextId = positional[0] === 'next-id';
 const { headers: H, api } = notionClient(isNextId ? positional[1] : positional[0] && inferWorkspace(positional[0]));
 const rt = (s) => [{ type: 'text', text: { content: String(s) } }];
@@ -32,7 +32,7 @@ const getSchema = async (dbId) => (await api(`/databases/${dbId}`)).properties |
 const titlePropName = (schema) => Object.entries(schema).find(([, d]) => d.type === 'title')?.[0];
 const findByType = (schema, name, type) => Object.entries(schema).find(([n, d]) => n.toLowerCase() === name && (!type || d.type === type))?.[0];
 
-// logical fields → candidate board-property names (exact, case-insensitive) and how to read the value
+// logical fields → candidate board-property names (case-insensitive)
 const FIELDS = [
   { key: 'status',      aliases: ['status', 'stage'],                                               val: (s) => s.status },
   { key: 'media',       aliases: ['media', 'asset type', 'type'],                                   val: (s) => s.media },
@@ -44,7 +44,6 @@ const FIELDS = [
   { key: 'adCode',      aliases: ['ad link/code', 'ad link', 'ad code', 'link', 'url', 'code'],     val: (s) => s.adCode },
 ];
 
-// match a logical field to a real board property: spec.propertyMap override wins, else exact-ci alias
 function matchProp(schema, field, propertyMap) {
   const override = propertyMap?.[field.key];
   if (override) return schema[override] ? override : '__MISSING__:' + override;
@@ -52,7 +51,6 @@ function matchProp(schema, field, propertyMap) {
   for (const a of field.aliases) { const hit = names.find((n) => n.toLowerCase() === a); if (hit) return hit; }
   return null;
 }
-// build a Notion property value matching the board property's actual type
 function buildValue(type, value) {
   switch (type) {
     case 'title': return { title: rt(value) };
@@ -63,12 +61,11 @@ function buildValue(type, value) {
     case 'number': return { number: Number(value) };
     case 'url': return { url: String(value) };
     case 'date': return { date: { start: String(value) } };
-    default: return null; // unsupported type (people, relation, etc.) — skip with a note
+    default: return null; // people, relation, etc.: skipped with a note
   }
 }
 const preview = (v) => { const s = Array.isArray(v) ? v.join(', ') : String(v); return s.length > 60 ? s.slice(0, 57) + '…' : s; };
 
-// every ID number already used on the board (paginated), reading the resolved ID property
 async function usedIds(dbId, idProp) {
   const used = new Set();
   let cursor;
@@ -83,10 +80,11 @@ const maxOf = (set) => (set.size ? Math.max(...set) : 0);
 
 // --- next-id mode ---
 if (isNextId) {
-  const name = positional.slice(2).join(' ');
-  if (!name) { console.error('Usage: node tools/sync-to-notion.mjs next-id <Workspace> "<brand>"'); process.exit(1); }
-  const b = await resolveBoard({ brand: name });
-  if (!b.id) { console.error(`Could not uniquely match a board for "${name}". Candidates: ${b.candidates.map(titleOf).join(', ') || '(none)'}`); process.exit(1); }
+  const [, workspace, ...rest] = positional;
+  const name = rest.join(' ');
+  if (!name) { console.error('Usage: node tools/upload-to-notion.mjs next-id <Workspace> "<brand>"'); process.exit(1); }
+  const b = await resolveBoard(boardQuery({ brand: name }, findBrandDir(workspace, name)));
+  if (!b.id) die(`Could not uniquely match a board for "${name}". Candidates: ${b.candidates.map(titleOf).join(', ') || '(none)'}. Pin it in inputs/uploads.json (run --list on a spec).`);
   const schema = await getSchema(b.id);
   const idProp = findByType(schema, 'id', 'number') || 'ID';
   console.log(maxOf(await usedIds(b.id, idProp)) + 1);
@@ -94,13 +92,13 @@ if (isNextId) {
 }
 
 const specPath = positional[0];
-if (!specPath) { console.error('Usage: node tools/sync-to-notion.mjs [--list|--confirm] <spec.json>'); process.exit(1); }
 const spec = JSON.parse(readFileSync(specPath, 'utf8'));
-const board = await resolveBoard(spec);
+const query = boardQuery(spec, specPath);
+const board = await resolveBoard(query);
 
-// --- list mode: show candidate boards + their schema, write nothing ---
+// --- list mode ---
 if (LIST) {
-  console.log(`brand query "${spec.board || spec.brand}" — boards whose title contains it:\n`);
+  console.log(`board query "${query.boardId || query.board || query.brand}" — matching boards:\n`);
   if (!board.candidates.length) { console.log('  (none)'); process.exit(0); }
   for (const d of board.candidates) {
     const mark = d.id === board.id ? '* ' : '  ';
@@ -108,22 +106,25 @@ if (LIST) {
     const schema = d.properties || (await api(`/databases/${d.id}`)).properties || {};
     for (const [n, def] of Object.entries(schema)) console.log(`      - ${n} (${def.type})`);
   }
-  if (board.id) console.log(`\n* = the one a sync would resolve to.`);
-  else console.log(`\nNo single board resolved — set "board" or "boardId" in the spec.`);
+  console.log(board.id
+    ? `\n* = where uploads go. Pin it in inputs/uploads.json: { "notion": { "board": "${board.title}" } }`
+    : `\nNo single board matched. Pin one in inputs/uploads.json: { "notion": { "board": "<title above>" } }`);
   process.exit(0);
 }
 
-// --- build the plan (used by both plan and confirm) ---
+// --- plan (also used by confirm) ---
 if (!board.id) {
-  console.error(`Could not uniquely match a board for "${spec.board || spec.brand}".`);
+  console.error(`Could not uniquely match a board for "${query.board || query.brand}".`);
   console.error(`Candidates: ${board.candidates.map(titleOf).join(', ') || '(none)'}`);
-  console.error('Set "board" (full title) or "boardId" in the spec, or run --list to inspect.');
+  console.error('Pin it in inputs/uploads.json (run --list to inspect).');
   process.exit(1);
 }
 const schema = await getSchema(board.id);
 const titleProp = titlePropName(schema);
 const idProp = findByType(schema, 'id', 'number');
 const pmap = spec.propertyMap || {};
+const missing = (spec.images || []).filter((f) => !existsSync(f));
+if (missing.length) die(`Missing local file(s): ${missing.join(', ')}`);
 
 const planned = [];  // { prop, type, key, value }
 const skipped = [];  // { key, value, reason }
@@ -148,18 +149,18 @@ function printPlan() {
   for (const p of planned) console.log(`  ${p.prop} (${p.type})  ← ${p.key} = ${preview(p.value)}`);
   if (idProp) console.log(`  ${idProp} (number)  ← id = ${spec.id === 'auto' || spec.id == null ? 'auto (next in sequence)' : spec.id}`);
   else if (spec.id != null) skipped.push({ key: 'id', value: spec.id, reason: 'no ID number property on board' });
-  if (skipped.length) { console.log(`\nSKIPPED (not synced):`); for (const s of skipped) console.log(`  ${s.key} = ${preview(s.value)}  — ${s.reason}`); }
+  if (skipped.length) { console.log(`\nSKIPPED (not written):`); for (const s of skipped) console.log(`  ${s.key} = ${preview(s.value)}  — ${s.reason}`); }
   console.log(`\nBODY: ${(spec.images || []).length} image block(s): ${(spec.images || []).map((i) => basename(i)).join(', ') || '(none)'}`);
 }
 
 if (!CONFIRM) {
   printPlan();
-  console.log(`\nPLAN ONLY — nothing written. Re-run with --confirm to sync.`);
+  console.log(`\nPLAN ONLY — nothing written. Re-run with --confirm to write.`);
   process.exit(0);
 }
 
-// --- confirm mode: execute the sync ---
-console.log('Syncing per plan:');
+// --- confirm mode ---
+console.log('Writing per plan:');
 printPlan();
 console.log('');
 
@@ -190,7 +191,7 @@ for (const p of planned) props[p.prop] = buildValue(p.type, p.value);
 const q = await api(`/databases/${board.id}/query`, 'POST', { filter: { property: titleProp, title: { equals: spec.name } }, page_size: 1 });
 const existing = (q.results || [])[0];
 
-// ID: keep existing on update; auto-sequence on create (refuse duplicates)
+// ID: kept on update; next free one on create
 if (idProp) {
   const used = await usedIds(board.id, idProp);
   if (existing) {

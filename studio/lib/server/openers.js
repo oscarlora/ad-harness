@@ -20,7 +20,6 @@ export function openPath(brandDirAbs, rel, mode) {
   if (process.platform === 'darwin') {
     launch('open', mode === 'reveal' ? ['-R', abs] : [abs]);
   } else if (process.platform === 'win32') {
-    // explorer opens files with their default association; /select, highlights in a folder window.
     launch('explorer', mode === 'reveal' ? [`/select,${abs}`] : [abs]);
   } else {
     launch('xdg-open', [mode === 'reveal' ? dirname(abs) : abs]);

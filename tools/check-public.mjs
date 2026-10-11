@@ -1,24 +1,14 @@
 #!/usr/bin/env node
-// check-public.mjs — the never-commit-client-data guard. The harness is public; client names stay
-// in workspaces/ (never committed) and in R2. This scans files about to be committed for any local
-// workspace or brand name and fails if it finds one.
-//
-// Terms come from this machine's own folders, so nothing private is written down here:
-//   - every workspace folder under workspaces/, and every brand folder inside each
-//     (skipping generic ones: Shared, Library, Personal, and anything starting with _ or . —
-//     a workspace starting with _ is skipped whole)
-//   - one extra term per line in any workspaces/<WS>/_harness/private-terms.txt (# comments ok),
-//     for names that aren't folders (people, products, domains)
-// Matching is whole-word and case-insensitive; "-", "_" and spaces inside a term match each other
-// ("Acme-Labs" also catches "acme labs" and "ACME_LABS"). File paths are checked too.
-// workspaces/ and node_modules/ are never scanned.
+// check-public.mjs — fail a commit that contains any local workspace or brand name (the repo is public).
+// Terms come from this machine's folders, so nothing private is written here: every workspace and
+// brand folder name (except Shared, Library, Personal and _/. names), plus one term per line in
+// workspaces/<WS>/_custom/private-terms.txt (# comments ok). Whole-word, case-insensitive; - _ and
+// space inside a term match each other. File paths are checked too.
 //
 // Usage:
-//   node tools/check-public.mjs          scan the staged files (what the pre-commit hook runs)
+//   node tools/check-public.mjs          scan the staged files (the pre-commit hook)
 //   node tools/check-public.mjs --all    scan every tracked file
-// Prints file:line and the term per hit; exits 1 on any hit, 0 when clean. The hook lives in
-// .githooks/pre-commit (setup.sh / setup.ps1 point git at it). For a true false positive, reword
-// it; `git commit --no-verify` skips the check.
+// Exits 1 on any hit. For a false positive, reword it; `git commit --no-verify` skips the check.
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -34,10 +24,10 @@ const isPrivateName = (n) => !n.startsWith('_') && !n.startsWith('.') && !GENERI
 export function collectTerms(root = WS_ROOT) {
   const terms = new Set();
   for (const ws of dirs(root)) {
-    if (ws.startsWith('_') || ws.startsWith('.')) continue; // scratch folders, not client workspaces
+    if (ws.startsWith('_') || ws.startsWith('.')) continue;
     if (isPrivateName(ws)) terms.add(ws);
     for (const brand of dirs(join(root, ws))) if (isPrivateName(brand)) terms.add(brand);
-    const extra = join(root, ws, '_harness', 'private-terms.txt');
+    const extra = join(root, ws, '_custom', 'private-terms.txt');
     if (existsSync(extra)) {
       for (const line of readFileSync(extra, 'utf8').split(/\r?\n/)) {
         const t = line.replace(/#.*/, '').trim();
@@ -48,7 +38,6 @@ export function collectTerms(root = WS_ROOT) {
   return [...terms];
 }
 
-// Whole word, case-insensitive; separators inside the term (- _ space) match any of the three.
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const termRegex = (term) => new RegExp(
   `(?<![\\p{L}\\p{N}])${term.trim().split(/[\s_-]+/).map(esc).join('[\\s_-]+')}(?![\\p{L}\\p{N}])`, 'iu');

@@ -1,797 +1,512 @@
 #!/usr/bin/env node
-// edit-video.mjs — render an edit-plan JSON into one finished video with a single ffmpeg pass
-// (one compiled filter_complex — no intermediate files). Zero npm deps. Node 22+.
-//
-// Usage:
-//   node tools/edit-video.mjs --plan <edit-plan.json> [--dry-run] [--timeout 1800]
-//
-// Plan schema (all relative paths resolve against the PLAN file's directory):
-//   {
-//     "output":   { "path": "out.mp4", "width": 720, "height": 1280, "fps": 30 },
-//     "timeline": [                       // ordered clips; each is normalized (scale+pad to the
-//       { "src": "clip.mp4",              // output canvas, fps-converted, audio -> 48k stereo)
-//         "trim": { "start": 0, "end": 3 },          // source seconds; default whole clip
-//         "speed": 0.5,                              // 0.25..4 playback rate — video setpts + pitch-
-//                                                    //  preserving atempo; the entry's length on the
-//                                                    //  final clock is recomputed (and reported), so
-//                                                    //  speeding dialogue shifts all downstream timing
-//         "smooth": true,                            // with speed: minterpolate synthetic frames for
-//                                                    //  fluid slow-mo (renders slowly)
-//         "zoom": { "from": 1, "to": 1.08,           // Ken Burns zoom, values >= 1
-//                   "anchor": "center"|"top"|{"x":0.5,"y":0.5},  // fixed crop point; shorthands =
-//                                                    //  {0.5,0.5}/{0.5,0} — {x,y} pins the ACTUAL
-//                                                    //  subject (e.g. an off-center face) so escalating
-//                                                    //  zoom levels don't visibly shift its position
-//                   "start": 0, "end": 3 },          // clip-local seconds (post-speed); default whole clip
-//         "transition": { "type": "fade"|"dipblack"|"wipeleft"|"wiperight"|"slideup",
-//                         "duration": 0.15 } },      // transition INTO the next entry (xfade +
-//                                                    //  acrossfade; ignored on the last entry)
-//       { "image": "still.png", "duration": 2.5,     // a still as a full-frame segment (silent
-//         "zoom": { "from": 1, "to": 1.06 } }        //  audio); Ken Burns crops from a 2x master
-//     ],                                  // entries join as hard cuts (concat) or transitions.
-//                                         // TRANSITIONS COMPRESS THE TIMELINE: each crossfade of
-//                                         //  duration D overlaps its two clips by D, shortening the
-//                                         //  total by D. Caption events, overlay windows and
-//                                         //  zoomEvents are authored on the hard-cut clock (the sum
-//                                         //  of the entry lengths) and auto-shift by the cumulative
-//                                         //  overlap; the stderr "timing" map shows the final clock.
-//                                         //  FRAME-EXACT AUTHORING TRAP: if you measure a cut frame
-//                                         //  from a rendered/final-clock reference (e.g. scrubbing the
-//                                         //  output), ADD BACK the shift for any timestamp at/after a
-//                                         //  junction before writing it — the tool subtracts it again,
-//                                         //  so a final-clock value pasted in as-is lands one
-//                                         //  transition-duration too early.
-//     "overlays": [                       // stills or b-roll video over the FINAL timeline, in array order
-//       { "image": "logo.png",
-//         "start": 1, "end": 3,           // final-timeline seconds
-//         "x": 0.5, "y": 0.3,             // overlay CENTER as fractions of the canvas (0..1)
-//         "scale": 0.4,                   // overlay width as a fraction of output width
-//                                         // (omit = natural pixel size)
-//         "zoom": { "from": 1, "to": 1.08,             // Ken Burns across [start,end]; crops from a
-//                   "anchor": "center"|"top"|{"x","y"} }, // 2x master so the still stays sharp;
-//                                                    //  {x,y} = fixed crop point, see timeline.zoom
-//         "slideIn":  { "from": "left"|"right"|"top"|"bottom", "duration": 0.3 },  // eased (cubic)
-//         "slideOut": { "to":   "left"|"right"|"top"|"bottom", "duration": 0.3 },  //  position moves;
-//         "fadeIn": 0.2, "fadeOut": 0.2 },// seconds, optional; combinable with the slides
-//       { "video": "broll.mp4",           // b-roll: its frames play during [start,end] while the
-//         "start": 4, "end": 6,           //  timeline's AUDIO keeps playing underneath
-//         "trim": { "start": 0, "end": 2 },  // overlay-source seconds; default from its start; a
-//                                         //  span shorter than end-start holds its last frame, a
-//                                         //  longer one is cut off at end
-//         "speed": 0.5,                   // 0.25..4 — slow-mo b-roll (pure setpts when muted);
-//                                         //  [start,end] stays fixed, so the source span consumed
-//                                         //  is (end-start)*speed; "smooth": true = minterpolate
-//         "x": 0.5, "y": 0.5,             // center fractions, same as image
-//         "scale": 1.0,                   // fraction of the output frame: scaled + padded to
-//                                         //  (scale*W)x(scale*H); 1.0 (default) = full-frame cutaway
-//         "mute": true,                   // default true — keep the dialogue; false mixes the
-//                                         //  b-roll's own audio over the dialogue track
-//         "slideIn": {...}, "slideOut": {...},         // same as image overlays
-//         "fadeIn": 0.2, "fadeOut": 0.2 }
-//     ],
-//     "zoomEvents": [                     // quick punch-ins on the base composite (whoever is on
-//       { "start": 3.2, "end": 4.1,       //  screen), final-timeline seconds — align starts to the
-//                                         //  claim words via the clips' transcripts
-//         "to": 1.08,                     // hold zoom, >= 1
-//         "anchor": "center"|"top"|{"x":0.56,"y":0.35},  // fixed crop point; default center; use
-//                                         //  the SAME {x,y} across a run of escalating events so
-//                                         //  each stage re-crops around the subject's real position
-//                                         //  (e.g. a face) instead of the canvas's geometric center
-//         "rampIn": 0.12, "rampOut": 0.12 } ],  // ramp to/from 1.0 inside [start,end]; 0 = instant
-//                                         //  cut (step, no ease) instead of a ramp; events must not
-//                                         //  overlap; applied after concat and before overlays, so
-//                                         //  captions stay crisp and unzoomed
-//     "captions": {                       // burned in via a generated .ass (libass)
-//       "style": { "font": "Helvetica Neue Bold",    // or "fontfile": "path.ttf"
-//                  "size": 64,                       // px at output height (default 5% of height)
-//                  "fill": "#FFFFFF", "stroke": "#000000", "strokeWidth": 3,
-//                  "position": "lower"|"center"|"upper",
-//                  "marginV": 448,                   // px from the anchored edge (default 35%H lower —
-//                                                    //  clear of feed/Reels UI — 12%H upper; center ignores it)
-//                  "maxLines": 2 },
-//       "events": [ { "start": 0.2, "end": 2.0, "text": "HOOK LINE" } ]
-//     },
-//     "music": { "src": "bed.mp3", "gain_db": -18,   // base music level
-//                "duck_db": -10,                     // duck under speech (sidechaincompress keyed
-//                                                    //  on the dialogue track; ~ -duck_db:1 ratio,
-//                                                    //  approximate depth; 0 = no ducking)
-//                "fadeIn": 0.5, "fadeOut": 1 },      // + amix, then loudnorm (-14 LUFS) on the master
-//     "finish": { "grain": 0.3,                      // 0..1 -> ffmpeg noise strength 0..20
-//                 "contrast": 1.05, "saturation": 1.1,   // eq filter; 1.0 = unchanged
-//                 "temperature": -10,                // -100..100, 0 = neutral; - cooler (bluer) / + warmer
-//                                                    //  (redder) via a midtone colorbalance push
-//                 "highlights": -10, "shadows": 8,   // -100..100 each, 0 = neutral; - pulls that band
-//                                                    //  down / + boosts it (highlights = brights,
-//                                                    //  shadows = darks)
-//                 "fade": 30 }                       // 0..100, 0 = off; higher = more matte / milky
-//                                                    //  lifted blacks. highlights+shadows+fade fold
-//                                                    //  into one curves filter (CapCut-style grade)
-//   }
-//
-// Filter order: clips (trim -> speed -> fps -> scale/pad -> zoom) -> junctions (concat, or xfade +
-// acrossfade where a transition is set) -> zoomEvents -> overlays (image + video, in array order)
-// -> finish -> captions. Captions render last so they stay crisp above grain/grade, punch-ins and
-// b-roll.
-//
-// Fonts: the chosen face is copied into a fonts-only dir next to the plan (<plan>.fonts/) and
-// passed to libass via fontsdir (libass loads every file in that dir, so it holds only fonts).
-// Default face: Helvetica Neue Bold from /System/Library/Fonts/HelveticaNeue.ttc (family name +
-// bold flag) on macOS; where that file doesn't exist (Windows, Linux), Inter Bold from Google Fonts. A Google Fonts name not on disk ("Montserrat ExtraBold", "Archivo Black") is
-// downloaded as a static TTF into the same dir (cached; legacy-UA trick, same as make-type-sheet.py).
-// The generated subtitle file lands at <plan>.ass.
-//
-// --dry-run prints the full ffmpeg command and the generated .ass to stderr and writes nothing.
-// Real runs: foreground render with progress on stderr, then the output is ffprobe'd and its
-// duration checked against the plan's expected total (warn on > 0.5s drift), then `Saved: <path>`.
-//
-// Encode: libx264 CRF 18, aac_at (AudioToolbox) when available else aac, +faststart, yuv420p.
+// edit-video.mjs — an ad's edit.json: check it, export it, grab stills, and build its captions, color match,
+// ducking and review comments. Export and stills run Studio's own engine (studio/engine) in a headless browser,
+// so they match Studio's preview frame for frame.
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, copyFileSync, readFileSync } from 'node:fs';
-import { join, dirname, resolve, basename, isAbsolute } from 'node:path';
-import { homedir } from 'node:os';
-import { die, ffprobeJson, findBin, have, parseArgs, run, typeOf } from './lib/catalog.mjs';
+import { createServer } from 'node:http';
+import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync, closeSync, watch } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
+import { brandDirFrom, die, ffprobeJson, mimeOf, parseArgs, run } from './lib/catalog.mjs';
 
-const HELP = `edit-video.mjs — edit-plan JSON -> one ffmpeg render
+const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
 
-Required:
-  --plan <path>       Edit plan JSON (relative paths inside it resolve against its directory)
+  check    <edit.json>                            summary + problems (missing files, black gaps)
+  place    <edit.json> --shots <shots.json> [--track Video] [--scene 0.25] [--max-rate 1] [--sfx <wav>]
+                                                  shots on their lines: shots.json = {"clips":[{"file",
+                                                  "starts":[timeline s of each shot], "end"}]}; finds each
+                                                  clip's cuts and fits every shot to its slot (slowed, or sped
+                                                  up to --max-rate and trimmed). --sfx also writes the
+                                                  shots' own sound, cut the same way, as one WAV
+  cut      <edit.json> --from s --to s            remove that stretch of time from every track: clips trimmed or
+                                                  split, everything after it (clips, captions, keyframes) moves up
+  reframe  <edit.json> --size 1080x1350 --out <edit-v2.json>   the edit in another frame size (positions and
+                                                  sizes scaled; media still fills the frame)
+  export   <edit.json> [--out <mp4>] [--scale 0.5] [--from s] [--to s] [--timeout 1800]
+                                                  H.264 + AAC; default out: the doc's "output", else
+                                                  final/<id>_V<n>_<rest of folder>.mp4 (n from edit-v<n>.json)
+  frames   <edit.json> --at 1,4.5,9 [--out <png>] [--scale 0.5]   a contact sheet of those moments
+  captions <edit.json> --words <transcript.json|timing.json> [--max 3] [--track Captions] [--from s] [--to s]
+                                                  word-timed caption lines into the track's captions clip
+                                                  (breaks at punctuation, pauses and a song's lyric lines)
+  match    <edit.json> [--track Video] [--ref <clip src>] [--strength 0.75]   per-clip color match
+                                                  (grade.match) toward the reference clip (default: the median look)
+  moves    <edit.json> [--from s] [--to s] [--track Video]   timeline times where the picture moves most
+                                                  (to place sound effects on actions)
+  duck     <edit.json> --track Music --words <transcript.json> [--speaker S1] [--db -10]
+                                                  volume keyframes: the track dips while they speak
+  comments <ad folder> [--wait] [--done <id> --reply "…" --span 12.4-15]   review notes left in Studio: open
+                                                  ones print as JSON with what was on screen and a contact sheet of
+                                                  their moments (marked spots outlined), and turn "seen"; --wait
+                                                  blocks until there is one; --done marks one done with the
+                                                  changed stretch, which Studio's review button plays
 
-Optional:
-  --dry-run           Print the ffmpeg command + generated .ass to stderr, write nothing
-  --timeout <sec>     Max render time (default 1800)
+Document (times are seconds on the timeline clock; any number marked * also takes keyframes
+[[t, value, easing?], …], easing: linear | in | out | ease (default) | back | bounce | elastic | hold):
+  { size: [1080, 1920], fps: 30, background, loudness: -14 (LUFS; null = untouched), fonts: { family: file },
+    fx: "fx.js" (the ad's own layers / transitions / animations, see studio/engine/draw.js), output,
+    tracks: [ { name, hidden, mute, volume* (dB), opacity*, grade,
+                transform: { scale*, x*, y*, rotate*, origin: [x, y] }, clips: [...] } ] }
+  The first track draws on top. Paths are relative to the document.
+  Every clip: type (else from src), at, end (or dur; media default to the source's end), name.
+    video  src, in (source s), rate, mute, volume* (dB), fit (cover | contain | fill), grade,
+           transition: { type, dur (0.4), dir, ease, color } into it from the clip before it on its track,
+           centered on the cut: cut | fade | dip | slide | push | wipe (dir left|right|up|down) | zoom | blur | flip
+    audio  src, in, rate, volume* (dB), fadeIn, fadeOut, loop
+    image  src, fit, grade
+    text   text ("line\\nwith {accent} words and {any color|#FF3B30}"), style
+    captions  lines: [{ text, at, end, words: [[word, start, end, color?], …] }], style,
+           active: { color, scale, ease, dur } (the spoken word), upcoming: { color, opacity } (0 = reveal word by word)
+    rect   color*, radius*
+    custom draw (a layer in fx), any params
+  Visual clips: x*, y* (center), w*, h* (box; media default the frame), scale*, rotate*, opacity*, blur*,
+    origin: [x, y] (scale/rotate pivot), radius*, enter / exit: type or { type, dur }:
+    fade | pop | bounce | zoom | blur | slide-up | slide-down | slide-left | slide-right
+  style: font (Google Fonts family or doc.fonts), size, weight, italic, color, accent, stroke, strokeWidth,
+    shadow { color, blur, x, y, opacity }, background { color, padX, padY, radius, opacity }, maxWidth,
+    lineHeight, letterSpacing, case (upper | lower)
+  grade: exposure* (stops), contrast*, saturation*, gamma* (1 = as shot), temperature*, tint* (-1..1),
+    vignette*, grain* (0..1), match ([gL, ga, gb, oL, oa, ob]: Lab × g + o, from \`match\`)`;
 
-Plan shape (see the header of this file for the full field-by-field doc):
-  output:   { path, width=720, height=1280, fps=30 }
-  timeline: [ { src, trim:{start,end}?, speed(0.25..4)?, smooth?,       speed = setpts + pitch-preserving
-                zoom:{from,to,anchor,start,end}?,                       atempo; a transition crossfades INTO
-                transition:{ type:"fade"|"dipblack"|"wipeleft"          the next entry and SHORTENS the total
-                             |"wiperight"|"slideup",                    by its duration — downstream times
-                             duration=0.15 }? }                         auto-shift (stderr "timing" map)
-              | { image, duration, zoom? } ]                            an image entry = Ken Burns still segment
-  overlays: [ { image, start, end, x, y, scale,                         x/y = center fractions; zoom = Ken
-                zoom:{from,to,anchor}?, slideIn:{from,duration=0.3}?,   Burns across [start,end]; slides are
-                slideOut:{to,duration=0.3}?, fadeIn?, fadeOut? }        eased (cubic) position moves
-              | { video, start, end, trim:{start,end}?, x, y,           b-roll: its frames play over the
-                  scale=1, speed?, smooth?, mute=true,                  timeline while the timeline's audio
-                  slideIn?, slideOut?, fadeIn?, fadeOut? } ]            keeps playing; speed<1 = slow-mo;
-                                                                        short trims hold their last frame
-  zoomEvents: [ { start, end, to=1.08, anchor,                         punch-ins on the base composite,
-                  rampIn=0.12, rampOut=0.12 } ]                         final clock, non-overlapping;
-                                                                        ramp 0 = instant cut, no ease
-  anchor (zoom/zoomEvents): "center"|"top"|{x,y} (frame fractions);    shorthands = {0.5,0.5}/{0.5,0};
-                            {x,y} pins the fixed crop point (e.g. an   {x,y} keeps escalating zoom
-                            off-center face) so it stays put on-screen levels from shifting the subject
-  captions: { style:{ font?|fontfile?, size, fill, stroke, strokeWidth,
-                      position:"lower"|"center"|"upper",
-                      marginV? (px; default 35%H lower / 12%H upper), maxLines? },
-              events:[ { start, end, text } ] }
-  music:    { src, gain_db=-18, duck_db=-10, fadeIn?, fadeOut? }
-  finish:   { grain=0..1, contrast?, saturation?,                     eq multipliers (1.0 = unchanged);
-              temperature=-100..100, highlights=-100..100,            temperature: - cooler / + warmer
-              shadows=-100..100, fade=0..100 }                        (colorbalance); highlights/shadows:
-                                                                       - down / + up; fade: milky lifted
-                                                                       blacks — all fold into curves (0=off)
+const args = parseArgs(process.argv.slice(2), { flags: ['wait'] });
+const [cmd, target] = args._;
+if (args.help || !cmd) { console.log(HELP); process.exit(args.help ? 0 : 1); }
 
-Compose order: clips (trim -> speed -> fps -> scale/pad -> zoom) -> junctions (concat / xfade +
-acrossfade) -> zoomEvents -> overlays -> finish -> captions. Music ducks under the dialogue track
-and the master is loudness-normalized. Output: libx264 CRF 18 + AAC, +faststart. Prints "Saved: <path>".`;
-
-const LEGACY_UA = 'Mozilla/5.0 (Windows NT 5.1)'; // no woff2 support -> Google serves static TTF
-
-const warn = (msg) => console.error('WARN: ' + msg);
-const r1 = (n) => Math.round(n * 10) / 10;
+const readDoc = (p) => {
+  if (!p || !existsSync(p)) die(`edit document not found: ${p || '(none given)'}`);
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch (e) { die(`${p}: ${e.message}`); }
+};
+const saveDoc = (p, doc) => writeFileSync(p, JSON.stringify(doc, null, 1) + '\n');
 const r2 = (n) => Math.round(n * 100) / 100;
-const nf = (n) => +n.toFixed(4); // trim float noise before embedding in a filtergraph
+const trackNamed = (doc, name) => (doc.tracks || []).find((tr) => tr.name === name) || die(`no track named "${name}" (tracks: ${(doc.tracks || []).map((t) => t.name).join(', ')})`);
 
-// speed -> pitch-preserving atempo stages (atempo takes 0.5..2 per stage; 0.25..4 needs at most two)
-const atempoChain = (speed) => {
-  const st = [];
-  let s = speed;
-  while (s > 2) { st.push(2); s /= 2; }
-  while (s < 0.5) { st.push(0.5); s *= 2; }
-  st.push(nf(s));
-  return st.map((v) => `atempo=${v}`);
-};
-
-// Quote a path for use inside a filtergraph option value ('...' disables everything except ').
-const fesc = (p) => "'" + String(p).replace(/'/g, "'\\''") + "'";
-
-// ---------- fonts ----------
-const SYS_FONT_DIRS = ['/System/Library/Fonts', '/System/Library/Fonts/Supplemental', '/Library/Fonts', join(homedir(), 'Library', 'Fonts')];
-const WEIGHT_WORDS = { thin: 100, hairline: 100, extralight: 200, ultralight: 200, light: 300, regular: 400, normal: 400, medium: 500, semibold: 600, demibold: 600, bold: 700, extrabold: 800, ultrabold: 800, heavy: 900, black: 900 };
-
-function findSystemFont(name) {
-  const variants = [...new Set([name, name.replace(/ /g, ''), name.replace(/ /g, '-')])];
-  for (const dir of SYS_FONT_DIRS) for (const v of variants) for (const ext of ['.ttc', '.ttf', '.otf'])
-    if (existsSync(join(dir, v + ext))) return join(dir, v + ext);
-  return null;
-}
-
-// Port of make-type-sheet.py _google_ttf: the legacy UA makes fonts.googleapis.com emit static
-// TTF urls. Tries the exact weight first, then the family default. Cached in destDir.
-async function googleTtf(family, weight, destDir, dry) {
-  const dest = join(destDir, family.toLowerCase().replace(/[^a-z0-9]+/g, '-') + `-${weight}.ttf`);
-  if (existsSync(dest)) return dest;
-  if (dry) { console.error(`fonts     would fetch Google font "${family}" (wght ${weight}) -> ${dest}`); return dest; }
-  const fam = encodeURIComponent(family).replace(/%20/g, '+');
-  for (const spec of [`${fam}:wght@${weight}`, fam]) {
-    let css;
-    try {
-      const res = await fetch(`https://fonts.googleapis.com/css2?family=${spec}`, { headers: { 'User-Agent': LEGACY_UA } });
-      if (!res.ok) continue;
-      css = await res.text();
-    } catch { continue; }
-    const m = css.match(/src:\s*url\((https:\/\/[^)]+\.ttf)\)/);
-    if (!m) continue;
-    const f = await fetch(m[1], { headers: { 'User-Agent': LEGACY_UA } });
-    if (!f.ok) continue;
-    writeFileSync(dest, Buffer.from(await f.arrayBuffer()));
-    return dest;
-  }
-  return null;
-}
-
-// Resolve captions.style to a concrete face: files to place in the fonts dir + the ASS
-// Fontname/Bold pair. Google downloads land directly in fontsDir (which must exist unless dry).
-async function resolveFont(style, fontsDir, rp, dry) {
-  const name = style.font && String(style.font).trim();
-  if (style.fontfile) {
-    const p = rp(style.fontfile);
-    if (!existsSync(p)) die(`captions.style.fontfile not found: ${p}`);
-    return { fontname: name || basename(p).replace(/\.[^.]+$/, ''), bold: false, copy: [p] };
-  }
-  if (!name) { // default: Helvetica Neue Bold (family file + bold flag) on macOS, else Inter Bold (Google Fonts)
-    const p = '/System/Library/Fonts/HelveticaNeue.ttc';
-    if (existsSync(p)) return { fontname: 'Helvetica Neue', bold: true, copy: [p] };
-    if (await googleTtf('Inter', 700, fontsDir, dry)) { console.error('fonts     default -> Inter Bold (Google Fonts; Helvetica Neue is macOS-only)'); return { fontname: 'Inter', bold: true, copy: [] }; }
-    die('no default caption font: Helvetica Neue is macOS-only and Inter could not be fetched from Google Fonts — set captions.style.font or fontfile');
-  }
-  let p = findSystemFont(name);
-  if (p) return { fontname: name, bold: false, copy: [p] };
-  // "<Family> <Weight>" naming a face inside a system family file (e.g. "Helvetica Neue Bold")
-  const parts = name.split(/\s+/);
-  const weight = parts.length > 1 ? WEIGHT_WORDS[parts[parts.length - 1].toLowerCase()] : undefined;
-  const base = weight ? parts.slice(0, -1).join(' ') : null;
-  if (base) {
-    p = findSystemFont(base);
-    if (p) return { fontname: base, bold: weight >= 700, copy: [p] };
-  }
-  // Google Fonts: the full name may itself be a family ("Archivo Black"); else base:wght@weight.
-  p = await googleTtf(name, 400, fontsDir, dry);
-  if (!p && base) p = await googleTtf(base, weight, fontsDir, dry);
-  if (p) { console.error(`fonts     ${name} -> ${basename(p)} (Google Fonts)`); return { fontname: name, bold: false, copy: [] }; }
-  die(`font "${name}" not found on disk or Google Fonts — pass captions.style.fontfile instead`);
-}
-
-// ---------- .ass generation ----------
-const assColor = (hex) => {
-  const h = String(hex || '#FFFFFF').replace('#', '');
-  const f = h.length === 3 ? [...h].map((c) => c + c).join('') : h.padEnd(6, '0').slice(0, 6);
-  return `&H00${f.slice(4, 6)}${f.slice(2, 4)}${f.slice(0, 2)}`.toUpperCase();
-};
-function assTime(t) {
-  const cs = Math.max(0, Math.round(t * 100));
-  const h = Math.floor(cs / 360000), m = Math.floor((cs % 360000) / 6000), s = Math.floor((cs % 6000) / 100);
-  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs % 100).padStart(2, '0')}`;
-}
-function wrapText(text, budget, maxLines) {
-  const words = text.split(/\s+/).filter(Boolean);
+// ---------- check ----------
+function check(p) {
+  const doc = readDoc(p), dir = dirname(p), problems = [];
   const lines = [];
-  let cur = '';
-  for (const w of words) {
-    if (cur && (cur + ' ' + w).length > budget && lines.length < maxLines - 1) { lines.push(cur); cur = w; }
-    else cur = cur ? cur + ' ' + w : w;
-  }
-  if (cur) lines.push(cur);
-  return lines;
-}
-function buildAss({ W, H, style, events, fontname, bold }) {
-  const size = Math.round(style.size ?? H * 0.05);
-  const pos = style.position ?? 'lower';
-  const align = pos === 'center' ? 5 : pos === 'upper' ? 8 : 2;
-  const mV = Math.round(style.marginV ?? (pos === 'center' ? 0 : pos === 'upper' ? H * 0.12 : H * 0.35));
-  const mL = Math.round(W * 0.06), mR = Math.round(W * 0.06);
-  const maxLines = style.maxLines ?? 2;
-  const budget = Math.max(6, Math.floor((W - mL - mR) / (size * 0.5)));
-  const out = [
-    '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${W}`, `PlayResY: ${H}`, 'WrapStyle: 0', 'ScaledBorderAndShadow: yes', '',
-    '[V4+ Styles]',
-    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Cap,${fontname},${size},${assColor(style.fill)},${assColor(style.fill)},${assColor(style.stroke ?? '#000000')},&H80000000,${bold ? -1 : 0},0,0,0,100,100,0,0,1,${style.strokeWidth ?? 3},0,${align},${mL},${mR},${mV},1`, '',
-    '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
-  ];
-  for (const [i, ev] of events.entries()) {
-    if (ev.start == null || ev.end == null || ev.end <= ev.start) die(`captions.events[${i}] needs start < end`);
-    const clean = String(ev.text ?? '').replace(/[{}]/g, '').replace(/\s*\r?\n\s*/g, ' ').trim();
-    if (!clean) die(`captions.events[${i}] has no text`);
-    const lines = wrapText(clean, budget, maxLines);
-    if (lines.some((l) => l.length > budget * 1.4)) warn(`captions.events[${i}] may overflow ${maxLines} line(s): "${clean.slice(0, 40)}..."`);
-    out.push(`Dialogue: 0,${assTime(ev.start)},${assTime(ev.end)},Cap,,0,0,0,,${lines.join('\\N')}`);
-  }
-  return out.join('\n') + '\n';
-}
-
-// ---------- main ----------
-const shq = (a) => (/^[\w@%+=:,.\/-]+$/.test(a) ? a : "'" + a.replace(/'/g, "'\\''") + "'");
-
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help || !args.plan) { console.log(HELP); process.exit(args.help ? 0 : 1); }
-  if (!have('ffmpeg') || !have('ffprobe')) die('ffmpeg/ffprobe not found — install ffmpeg (macOS: static build in ~/.local/bin · Windows: winget install Gyan.FFmpeg)');
-  const dry = !!args['dry-run'];
-  const timeout = parseInt(args.timeout || '1800', 10);
-
-  const planPath = resolve(String(args.plan));
-  if (!existsSync(planPath)) die(`plan not found: ${planPath}`);
-  let plan;
-  try { plan = JSON.parse(readFileSync(planPath, 'utf8')); } catch (e) { die(`could not parse plan JSON: ${e.message}`); }
-  const planDir = dirname(planPath);
-  const rp = (p) => (isAbsolute(p) ? p : resolve(planDir, p));
-
-  // ---- output
-  const o = plan.output || {};
-  if (!o.path) die('plan.output.path is required');
-  const outPath = rp(String(o.path));
-  const even = (n) => Math.max(2, 2 * Math.round(n / 2));
-  const W = even(o.width ?? 720), H = even(o.height ?? 1280), FPS = o.fps ?? 30;
-  if (W !== (o.width ?? 720) || H !== (o.height ?? 1280)) warn(`output size rounded to even: ${W}x${H}`);
-
-  // ---- timeline
-  const XFADE = { fade: 'fade', dipblack: 'fadeblack', wipeleft: 'wipeleft', wiperight: 'wiperight', slideup: 'slideup' };
-  if (!Array.isArray(plan.timeline) || !plan.timeline.length) die('plan.timeline needs at least one clip');
-  const parseSpeed = (v, where) => {
-    if (v == null) return 1;
-    const s = +v;
-    if (!(s >= 0.25 && s <= 4)) die(`${where}.speed must be within 0.25..4 (got ${v})`);
-    return s;
-  };
-  const parseTransition = (tr, i) => {
-    if (!tr) return null;
-    if (i === plan.timeline.length - 1) { warn(`timeline[${i}].transition ignored — the last entry has no next clip`); return null; }
-    if (!XFADE[tr.type]) die(`timeline[${i}].transition.type must be one of ${Object.keys(XFADE).join('|')}`);
-    const duration = +(tr.duration ?? 0.15);
-    if (!(duration > 0 && duration <= 2)) die(`timeline[${i}].transition.duration must be within 0..2 seconds`);
-    return { type: tr.type, xtype: XFADE[tr.type], duration };
-  };
-  // anchor: "center" | "top" (shorthands) or {x,y} fractions of frame — the fixed point zoompan
-  // crops toward. Shorthands map to {0.5,0.5} / {0.5,0} so old plans keep rendering identically.
-  const parseAnchor = (a, where) => {
-    if (a == null || a === 'center') return { x: 0.5, y: 0.5 };
-    if (a === 'top') return { x: 0.5, y: 0 };
-    if (typeof a === 'object' && typeof a.x === 'number' && typeof a.y === 'number') {
-      const x = Math.min(1, Math.max(0, a.x)), y = Math.min(1, Math.max(0, a.y));
-      if (x !== a.x || y !== a.y) warn(`${where}.anchor {x,y} clamped to 0..1`);
-      return { x, y };
-    }
-    die(`${where}.anchor must be "center", "top", or {x,y} fractions of frame`);
-  };
-  const parseZoom = (z, where, wholeEnd) => {
-    if (!z) return null;
-    if ((z.from ?? 1) < 1 || (z.to ?? 1) < 1) warn(`${where}.zoom values < 1 clamped to 1 (zoompan cannot zoom out)`);
-    return {
-      from: Math.max(1, z.from ?? 1), to: Math.max(1, z.to ?? 1.1),
-      start: z.start ?? 0, end: z.end ?? wholeEnd,
-      anchor: parseAnchor(z.anchor, `${where}.zoom`),
-    };
-  };
-  const clips = plan.timeline.map((c, i) => {
-    if (c.image) { // a still as a full-frame timeline segment (Ken Burns)
-      if (c.src) die(`timeline[${i}]: set src or image, not both`);
-      const src = rp(String(c.image));
-      if (!existsSync(src)) die(`timeline[${i}].image not found: ${src}`);
-      if (typeOf(src) !== 'image') die(`timeline[${i}].image is not an image: ${src}`);
-      const dur = +(c.duration ?? 0);
-      if (!(dur > 0)) die(`timeline[${i}].duration (seconds > 0) is required with image`);
-      return { kind: 'image', src, dur, hasAudio: false, zoom: parseZoom(c.zoom, `timeline[${i}]`, dur), transition: parseTransition(c.transition, i) };
-    }
-    if (!c.src) die(`timeline[${i}].src is required`);
-    const src = rp(String(c.src));
-    if (!existsSync(src)) die(`timeline[${i}].src not found: ${src}`);
-    const p = ffprobeJson(src);
-    if (!(p.streams || []).some((s) => s.codec_type === 'video')) die(`timeline[${i}].src has no video stream: ${src}`);
-    const hasAudio = (p.streams || []).some((s) => s.codec_type === 'audio');
-    const srcDur = p.format?.duration ? +p.format.duration : null;
-    const t = c.trim || {};
-    const s = t.start ?? 0;
-    let e = t.end ?? srcDur;
-    if (e == null) die(`timeline[${i}]: source duration unknown — set trim.end`);
-    if (srcDur != null && e > srcDur + 0.01) { warn(`timeline[${i}].trim.end ${e}s > source duration ${r1(srcDur)}s — clamped`); e = srcDur; }
-    if (e <= s) die(`timeline[${i}]: trim.end (${e}) must be > trim.start (${s})`);
-    const speed = parseSpeed(c.speed, `timeline[${i}]`);
-    const smooth = !!c.smooth && speed !== 1;
-    if (smooth) warn(`timeline[${i}].smooth: motion-interpolated frames render slowly`);
-    const dur = (e - s) / speed;
-    if (speed !== 1) console.error(`speed     timeline[${i}] ${speed}x: ${r2(e - s)}s of source -> ${r2(dur)}s on the clock`);
-    return { kind: 'video', src, start: s, end: e, dur, speed, smooth, hasAudio, zoom: parseZoom(c.zoom, `timeline[${i}]`, dur), transition: parseTransition(c.transition, i) };
-  });
-  const totalDur = clips.reduce((m, c) => m + c.dur, 0);
-
-  // ---- junction map: transitions overlap adjacent clips, compressing the timeline.
-  // Author times (captions, overlays, zoomEvents) live on the hard-cut clock; shiftSpan moves a
-  // [start,end] window onto the final clock by the cumulative overlap of the junctions before it.
-  const junctions = [];
-  {
-    let acc = 0;
+  let end = 0;
+  for (const tr of doc.tracks || []) {
+    const clips = [...(tr.clips || [])].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    lines.push(`${tr.name}${tr.mute ? ' (muted)' : ''}${tr.hidden ? ' (hidden)' : ''}: ${clips.length} clip(s)`);
     clips.forEach((c, i) => {
-      acc += c.dur;
-      if (!c.transition) return;
-      const d = c.transition.duration;
-      if (d >= c.dur || d >= clips[i + 1].dur)
-        die(`timeline[${i}].transition.duration ${d}s must be shorter than both entries it joins (${r1(c.dur)}s / ${r1(clips[i + 1].dur)}s)`);
-      if (i && clips[i - 1].transition && clips[i - 1].transition.duration + d > c.dur)
-        warn(`timeline[${i}]: incoming + outgoing transitions (${r2(clips[i - 1].transition.duration + d)}s) exceed the entry (${r2(c.dur)}s) — it never fully shows`);
-      junctions.push({ i, oldT: acc, d });
+      if (c.src && !existsSync(resolve(dir, c.src))) problems.push(`${tr.name}: missing ${c.src}`);
+      const stop = c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : null);
+      if (stop != null) end = Math.max(end, stop);
+      const next = clips[i + 1];
+      const video = (x) => x?.src && (x.type || 'video') === 'video' && !/\.(mp3|wav|m4a|aac|ogg|opus|flac|png|jpe?g|webp|gif|avif)$/i.test(x.src);
+      if (stop != null && video(c) && video(next) && next.at > stop + 0.001) problems.push(`${tr.name}: ${r2(next.at - stop)}s of black at ${r2(stop)}s`);
     });
   }
-  const totalShift = junctions.reduce((m, j) => m + j.d, 0);
-  const finalDur = totalDur - totalShift;
-  const shiftAt = (t) => junctions.reduce((m, j) => m + (t >= j.oldT - 1e-6 ? j.d : 0), 0);
-  const shiftLog = [];
-  const shiftSpan = (start, end, label) => {
-    const d = shiftAt(start);
-    if (!d) return [start, end];
-    const ns = nf(start - d), ne = nf(Math.min(end - d, finalDur));
-    shiftLog.push(`${label} ${r2(start)}-${r2(end)}s -> ${r2(ns)}-${r2(ne)}s (-${r2(d)}s)`);
-    return [ns, ne];
-  };
-
-  // ---- overlays (image or video b-roll)
-  const parseSlide = (s, where) => {
-    if (!s) return null;
-    const edge = s.from ?? s.to; // slideIn names its entry edge "from"; slideOut its exit edge "to"
-    if (!['left', 'right', 'top', 'bottom'].includes(edge)) die(`${where} needs an edge ("from"/"to") of left|right|top|bottom`);
-    const duration = +(s.duration ?? 0.3);
-    if (!(duration > 0)) die(`${where}.duration must be > 0`);
-    return { edge, duration };
-  };
-  const ovs = (plan.overlays || []).map((ov, k) => {
-    if (ov.image && ov.video) die(`overlays[${k}]: set image or video, not both`);
-    if (!ov.image && !ov.video) die(`overlays[${k}].image or .video is required`);
-    const slideIn = parseSlide(ov.slideIn, `overlays[${k}].slideIn`);
-    const slideOut = parseSlide(ov.slideOut, `overlays[${k}].slideOut`);
-    const winOf = () => { // [start,end] on the final clock (junction-shifted), slides validated to fit
-      let start = ov.start ?? 0, end = ov.end ?? totalDur;
-      if (end <= start) die(`overlays[${k}].end must be > start`);
-      if (junctions.length) { const [s2, e2] = shiftSpan(start, end, `overlay[${k}]`); start = s2; end = Math.min(e2, finalDur); }
-      if (end > finalDur + 0.01) warn(`overlays[${k}].end ${end}s is past the timeline end (${r1(finalDur)}s)`);
-      const win = end - start, slid = (slideIn?.duration ?? 0) + (slideOut?.duration ?? 0);
-      if (slid > win + 1e-9) die(`overlays[${k}]: slideIn + slideOut (${r2(slid)}s) exceed the overlay window (${r2(win)}s)`);
-      return [start, end];
-    };
-    if (ov.image) {
-      const image = rp(String(ov.image));
-      if (!existsSync(image)) die(`overlays[${k}].image not found: ${image}`);
-      if (typeOf(image) !== 'image') die(`overlays[${k}].image is not an image: ${image}`);
-      const [start, end] = winOf();
-      let zoom = null, tw = 0, th = 0;
-      if (ov.zoom) { // Ken Burns needs the still's own aspect: zoompan renders it at 2x for sharpness
-        const st = (ffprobeJson(image).streams || []).find((s) => s.codec_type === 'video');
-        if (!st?.width || !st?.height) die(`overlays[${k}].zoom: could not read the image's dimensions: ${image}`);
-        tw = even(ov.scale ? W * ov.scale : st.width);
-        th = even(tw * st.height / st.width);
-        zoom = parseZoom(ov.zoom, `overlays[${k}]`, end - start);
-      }
-      return { kind: 'image', image, start, end, x: ov.x ?? 0.5, y: ov.y ?? 0.5, scale: ov.scale, zoom, tw, th, slideIn, slideOut, fadeIn: ov.fadeIn, fadeOut: ov.fadeOut };
-    }
-    const video = rp(String(ov.video));
-    if (!existsSync(video)) die(`overlays[${k}].video not found: ${video}`);
-    const p = ffprobeJson(video);
-    if (!(p.streams || []).some((s) => s.codec_type === 'video')) die(`overlays[${k}].video has no video stream: ${video}`);
-    const hasAudio = (p.streams || []).some((s) => s.codec_type === 'audio');
-    const srcDur = p.format?.duration ? +p.format.duration : null;
-    const [start, end] = winOf();
-    const t = ov.trim || {};
-    const ts = t.start ?? 0;
-    let te = t.end;
-    if (te != null && srcDur != null && te > srcDur + 0.01) { warn(`overlays[${k}].trim.end ${te}s > source duration ${r1(srcDur)}s — clamped`); te = srcDur; }
-    if (te != null && te <= ts) die(`overlays[${k}]: trim.end (${te}) must be > trim.start (${ts})`);
-    const speed = parseSpeed(ov.speed, `overlays[${k}]`);
-    const smooth = !!ov.smooth && speed !== 1;
-    if (smooth) warn(`overlays[${k}].smooth: motion-interpolated frames render slowly`);
-    const needed = end - start;          // frames to fill on the final timeline
-    let hardEnd = ts + needed * speed;   // never decode past what [start,end] can show (at this rate)
-    if (te != null) hardEnd = Math.min(te, hardEnd);
-    else if (srcDur != null) hardEnd = Math.min(srcDur, hardEnd);
-    if (hardEnd <= ts) die(`overlays[${k}].trim.start ${ts}s is at/past the source end`);
-    let mute = ov.mute ?? true;
-    if (!mute && !hasAudio) { warn(`overlays[${k}].mute is false but the video has no audio stream — treated as muted`); mute = true; }
-    return { kind: 'video', video, ts, hardEnd, needed, mute, speed, smooth, start, end, x: ov.x ?? 0.5, y: ov.y ?? 0.5, scale: ov.scale ?? 1, slideIn, slideOut, fadeIn: ov.fadeIn, fadeOut: ov.fadeOut };
-  });
-
-  // ---- zoomEvents (quick punch-ins on the base composite, final-timeline clock)
-  const zes = (plan.zoomEvents || []).map((z, k) => {
-    if (z.start == null || z.end == null || z.end <= z.start) die(`zoomEvents[${k}] needs start < end`);
-    const to = +(z.to ?? 1.08);
-    if (to < 1) die(`zoomEvents[${k}].to must be >= 1 (zoompan cannot zoom out)`);
-    const rampIn = +(z.rampIn ?? 0.12), rampOut = +(z.rampOut ?? 0.12);
-    if (!(rampIn >= 0) || !(rampOut >= 0)) die(`zoomEvents[${k}]: rampIn/rampOut must be >= 0`);
-    if (rampIn + rampOut > z.end - z.start + 1e-9) die(`zoomEvents[${k}]: rampIn + rampOut (${r2(rampIn + rampOut)}s) exceed the event (${r2(z.end - z.start)}s)`);
-    let start = z.start, end = z.end;
-    if (junctions.length) { const [s2, e2] = shiftSpan(start, end, `zoomEvent[${k}]`); start = s2; end = Math.min(e2, finalDur); }
-    if (end > finalDur + 0.01) warn(`zoomEvents[${k}].end ${end}s is past the timeline end (${r1(finalDur)}s)`);
-    return { start, end, to, rampIn, rampOut, anchor: parseAnchor(z.anchor, `zoomEvents[${k}]`) };
-  }).sort((a, b) => a.start - b.start);
-  zes.forEach((z, k) => {
-    if (k && z.start < zes[k - 1].end - 1e-9)
-      die(`zoomEvents overlap on the final clock: one ends at ${r2(zes[k - 1].end)}s, the next starts at ${r2(z.start)}s — punch-ins must not overlap`);
-  });
-
-  // ---- music
-  let music = null;
-  if (plan.music && plan.music.src) {
-    const src = rp(String(plan.music.src));
-    if (!existsSync(src)) die(`music.src not found: ${src}`);
-    if (!(ffprobeJson(src).streams || []).some((s) => s.codec_type === 'audio')) die(`music.src has no audio stream: ${src}`);
-    music = { src, gain: plan.music.gain_db ?? -18, duck: plan.music.duck_db ?? -10, fadeIn: plan.music.fadeIn, fadeOut: plan.music.fadeOut };
-  }
-
-  // ---- captions -> .ass + fonts dir
-  let assPath = null, fontsDir = null, assText = null;
-  if (plan.captions && Array.isArray(plan.captions.events) && plan.captions.events.length) {
-    const style = plan.captions.style || {};
-    const stemPath = planPath.replace(/\.json$/i, '');
-    fontsDir = stemPath + '.fonts';
-    assPath = stemPath + '.ass';
-    if (!dry) mkdirSync(fontsDir, { recursive: true });
-    const font = await resolveFont(style, fontsDir, rp, dry);
-    for (const srcFont of font.copy) {
-      if (dry) console.error(`fonts     would copy ${srcFont} -> ${fontsDir}/`);
-      else copyFileSync(srcFont, join(fontsDir, basename(srcFont)));
-    }
-    let events = plan.captions.events;
-    if (junctions.length) events = events.map((ev, i) => { // junction-shift onto the final clock
-      if (ev.start == null || ev.end == null || ev.end <= ev.start) return ev; // buildAss reports it
-      const [s2, e2] = shiftSpan(ev.start, ev.end, `caption[${i}] "${String(ev.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 24)}"`);
-      return { ...ev, start: s2, end: e2 };
-    });
-    assText = buildAss({ W, H, style, events, fontname: font.fontname, bold: font.bold });
-    if (!dry) writeFileSync(assPath, assText);
-  }
-
-  // ---- the junction map, loudly: transitions moved the clock, this is where everything landed
-  if (junctions.length) {
-    let cum = 0;
-    console.error(`timing    transitions compress the timeline: ${r1(totalDur)}s -> ${r1(finalDur)}s (-${r2(totalShift)}s over ${junctions.length} junction(s))`);
-    for (const j of junctions) {
-      console.error(`timing    junction clip${j.i}->clip${j.i + 1}: ${clips[j.i].transition.type} ${j.d}s — hard-cut clock ${r2(j.oldT)}s = final clock ${r2(j.oldT - cum - j.d)}-${r2(j.oldT - cum)}s (later events shift -${r2(cum + j.d)}s)`);
-      cum += j.d;
-    }
-    for (const l of shiftLog) console.error(`timing    ${l}`);
-    if (!shiftLog.length) console.error('timing    no downstream events needed shifting');
-  }
-
-  // ---- inputs
-  const ffInputs = [];
-  clips.forEach((c) => ffInputs.push(...(c.kind === 'image' ? ['-loop', '1', '-i', c.src] : ['-i', c.src])));
-  ovs.forEach((ov) => ffInputs.push(...(ov.kind === 'image' ? ['-loop', '1', '-i', ov.image] : ['-i', ov.video])));
-  if (music) ffInputs.push('-i', music.src);
-  const ovBase = clips.length, mIdx = clips.length + ovs.length;
-
-  // ---- filter graph
-  const MINTERP = `minterpolate=fps=${FPS}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1`;
-  const anyTr = junctions.length > 0;
-  const zoomFilter = (z) => { // zoompan on a 2x intermediate; time = frame/fps on the branch clock
-    const zexpr = z.end - z.start < 0.04
-      ? `if(gte(in/${FPS},${z.start}),${z.to},${z.from})`
-      : `${z.from}+(${z.to}-${z.from})*min(max((in/${FPS}-${z.start})/(${z.end}-${z.start}),0),1)`;
-    const xexpr = `iw*${z.anchor.x}-(iw/zoom/2)`, yexpr = `ih*${z.anchor.y}-(ih/zoom/2)`;
-    return `zoompan=z='${zexpr}':x='${xexpr}':y='${yexpr}':d=1:s=${W}x${H}:fps=${FPS}`;
-  };
-  const graph = [];
-  clips.forEach((c, i) => {
-    let v;
-    if (c.kind === 'image') { // full-frame still: fit onto a 2x master first so Ken Burns stays sharp
-      v = [`fps=${FPS}`, `trim=start=0:end=${c.dur}`, 'setpts=PTS-STARTPTS'];
-      if (c.zoom) v.push(
-        `scale=${W * 2}:${H * 2}:force_original_aspect_ratio=decrease`,
-        `pad=${W * 2}:${H * 2}:(ow-iw)/2:(oh-ih)/2:color=black`, 'setsar=1', zoomFilter(c.zoom));
-      else v.push(
-        `scale=${W}:${H}:force_original_aspect_ratio=decrease`,
-        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`, 'setsar=1');
-    } else {
-      v = [
-        `trim=start=${c.start}:end=${c.end}`,
-        c.speed !== 1 ? `setpts=(PTS-STARTPTS)/${c.speed}` : 'setpts=PTS-STARTPTS',
-        c.smooth ? MINTERP : `fps=${FPS}`,
-        `scale=${W}:${H}:force_original_aspect_ratio=decrease`,
-        `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2:color=black`, 'setsar=1',
-      ];
-      if (c.zoom) v.push(`scale=${W * 2}:${H * 2}`, zoomFilter(c.zoom));
-    }
-    v.push('format=yuv420p');
-    if (anyTr) v.push('settb=AVTB'); // xfade needs every junction input on one timebase
-    graph.push(`[${i}:v]${v.join(',')}[v${i}]`);
-    if (c.kind === 'video' && c.hasAudio) {
-      const a = [`atrim=start=${c.start}:end=${c.end}`, 'asetpts=PTS-STARTPTS'];
-      if (c.speed !== 1) a.push(...atempoChain(c.speed));
-      a.push('aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo');
-      graph.push(`[${i}:a]${a.join(',')}[a${i}]`);
-    } else {
-      graph.push(`anullsrc=r=48000:cl=stereo,atrim=start=0:end=${c.dur},asetpts=PTS-STARTPTS[a${i}]`);
-    }
-  });
-  if (!anyTr) {
-    graph.push(clips.map((_, i) => `[v${i}][a${i}]`).join('') + `concat=n=${clips.length}:v=1:a=1[vt][at]`);
-  } else { // pairwise left-to-right: xfade/acrossfade at transition junctions, concat at hard cuts
-    let vc = 'v0', ac = 'a0', acc = clips[0].dur;
-    for (let i = 1; i < clips.length; i++) {
-      const tr = clips[i - 1].transition;
-      if (tr) {
-        graph.push(`[${vc}][v${i}]xfade=transition=${tr.xtype}:duration=${tr.duration}:offset=${nf(acc - tr.duration)}[vj${i}]`);
-        graph.push(`[${ac}][a${i}]acrossfade=d=${tr.duration}[aj${i}]`);
-        acc += clips[i].dur - tr.duration;
-      } else {
-        graph.push(`[${vc}][${ac}][v${i}][a${i}]concat=n=2:v=1:a=1[vj${i}][aj${i}]`);
-        acc += clips[i].dur;
-      }
-      vc = `vj${i}`; ac = `aj${i}`;
-    }
-    graph.push(`[${vc}]null[vt]`, `[${ac}]anull[at]`);
-  }
-
-  let cur = 'vt';
-  if (zes.length) { // punch-ins on the base composite: 2x up, piecewise zoompan, before overlays
-    const T = `(in/${FPS})`;
-    // rampIn/rampOut = 0 -> an instant step (gte), no division-by-zero at the boundary; > 0 -> the eased ramp
-    const stepIn = (z) => z.rampIn > 0 ? `clip((${T}-${nf(z.start)})/${z.rampIn},0,1)` : `gte(${T},${nf(z.start)})`;
-    const stepOut = (z) => z.rampOut > 0 ? `clip((${nf(z.end)}-${T})/${z.rampOut},0,1)` : `lt(${T},${nf(z.end)})`;
-    const terms = zes.map((z) => `(${z.to}-1)*${stepIn(z)}*${stepOut(z)}`);
-    // anchor: same fixed point for every event -> a plain expr; mixed anchors -> blend by whichever
-    // event's [start,end] window is active (falls back to center outside all windows)
-    const sameAnchor = zes.every((z) => z.anchor.x === zes[0].anchor.x && z.anchor.y === zes[0].anchor.y);
-    const axExpr = sameAnchor ? `${zes[0].anchor.x}`
-      : zes.map((z) => `${z.anchor.x}*${`between(${T},${nf(z.start)},${nf(z.end)})`}`).join('+') + '+0.5*(1-(' + zes.map((z) => `between(${T},${nf(z.start)},${nf(z.end)})`).join('+') + '))';
-    const ayExpr = sameAnchor ? `${zes[0].anchor.y}`
-      : zes.map((z) => `${z.anchor.y}*${`between(${T},${nf(z.start)},${nf(z.end)})`}`).join('+') + '+0.5*(1-(' + zes.map((z) => `between(${T},${nf(z.start)},${nf(z.end)})`).join('+') + '))';
-    const xexpr = `iw*(${axExpr})-(iw/zoom/2)`, yexpr = `ih*(${ayExpr})-(ih/zoom/2)`;
-    graph.push(`[vt]scale=${W * 2}:${H * 2},zoompan=z='1+${terms.join('+')}':x='${xexpr}':y='${yexpr}':d=1:s=${W}x${H}:fps=${FPS},format=yuv420p[vz]`);
-    cur = 'vz';
-  }
-  ovs.forEach((ov, k) => {
-    let br;
-    if (ov.kind === 'image') {
-      br = ['format=rgba', `fps=${FPS}`, `trim=end=${Math.min(ov.end + 1, finalDur)}`]; // clamp: a branch longer than the timeline would extend the output (framesync repeats the frozen main frame)
-      if (ov.zoom) { // Ken Burns: animate across [start,end] on the output clock, from a 2x master
-        const z = ov.zoom;
-        const zexpr = `${z.from}+(${z.to}-${z.from})*clip((in/${FPS}-${nf(ov.start)})/${nf(Math.max(ov.end - ov.start, 0.04))},0,1)`;
-        const oxexpr = `iw*${z.anchor.x}-(iw/zoom/2)`, oyexpr = `ih*${z.anchor.y}-(ih/zoom/2)`;
-        br.push(`scale=${ov.tw * 2}:${ov.th * 2}`,
-          `zoompan=z='${zexpr}':x='${oxexpr}':y='${oyexpr}':d=1:s=${ov.tw}x${ov.th}:fps=${FPS}`, 'format=rgba');
-      } else if (ov.scale) br.push(`scale=${even(W * ov.scale)}:-2`);
-      if (ov.fadeIn) br.push(`fade=t=in:st=${ov.start}:d=${ov.fadeIn}:alpha=1`);
-      if (ov.fadeOut) br.push(`fade=t=out:st=${r1(ov.end - ov.fadeOut)}:d=${ov.fadeOut}:alpha=1`);
-    } else { // video b-roll: trimmed span in local time, held (tpad clone) to fill [start,end], then shifted to start
-      const bw = even(W * ov.scale), bh = even(H * ov.scale);
-      br = [
-        `trim=start=${ov.ts}:end=${ov.hardEnd}`,
-        ov.speed !== 1 ? `setpts=(PTS-STARTPTS)/${ov.speed}` : 'setpts=PTS-STARTPTS',
-        ov.smooth ? MINTERP : `fps=${FPS}`,
-        `scale=${bw}:${bh}:force_original_aspect_ratio=decrease`,
-        `pad=${bw}:${bh}:(ow-iw)/2:(oh-ih)/2:color=black`, 'setsar=1', 'format=rgba',
-        'tpad=stop=-1:stop_mode=clone', `trim=end=${ov.needed}`,
-      ];
-      if (ov.fadeIn) br.push(`fade=t=in:st=0:d=${ov.fadeIn}:alpha=1`);
-      if (ov.fadeOut) br.push(`fade=t=out:st=${Math.max(0, r1(ov.needed - ov.fadeOut))}:d=${ov.fadeOut}:alpha=1`);
-      br.push(`setpts=PTS+${ov.start}/TB`);
-    }
-    graph.push(`[${ovBase + k}:v]${br.join(',')}[ov${k}]`);
-    // position: slides add an eased offset — entry decays as (1-p)^3 (ease-out cubic), exit grows
-    // as p^3 (ease-in cubic) — on top of the resting center; fades combine independently
-    const baseX = `main_w*${ov.x}-w/2`, baseY = `main_h*${ov.y}-h/2`;
-    const OFFSCREEN = { left: { axis: 'x', off: '-w' }, right: { axis: 'x', off: 'main_w' }, top: { axis: 'y', off: '-h' }, bottom: { axis: 'y', off: 'main_h' } };
-    let xE = baseX, yE = baseY;
-    if (ov.slideIn) {
-      const { axis, off } = OFFSCREEN[ov.slideIn.edge];
-      const term = `((${off})-(${axis === 'x' ? baseX : baseY}))*pow(1-clip((t-${nf(ov.start)})/${ov.slideIn.duration},0,1),3)`;
-      if (axis === 'x') xE = `(${xE})+${term}`; else yE = `(${yE})+${term}`;
-    }
-    if (ov.slideOut) {
-      const { axis, off } = OFFSCREEN[ov.slideOut.edge];
-      const term = `((${off})-(${axis === 'x' ? baseX : baseY}))*pow(clip((t-${nf(ov.end - ov.slideOut.duration)})/${ov.slideOut.duration},0,1),3)`;
-      if (axis === 'x') xE = `(${xE})+${term}`; else yE = `(${yE})+${term}`;
-    }
-    const eof = ov.kind === 'video' ? ':eof_action=repeat' : ''; // hold the last b-roll frame through end
-    graph.push(`[${cur}][ov${k}]overlay=x='${xE}':y='${yE}':enable='between(t,${ov.start},${ov.end})'${eof}[vo${k}]`);
-    cur = `vo${k}`;
-  });
-
-  // unmuted b-roll audio joins the dialogue track (so music still ducks under it)
-  let dlg = 'at';
-  const loud = ovs.map((ov, k) => ({ ov, k })).filter(({ ov }) => ov.kind === 'video' && !ov.mute);
-  if (loud.length) {
-    loud.forEach(({ ov, k }) => graph.push(
-      `[${ovBase + k}:a]atrim=start=${ov.ts}:end=${ov.hardEnd},asetpts=PTS-STARTPTS,` +
-      (ov.speed !== 1 ? atempoChain(ov.speed).join(',') + ',' : '') + 'aresample=48000,' +
-      `aformat=sample_fmts=fltp:channel_layouts=stereo,adelay=delays=${ov.start}s:all=1[ova${k}]`));
-    graph.push(`[at]${loud.map(({ k }) => `[ova${k}]`).join('')}amix=inputs=${loud.length + 1}:duration=first:dropout_transition=3:normalize=0[abr]`);
-    dlg = 'abr';
-  }
-
-  const fin = plan.finish || {};
-  const finSteps = [];
-  const eqParts = [];
-  if (fin.contrast != null) eqParts.push(`contrast=${fin.contrast}`);
-  if (fin.saturation != null) eqParts.push(`saturation=${fin.saturation}`);
-  if (eqParts.length) finSteps.push(`eq=${eqParts.join(':')}`);
-  // temperature (-100..100): warm/cool via a midtone colorbalance push (red up / blue down = warmer)
-  if (fin.temperature != null && +fin.temperature !== 0) {
-    const t = +fin.temperature;
-    finSteps.push(`colorbalance=rm=${(0.0015 * t).toFixed(4)}:bm=${(-0.0015 * t).toFixed(4)}`);
-  }
-  // highlights/shadows/fade (-100..100 / -100..100 / 0..100): one curves filter shaping the tone response.
-  // fade lifts the black point (matte look); shadows/highlights bow the quarter/three-quarter points.
-  if ((fin.highlights != null && +fin.highlights !== 0) || (fin.shadows != null && +fin.shadows !== 0) || (fin.fade != null && +fin.fade !== 0)) {
-    const hi = +(fin.highlights ?? 0), sh = +(fin.shadows ?? 0), fd = +(fin.fade ?? 0);
-    const clamp01 = (v) => Math.min(1, Math.max(0, v));
-    const y0 = clamp01(fd / 100 * 0.20);
-    let y1 = clamp01(0.25 + sh / 100 * 0.15);
-    const y2 = clamp01(0.75 + hi / 100 * 0.15);
-    const y3 = clamp01(1 + hi / 100 * 0.10);
-    if (y1 <= y0) y1 = clamp01(y0 + 0.01); // keep the control points strictly increasing in y
-    finSteps.push(`curves=all='0/${y0.toFixed(4)} 0.25/${y1.toFixed(4)} 0.75/${y2.toFixed(4)} 1/${y3.toFixed(4)}'`);
-  }
-  if (fin.grain) finSteps.push(`noise=alls=${Math.round(Math.min(1, Math.max(0, fin.grain)) * 20)}:allf=t+u`);
-  if (finSteps.length) { graph.push(`[${cur}]${finSteps.join(',')}[vfin]`); cur = 'vfin'; }
-
-  if (assPath) { graph.push(`[${cur}]ass=filename=${fesc(assPath)}:fontsdir=${fesc(fontsDir)}[vcap]`); cur = 'vcap'; }
-  graph.push(`[${cur}]format=yuv420p[vout]`);
-
-  if (music) {
-    const m = ['aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', `volume=${music.gain}dB`];
-    if (music.fadeIn) m.push(`afade=t=in:st=0:d=${music.fadeIn}`);
-    if (music.fadeOut) m.push(`afade=t=out:st=${Math.max(0, r1(totalDur - music.fadeOut))}:d=${music.fadeOut}`);
-    m.push(`atrim=start=0:end=${totalDur}`, 'asetpts=PTS-STARTPTS');
-    graph.push(`[${mIdx}:a]${m.join(',')}[mus]`);
-    if (music.duck) {
-      const ratio = Math.min(20, Math.max(2, Math.abs(music.duck)));
-      graph.push(`[${dlg}]asplit=2[amain][akey]`);
-      graph.push(`[mus][akey]sidechaincompress=threshold=0.02:ratio=${ratio}:attack=20:release=250:makeup=1[mduck]`);
-      graph.push('[amain][mduck]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[amix]');
-    } else {
-      graph.push(`[${dlg}][mus]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[amix]`);
-    }
-    graph.push('[amix]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[aout]');
-  } else {
-    graph.push(`[${dlg}]anull[aout]`);
-  }
-
-  // ---- encode args
-  const enc = run('ffmpeg', ['-hide_banner', '-encoders'], { allowFail: true });
-  const aac = ((enc.stdout || '').includes('aac_at')) ? 'aac_at' : 'aac';
-  const ffArgs = [
-    '-y', '-hide_banner', '-loglevel', 'error', '-stats', // error: swscale spams benign warnings on jpeg (yuvj) overlays
-    ...ffInputs,
-    '-filter_complex', graph.join(';'),
-    '-map', '[vout]', '-map', '[aout]',
-    '-c:v', 'libx264', '-crf', '18', '-preset', 'medium',
-    '-c:a', aac, '-b:a', '192k',
-    '-movflags', '+faststart',
-    outPath,
-  ];
-
-  if (dry) {
-    console.error(`plan      ${clips.length} clip(s) ~${r1(totalDur)}s -> ${W}x${H}@${FPS} · ${ovs.length} overlay(s) · ${plan.captions?.events?.length || 0} caption(s) · music ${music ? 'yes' : 'no'} · audio ${aac}`);
-    console.error('--- ffmpeg command:');
-    console.error('ffmpeg ' + ffArgs.map(shq).join(' '));
-    if (assText) { console.error(`--- generated .ass (would write ${assPath}):`); console.error(assText); }
-    return;
-  }
-
-  mkdirSync(dirname(outPath), { recursive: true });
-  console.error(`render    ${clips.length} clip(s) -> ${W}x${H}@${FPS}, ${ovs.length} overlay(s), ${plan.captions?.events?.length || 0} caption(s), music ${music ? 'yes' : 'no'} — expect ~${r1(totalDur)}s`);
-  const t0 = Date.now();
-  const r = spawnSync(findBin('ffmpeg'), ffArgs, { stdio: ['ignore', 'inherit', 'inherit'], timeout: timeout * 1000, killSignal: 'SIGKILL' });
-  if (r.error && r.error.code === 'ETIMEDOUT') die(`ffmpeg timed out after ${timeout}s`);
-  if (r.status !== 0) die('ffmpeg failed (see messages above)');
-
-  const meta = ffprobeJson(outPath);
-  const dur = meta.format?.duration ? +meta.format.duration : null;
-  if (dur == null) die(`render finished but the output is unreadable: ${outPath}`);
-  const drift = Math.abs(dur - totalDur);
-  if (drift > 0.5) warn(`output duration ${r1(dur)}s drifts ${r1(drift)}s from the plan's expected ${r1(totalDur)}s`);
-  console.error(`done      ${r1(dur)}s ${W}x${H}@${FPS} in ${Math.round((Date.now() - t0) / 1000)}s`);
-  console.log('Saved: ' + outPath);
+  console.log(`${(doc.size || [1080, 1920]).join('x')} @ ${doc.fps || 30} fps · ${r2(doc.duration ?? end)}s`);
+  for (const l of lines) console.log('  ' + l);
+  for (const pr of problems) console.log('PROBLEM: ' + pr);
+  if (!problems.length) console.log('ok');
 }
 
-main().catch((e) => die(e?.stack || String(e)));
+// ---------- place ----------
+const probeDur = (f) => +ffprobeJson(f).format.duration;
+const cutsIn = (f, thr) => [...(run('ffmpeg', ['-hide_banner', '-i', f, '-vf', `select='gt(scene,${thr})',showinfo`, '-an', '-f', 'null', '-'], { allowFail: true }).stderr || '')
+  .matchAll(/pts_time:([0-9.]+)/g)].map((m) => +m[1]);
+
+function placeCmd(p) {
+  if (!args.shots) die('--shots <shots.json> is required');
+  const doc = readDoc(p), dir = dirname(p), fps = doc.fps || 30, maxRate = +(args['max-rate'] || 1);
+  const fr = (t) => Math.round(Math.round(t * fps) / fps * 1e4) / 1e4;
+  const clips = [];
+  for (const c of readDoc(resolve(args.shots)).clips) {
+    const f = resolve(dir, c.file), dur = probeDur(f);
+    const b = [0, ...cutsIn(f, +(args.scene || 0.25)), dur], st = [...c.starts, c.end];
+    if (b.length !== st.length) console.error(`WARN: ${c.file}: found ${b.length - 1} shots, planned ${c.starts.length} — check it by eye`);
+    for (let k = 0; k < Math.min(b.length, st.length) - 1; k++) {
+      const s0 = b[k] + (k ? 1 / fps : 0); // a frame past the cut, so it never shows the shot before
+      const seg = b[k + 1] - s0, win = st[k + 1] - st[k];
+      const rate = seg >= win ? Math.min(seg / win, maxRate) : (seg - 0.02) / win;
+      if (rate < 0.8) console.error(`WARN: ${c.file} shot ${k + 1} slowed to ${rate.toFixed(2)}x`);
+      clips.push({ src: c.file, at: fr(st[k]), end: fr(st[k + 1]), in: +s0.toFixed(3), rate: +rate.toFixed(4), mute: true });
+    }
+  }
+  const tr = (doc.tracks ||= []).find((t) => t.name === (args.track || 'Video')) || (doc.tracks.push({ name: args.track || 'Video', clips: [] }), doc.tracks.at(-1));
+  tr.clips = clips;
+  saveDoc(p, doc);
+  console.log(`${clips.length} shots -> ${tr.name}`);
+  if (!args.sfx) return;
+  // The shots' own sound, cut and tempo-matched like the picture (pitch kept), on a silent bed.
+  const files = [...new Set(clips.map((c) => c.src))];
+  const tempo = (r) => { const st = []; while (r > 2) { st.push(2); r /= 2; } while (r < 0.5) { st.push(0.5); r /= 0.5; } return [...st, r].map((x) => `atempo=${x}`).join(','); };
+  const end = Math.max(...clips.map((c) => c.end));
+  const graph = clips.map((c, k) => {
+    const win = c.end - c.at;
+    return `[${files.indexOf(c.src)}:a]atrim=${c.in}:${(c.in + win * c.rate).toFixed(3)},asetpts=PTS-STARTPTS,${tempo(c.rate)},atrim=0:${win.toFixed(3)},adelay=${Math.round(c.at * 1000)}:all=1[s${k}]`;
+  });
+  graph.push(`aevalsrc=0:d=${end.toFixed(3)}:s=48000[bed]`, `[bed]${clips.map((_, k) => `[s${k}]`).join('')}amix=inputs=${clips.length + 1}:normalize=0:duration=first[out]`);
+  const out = resolve(dir, args.sfx);
+  mkdirSync(dirname(out), { recursive: true });
+  run('ffmpeg', ['-v', 'error', '-y', ...files.flatMap((f) => ['-i', resolve(dir, f)]), '-filter_complex', graph.join(';'), '-map', '[out]', '-ar', '48000', '-c:a', 'pcm_s16le', out]);
+  console.log(`Saved: ${out}`);
+}
+
+// ---------- cut ----------
+const isKeys = (v) => Array.isArray(v) && Array.isArray(v[0]);
+// Keyframes on the timeline clock after removing [a, b): keys inside drop, later ones move up.
+const cutKeys = (v, a, b) => v.filter(([t]) => t < a || t >= b).map(([t, ...rest]) => [t >= b ? r2(t - (b - a)) : t, ...rest]);
+function cutValues(o, a, b) {
+  for (const [k, v] of Object.entries(o || {})) {
+    if (isKeys(v)) o[k] = cutKeys(v, a, b);
+    else if (v && typeof v === 'object' && !Array.isArray(v) && k !== 'transition') cutValues(v, a, b);
+  }
+}
+
+function cutCmd(p) {
+  const a = +args.from, b = +args.to;
+  if (!(b > a)) die('--from and --to (seconds, from < to) are required');
+  const doc = readDoc(p), d = b - a, shift = (t) => (t >= b ? r2(t - d) : t > a ? a : t);
+  for (const tr of doc.tracks || []) {
+    cutValues(tr, a, b);
+    const out = [];
+    for (const c of tr.clips || []) {
+      const at = c.at ?? 0, end = c.end ?? (c.dur != null ? at + c.dur : Infinity), rate = c.rate ?? 1;
+      cutValues(c, a, b);
+      if (c.lines) c.lines = c.lines.filter((l) => l.at < a || l.at >= b).map((l) => ({ ...l, at: shift(l.at), end: shift(l.end), ...(l.words && { words: l.words.map(([w, s, e, ...x]) => [w, shift(s), shift(e), ...x]) }) }));
+      if (end <= a || at >= b) { if (at >= b) { c.at = r2(at - d); if (c.end != null) c.end = r2(end - d); } out.push(c); continue; }
+      if (at >= a && end <= b) continue; // wholly inside: gone
+      if (at < a && end > b && c.src && !c.lines) { // spans the cut: split, the second part skips the cut's source
+        out.push({ ...c, end: a });
+        out.push({ ...c, at: a, in: r2((c.in ?? 0) + (b - at) * rate), ...(c.end != null && { end: r2(end - d) }), transition: undefined });
+        continue;
+      }
+      if (at < a) { if (c.end != null || c.dur != null) { c.end = r2(Math.max(a, end - d)); delete c.dur; } } // trims its tail (or the cut, inside it)
+      else { c.in = r2((c.in ?? 0) + (b - at) * rate); c.at = a; if (c.end != null) c.end = r2(end - d); } // trims its head
+      out.push(c);
+    }
+    tr.clips = out.filter((c) => c.end == null || c.end - (c.at ?? 0) >= 1 / (doc.fps || 30)); // slivers left by rounding
+  }
+  if (doc.duration != null) doc.duration = r2(doc.duration - d);
+  saveDoc(p, doc);
+  console.log(`cut ${r2(a)}–${r2(b)}s (${r2(d)}s) from every track`);
+}
+
+// ---------- reframe ----------
+function reframeCmd(p) {
+  const m = /^(\d+)x(\d+)$/.exec(args.size || '');
+  if (!m || !args.out) die('--size <W>x<H> and --out <file> are required');
+  const doc = readDoc(p), [W, H] = doc.size || [1080, 1920], nw = +m[1], nh = +m[2], sx = nw / W, sy = nh / H;
+  const scale = (v, f) => (isKeys(v) ? v.map(([t, x, ...e]) => [t, Math.round(x * f), ...e]) : typeof v === 'number' ? Math.round(v * f) : v);
+  const place = (o) => {
+    for (const [k, f] of [['x', sx], ['w', sx], ['y', sy], ['h', sy]]) if (o[k] != null) o[k] = scale(o[k], f);
+    if (o.origin) o.origin = [Math.round(o.origin[0] * sx), Math.round(o.origin[1] * sy)];
+  };
+  for (const tr of doc.tracks || []) {
+    if (tr.transform) place(tr.transform);
+    for (const c of tr.clips || []) {
+      place(c);
+      if (c.style?.maxWidth) c.style.maxWidth = Math.round(c.style.maxWidth * sx);
+    }
+  }
+  doc.size = [nw, nh];
+  delete doc.output;
+  const out = resolve(args.out);
+  saveDoc(out, doc);
+  console.log(`${W}x${H} -> ${nw}x${nh}: ${out} (check text positions on a frames sheet)`);
+}
+
+// ---------- headless engine ----------
+function engineBundle() {
+  const out = join(tmpdir(), 'ad-harness-edit', 'headless.js');
+  mkdirSync(dirname(out), { recursive: true });
+  let esbuild;
+  try { esbuild = import.meta.resolve('esbuild'); } catch { die('esbuild missing — run: bash tools/setup.sh'); }
+  return import(esbuild).then((m) => m.build({
+    entryPoints: [join(import.meta.dirname, '..', 'studio', 'engine', 'headless.js')],
+    bundle: true, format: 'esm', target: 'es2022', outfile: out, logLevel: 'error',
+    nodePaths: [join(import.meta.dirname, '..', 'studio', 'node_modules')],
+  })).then(() => readFileSync(out));
+}
+
+async function browser() {
+  let pw;
+  try { pw = await import('playwright-core'); } catch { die('playwright-core missing — run: bash tools/setup.sh'); }
+  const opts = { headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--enable-gpu', '--ignore-gpu-blocklist'] };
+  // An installed Chrome or Edge first (they carry H.264/AAC), else the Chromium setup installs.
+  for (const channel of ['chrome', 'msedge', 'chromium']) {
+    try { return await pw.chromium.launch({ ...opts, channel }); } catch {}
+  }
+  die('no browser for the export: install Google Chrome, or run: npx playwright-core install chromium');
+}
+
+// Serve the plan's brand folder + the engine page; collect the output; resolve when the page reports done.
+async function runPage(planPath, query, outPath, { timeout = 1800, onProgress } = {}) {
+  const brand = resolve(brandDirFrom(planPath));
+  const root = brand === resolve(planPath) ? dirname(planPath) : brand;
+  const app = await engineBundle();
+  const fd = openSync(outPath, 'w');
+  let resolveDone;
+  const done = new Promise((r) => { resolveDone = r; });
+  const body = (req) => new Promise((r) => { const parts = []; req.on('data', (d) => parts.push(d)); req.on('end', () => r(Buffer.concat(parts))); });
+  const server = createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'POST') {
+      const b = await body(req);
+      if (u.pathname === '/out') writeSync(fd, b, 0, b.length, +u.searchParams.get('offset'));
+      else if (u.pathname === '/progress') onProgress?.(+b.toString());
+      else if (u.pathname === '/done') resolveDone(JSON.parse(b.toString()));
+      return res.end('ok');
+    }
+    if (u.pathname === '/') return res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><script type="module" src="/app.js"></script>');
+    if (u.pathname === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(app);
+    const file = resolve(root, decodeURIComponent(u.pathname.replace(/^\/f\//, '')));
+    if (!u.pathname.startsWith('/f/') || !(file + sep).startsWith(root + sep) && file !== root) return res.writeHead(403).end();
+    let st;
+    try { st = statSync(file); } catch { return res.writeHead(404).end(); }
+    const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+    const head = { 'Content-Type': mimeOf(file), 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' };
+    if (!m) return createReadStream(file).pipe(res.writeHead(200, { ...head, 'Content-Length': st.size }));
+    const s = m[1] ? +m[1] : st.size - +m[2], e = m[1] && m[2] ? Math.min(+m[2], st.size - 1) : st.size - 1;
+    createReadStream(file, { start: s, end: e }).pipe(res.writeHead(206, { ...head, 'Content-Range': `bytes ${s}-${e}/${st.size}`, 'Content-Length': e - s + 1 }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const b = await browser();
+  const page = await b.newPage();
+  page.on('pageerror', (e) => console.error('page error:', e.message));
+  const plan = relative(root, planPath).split(sep).map(encodeURIComponent).join('/');
+  await page.goto(`http://127.0.0.1:${server.address().port}/?plan=${plan}&${new URLSearchParams(query)}`);
+  const timer = setTimeout(() => resolveDone({ error: `timed out after ${timeout}s` }), timeout * 1000);
+  const result = await done;
+  clearTimeout(timer);
+  closeSync(fd);
+  await b.close();
+  server.close();
+  if (result.error) die(result.error);
+  for (const e of result.errors || []) console.error('WARN: ' + e);
+  return result;
+}
+
+function defaultOut(planPath, doc) {
+  if (doc.output) return resolve(dirname(planPath), doc.output);
+  const folder = basename(dirname(planPath));
+  const [id, ...rest] = folder.split('_');
+  const v = /^edit-v(\d+)\.json$/i.exec(basename(planPath))?.[1] || '1';
+  return join(dirname(planPath), 'final', `${id}_V${v}_${rest.join('_')}.mp4`);
+}
+
+// Studio reads this to show the export's state.
+const statusFile = (planPath) => join(dirname(planPath), '.export.json');
+const setStatus = (planPath, s) => writeFileSync(statusFile(planPath), JSON.stringify({ plan: basename(planPath), pid: process.pid, at: Date.now(), ...s }));
+
+async function exportCmd(p) {
+  const doc = readDoc(p);
+  const out = args.out ? resolve(args.out) : defaultOut(p, doc);
+  mkdirSync(dirname(out), { recursive: true });
+  const query = { mode: 'export', scale: args.scale || 1, ...(args.from && { from: args.from }), ...(args.to && { to: args.to }) };
+  setStatus(p, { state: 'running', progress: 0 });
+  const t0 = Date.now();
+  let shown = 0;
+  try {
+    const r = await runPage(p, query, out, {
+      timeout: +(args.timeout || 1800),
+      onProgress: (x) => { setStatus(p, { state: 'running', progress: x }); if (x - shown >= 0.25) { shown = x; console.error(`${Math.round(x * 100)}%`); } },
+    });
+    const meta = ffprobeJson(out);
+    const rel = relative(dirname(p), out).split(sep).join('/');
+    setStatus(p, { state: 'done', out: rel, seconds: r2((Date.now() - t0) / 1000) });
+    console.error(`done      ${r2(+meta.format.duration)}s in ${r2((Date.now() - t0) / 1000)}s`);
+    console.log('Saved: ' + out);
+  } catch (e) {
+    setStatus(p, { state: 'failed', error: String(e.message || e) });
+    throw e;
+  }
+}
+
+async function framesCmd(p) {
+  if (!args.at) die('--at <seconds,seconds,…> is required');
+  const out = args.out ? resolve(args.out) : join(tmpdir(), 'ad-harness-edit', `frames-${Date.now()}.png`);
+  mkdirSync(dirname(out), { recursive: true });
+  await runPage(p, { mode: 'frames', at: args.at, scale: args.scale || 0.5 }, out);
+  console.log('Saved: ' + out);
+}
+
+// ---------- captions ----------
+// Words from a harness transcript ({words:[{word,start,end}]}) or a song timing file ({lines:[{words}]}).
+function readWords(file) {
+  const d = readDoc(file);
+  // A song's lyric lines end a caption line too.
+  const ws = d.words || (d.lines || []).flatMap((l) => (l.words || []).map((w, i, a) => ({ ...w, brk: i === a.length - 1 })));
+  if (!ws.length) die(`${file}: no word timings (transcribe with --words, or a song .timing.json)`);
+  return ws.map((w) => ({ word: String(w.word).trim(), start: +w.start, end: +w.end, speaker: w.speaker, brk: w.brk })).filter((w) => w.word);
+}
+
+function captionsCmd(p) {
+  if (!args.words) die('--words <transcript.json> is required');
+  const doc = readDoc(p), max = +(args.max || 3), from = +(args.from || 0), to = args.to ? +args.to : Infinity;
+  const ws = readWords(resolve(args.words)).filter((w) => w.start >= from && w.start < to);
+  const groups = [];
+  let g = [];
+  ws.forEach((w, i) => {
+    g.push(w);
+    const next = ws[i + 1];
+    if (!next || w.brk || g.length >= max || /[,.!?;:]$/.test(w.word) || next.start - w.end > 0.5) { groups.push(g); g = []; }
+  });
+  const clean = (s) => s.replace(/[,.;:]+$/, '');
+  const lines = groups.map((grp, i) => {
+    const next = groups[i + 1];
+    const last = grp[grp.length - 1].end;
+    const end = next && next[0].start - last < 1.2 ? next[0].start : last + 0.4;
+    return { text: grp.map((w) => clean(w.word)).join(' '), at: r2(grp[0].start), end: r2(end), words: grp.map((w) => [clean(w.word), r2(w.start), r2(w.end)]) };
+  });
+  const tr = (doc.tracks ||= []).find((t) => t.name === (args.track || 'Captions')) || (doc.tracks.unshift({ name: args.track || 'Captions', clips: [] }), doc.tracks[0]);
+  let clip = tr.clips.find((c) => c.type === 'captions' || c.lines);
+  if (!clip) tr.clips.push(clip = { type: 'captions', style: { font: 'Inter', weight: 700, size: 72, color: '#FFFFFF', stroke: '#000000', strokeWidth: 6 }, y: Math.round((doc.size?.[1] || 1920) * 0.65) });
+  if (args.from || args.to) clip.lines = [...(clip.lines || []).filter((l) => l.at < from || l.at >= to), ...lines].sort((a, b) => a.at - b.at);
+  else clip.lines = lines;
+  saveDoc(p, doc);
+  console.log(`${lines.length} caption lines (≤${max} words) -> ${tr.name}`);
+}
+
+// ---------- color match ----------
+// Reinhard transfer in CIELAB: each clip's Lab mean and spread moved to the reference's (the shader applies it).
+const lab = (r, g, b) => {
+  const lin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const [R, G, B] = [r, g, b].map(lin);
+  const f = (t) => (t > 0.008856 ? Math.cbrt(t) : (903.3 * t + 16) / 116);
+  const x = f((0.4124564 * R + 0.3575761 * G + 0.1804375 * B) / 0.95047), y = f(0.2126729 * R + 0.7151522 * G + 0.072175 * B), z = f((0.0193339 * R + 0.119192 * G + 0.9503041 * B) / 1.08883);
+  return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+};
+// Lab mean and spread over 8 frames of the part of the source a clip uses (near-black and near-white pixels skipped).
+function stats(file, a, b) {
+  const acc = [[0, 0], [0, 0], [0, 0]];
+  let n = 0;
+  for (let i = 0; i < 8; i++) {
+    const t = a + ((b - a) * (i + 0.5)) / 8;
+    const px = run('ffmpeg', ['-v', 'quiet', '-ss', t.toFixed(3), '-i', file, '-frames:v', '1', '-vf', 'scale=64:-2', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { allowFail: true, binary: true }).stdout;
+    for (let j = 0; px && j + 2 < px.length; j += 3) {
+      const L = lab(px[j] / 255, px[j + 1] / 255, px[j + 2] / 255);
+      if (L[0] < 5 || L[0] > 95) continue;
+      for (let c = 0; c < 3; c++) { acc[c][0] += L[c]; acc[c][1] += L[c] * L[c]; }
+      n++;
+    }
+  }
+  return n ? acc.map(([s, s2]) => ({ m: s / n, sd: Math.sqrt(Math.max(1e-6, s2 / n - (s / n) ** 2)) })) : null;
+}
+
+function matchCmd(p) {
+  const doc = readDoc(p), dir = dirname(p), tr = trackNamed(doc, args.track || 'Video');
+  const vids = tr.clips.filter((c) => c.src && (c.type || 'video') === 'video');
+  const st = vids.map((c) => {
+    const a = c.in ?? 0, b = a + ((c.end ?? c.at + 2) - (c.at ?? 0)) * (c.rate ?? 1);
+    return stats(resolve(dir, c.src), a, Math.max(a + 0.1, b));
+  });
+  const ok = st.filter(Boolean);
+  if (!ok.length) die('could not read any clip');
+  const med = (xs) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+  const ref = args.ref ? st[vids.findIndex((c) => c.src === args.ref)] || die(`--ref ${args.ref} is not a clip on ${tr.name}`)
+    : [0, 1, 2].map((ch) => ({ m: med(ok.map((x) => x[ch].m)), sd: med(ok.map((x) => x[ch].sd)) }));
+  const k = +(args.strength ?? 0.75); // part of the way: a full transfer can flatten deliberate looks
+  vids.forEach((c, i) => {
+    if (!st[i]) return;
+    const r = st[i].map((s, ch) => Math.min(1.6, Math.max(0.6, ref[ch].sd / s.sd)));
+    const g = r.map((x) => 1 + k * (x - 1)), o = st[i].map((s, ch) => k * (ref[ch].m - s.m * r[ch]));
+    c.grade = { ...c.grade, match: [...g, ...o].map((x) => +x.toFixed(3)) };
+  });
+  saveDoc(p, doc);
+  console.log(`matched ${vids.length} clips on ${tr.name} to ${args.ref || 'their median look'}`);
+}
+
+// ---------- movement ----------
+// Frame-difference energy of each shown frame (timeline clock); peaks = actions.
+function movesCmd(p) {
+  const doc = readDoc(p), dir = dirname(p), tr = trackNamed(doc, args.track || 'Video'), fps = doc.fps || 30;
+  const from = +(args.from || 0), to = args.to ? +args.to : Infinity;
+  const energy = [];
+  for (const c of tr.clips.filter((x) => x.src && x.end > from && x.at < to)) {
+    const a = Math.max(c.at, from), b = Math.min(c.end, to), rate = c.rate ?? 1;
+    const s0 = (c.in ?? 0) + (a - c.at) * rate, len = (b - a) * rate;
+    const raw = run('ffmpeg', ['-v', 'quiet', '-ss', s0.toFixed(3), '-t', len.toFixed(3), '-i', resolve(dir, c.src), '-vf', `fps=${fps / rate},scale=48:84,format=gray`, '-f', 'rawvideo', '-'], { allowFail: true, binary: true }).stdout;
+    const n = 48 * 84;
+    for (let f = 1; raw && (f + 1) * n <= raw.length; f++) {
+      let d = 0;
+      for (let i = 0; i < n; i++) d += Math.abs(raw[f * n + i] - raw[(f - 1) * n + i]);
+      energy.push({ t: a + f / fps, e: d / n, cut: f === 1 || b - (a + f / fps) < 0.15 });
+    }
+  }
+  const es = energy.filter((x) => !x.cut).map((x) => x.e).sort((x, y) => x - y);
+  const floor = es[Math.floor(es.length * 0.6)] || 0;
+  const peaks = [];
+  energy.forEach((x, i) => {
+    const win = energy.slice(Math.max(0, i - 6), i + 7);
+    if (x.cut || x.e <= floor * 1.5 || x.e > floor * 10 || x.e < Math.max(...win.map((w) => w.e))) return; // > 10× is a cut inside the clip
+    if (peaks.length && x.t - peaks[peaks.length - 1].t < 0.6) { if (x.e > peaks[peaks.length - 1].e) peaks[peaks.length - 1] = x; return; }
+    peaks.push(x);
+  });
+  console.log(JSON.stringify(peaks.map((x) => ({ t: r2(x.t), strength: r2(x.e / (floor || 1)) }))));
+}
+
+// ---------- ducking ----------
+function duckCmd(p) {
+  if (!args.words || !args.track) die('--track <name> and --words <transcript.json> are required');
+  const doc = readDoc(p), tr = trackNamed(doc, args.track), dip = +(args.db ?? -10), base = typeof tr.volume === 'number' ? tr.volume : 0;
+  const ws = readWords(resolve(args.words)).filter((w) => !args.speaker || w.speaker === args.speaker);
+  const spans = [];
+  for (const w of ws) { const s = spans[spans.length - 1]; if (s && w.start - s[1] < 0.6) s[1] = Math.max(s[1], w.end); else spans.push([w.start, w.end]); }
+  const keys = [[0, base]];
+  for (const [a, b] of spans) keys.push([r2(Math.max(0, a - 0.25)), base], [r2(a), base + dip], [r2(b), base + dip], [r2(b + 0.4), base]);
+  tr.volume = keys.filter((k, i) => !i || k[0] > keys[i - 1][0]);
+  saveDoc(p, doc);
+  console.log(`${tr.name}: ${dip} dB under ${spans.length} spoken stretch(es)${args.speaker ? ` of ${args.speaker}` : ''}`);
+}
+
+// ---------- review comments ----------
+// One file per note in <ad>/comments/ (written by Studio): { id, t, box?: [x, y, w, h] (fractions), text, plan, status, reply? }
+
+// What shows at time t in a document: per track, the clips live then (index, what it is, its span).
+function onScreen(doc, t) {
+  const out = {};
+  for (const tr of doc.tracks || []) {
+    const sorted = [...(tr.clips || [])].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    sorted.forEach((c, i) => {
+      const end = c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : Infinity);
+      if (t < (c.at ?? 0) || t >= end) return;
+      const line = c.lines?.find((l) => t >= l.at && t < l.end);
+      if (c.lines && !line) return;
+      const [what, a, b] = line ? [`caption line "${line.text}"`, line.at, line.end] : [c.text != null ? `text "${c.text}"` : c.src || c.draw || c.type, c.at ?? 0, end];
+      (out[tr.name] ||= []).push(`#${i} ${what} (${r2(a)}–${Number.isFinite(b) ? `${r2(b)}s` : 'end'})`);
+    });
+  }
+  return out;
+}
+
+async function commentsCmd(dir) {
+  const ad = resolve(dir || '.'), cdir = join(ad, 'comments');
+  const read = () => (existsSync(cdir) ? readdirSync(cdir).filter((f) => f.endsWith('.json')).map((f) => { try { return JSON.parse(readFileSync(join(cdir, f), 'utf8')); } catch { return null; } }).filter(Boolean) : []);
+  const save = (c) => writeFileSync(join(cdir, `${c.id}.json`), JSON.stringify(c, null, 1) + '\n');
+  if (args.done) {
+    const c = read().find((x) => x.id === args.done) || die(`no comment ${args.done}`);
+    const span = args.span && String(args.span).split('-').map(Number);
+    if (span && (span.length !== 2 || !span.every(Number.isFinite))) die('--span is <from>-<to> in seconds');
+    save({ ...c, status: 'done', ...(args.reply && { reply: String(args.reply) }), ...(span && { span }) });
+    return console.log(`done: ${c.id}`);
+  }
+  let open = read().filter((c) => c.status === 'open');
+  if (!open.length && args.wait) {
+    mkdirSync(cdir, { recursive: true });
+    open = await new Promise((res) => {
+      const w = watch(cdir, () => { const o = read().filter((c) => c.status === 'open'); if (o.length) { w.close(); setTimeout(() => res(read().filter((c) => c.status === 'open')), 300); } });
+    });
+  }
+  open.sort((a, b) => a.t - b.t);
+  for (const c of open) save({ ...c, status: 'seen' });
+  // Each note with what was on screen, and one sheet of their frames with the marked spots outlined.
+  const plans = [...new Set(open.map((c) => c.plan || 'edit.json'))].filter((f) => existsSync(join(ad, f)));
+  for (const plan of plans) {
+    const doc = readDoc(join(ad, plan)), mine = open.filter((c) => (c.plan || 'edit.json') === plan);
+    for (const c of mine) c.showing = onScreen(doc, c.t);
+    const sheet = join(tmpdir(), 'ad-harness-edit', `notes-${basename(ad).split('_')[0]}-${plan.replace('.json', '')}.png`);
+    mkdirSync(dirname(sheet), { recursive: true });
+    await runPage(join(ad, plan), { mode: 'frames', at: mine.map((c) => c.t).join(','), boxes: JSON.stringify(mine.map((c) => c.box || null)), scale: 0.4 }, sheet);
+    for (const c of mine) c.sheet = sheet;
+  }
+  console.log(JSON.stringify(open, null, 1));
+}
+
+const p = target && resolve(target);
+const cmds = { check, place: placeCmd, cut: cutCmd, reframe: reframeCmd, export: exportCmd, frames: framesCmd, captions: captionsCmd, match: matchCmd, moves: movesCmd, duck: duckCmd, comments: commentsCmd };
+if (!cmds[cmd]) { console.log(HELP); process.exit(1); }
+Promise.resolve(cmds[cmd](cmd === 'comments' ? target : p)).catch((e) => die(e?.stack || String(e)));
