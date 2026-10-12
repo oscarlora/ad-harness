@@ -14,7 +14,7 @@ const API = 'https://www.googleapis.com/drive/v3';
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const ALL_DRIVES = 'supportsAllDrives=true&includeItemsFromAllDrives=true';
 
-export const auth = (token) => ({ Authorization: `Bearer ${token}` });
+const auth = (token) => ({ Authorization: `Bearer ${token}` });
 export async function driveApi(url, token, { method = 'GET', headers = {}, body } = {}) {
   const r = await fetch(url, { method, headers: { ...auth(token), ...headers }, body });
   const text = await r.text();
@@ -23,7 +23,6 @@ export async function driveApi(url, token, { method = 'GET', headers = {}, body 
   if (!r.ok) throw new Error(`Drive ${method} ${url.split('?')[0]} -> HTTP ${r.status}: ${j.error?.message || text.slice(0, 200)}`);
   return j;
 }
-export const driveGet = (url, token) => driveApi(url, token);
 const credKeys = (W) => ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'].map((k) => `${W.toUpperCase()}_DRIVE_${k}`);
 export const hasDriveCreds = (workspace) => { const env = loadEnv(); return credKeys(workspace).every((k) => env[k]); };
 
@@ -58,7 +57,7 @@ export async function listChildren(folderId, token, { foldersOnly = false } = {}
   let pageToken;
   do {
     const q = `'${folderId}' in parents and trashed=false` + (foldersOnly ? ` and mimeType='${FOLDER_MIME}'` : '');
-    const r = await driveGet(`${API}/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=200&orderBy=name&${ALL_DRIVES}${pageToken ? `&pageToken=${pageToken}` : ''}`, token);
+    const r = await driveApi(`${API}/files?q=${encodeURIComponent(q)}&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size)&pageSize=200&orderBy=name&${ALL_DRIVES}${pageToken ? `&pageToken=${pageToken}` : ''}`, token);
     out.push(...(r.files || []));
     pageToken = r.nextPageToken;
   } while (pageToken);
@@ -84,7 +83,7 @@ async function publicFolder(folderId) {
 
 // `token` null → public view. Returns { name, files: [{ id, name, mimeType, modifiedTime, size, native }] }.
 export async function listTree(folderId, token) {
-  const name = token ? (await driveGet(`${API}/files/${folderId}?fields=name&supportsAllDrives=true`, token)).name : null;
+  const name = token ? (await driveApi(`${API}/files/${folderId}?fields=name&supportsAllDrives=true`, token)).name : null;
   const files = [], seen = new Set();
   let rootName = name;
   async function walk(id) {
@@ -149,7 +148,7 @@ export const writeDriveSources = (paths, data) => { mkdirSync(paths.catalog, { r
 
 export async function findChild(parent, name, token, { foldersOnly = false } = {}) {
   const q = `'${parent}' in parents and name='${name.replace(/'/g, "\\'")}' and trashed=false` + (foldersOnly ? ` and mimeType='${FOLDER_MIME}'` : '');
-  return ((await driveGet(`${API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&${ALL_DRIVES}`, token)).files || [])[0];
+  return ((await driveApi(`${API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&${ALL_DRIVES}`, token)).files || [])[0];
 }
 
 export async function createFolder(parent, name, token) {

@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync, closeSync, watch } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { brandDirFrom, die, ffprobeJson, mimeOf, parseArgs, run } from './lib/catalog.mjs';
+import { brandDirFrom, die, ffprobeJson, mimeOf, parseArgs, round, run, usage } from './lib/catalog.mjs';
 
 const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
 
@@ -68,16 +68,17 @@ Document (times are seconds on the timeline clock; any number marked * also take
   grade: exposure* (stops), contrast*, saturation*, gamma* (1 = as shot), temperature*, tint* (-1..1),
     vignette*, grain* (0..1), match ([gL, ga, gb, oL, oa, ob]: Lab × g + o, from \`match\`)`;
 
-const args = parseArgs(process.argv.slice(2), { flags: ['wait'] });
+const args = parseArgs(process.argv.slice(2), { flags: ['wait'], help: HELP });
 const [cmd, target] = args._;
-if (args.help || !cmd) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+if (!cmd) usage(HELP);
 
 const readDoc = (p) => {
   if (!p || !existsSync(p)) die(`edit document not found: ${p || '(none given)'}`);
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch (e) { die(`${p}: ${e.message}`); }
 };
 const saveDoc = (p, doc) => writeFileSync(p, JSON.stringify(doc, null, 1) + '\n');
-const r2 = (n) => Math.round(n * 100) / 100;
+// A clip's end on the timeline: end, else at + dur, else `open` (media run to the source's end).
+const clipEnd = (c, open = Infinity) => c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : open);
 const trackNamed = (doc, name) => (doc.tracks || []).find((tr) => tr.name === name) || die(`no track named "${name}" (tracks: ${(doc.tracks || []).map((t) => t.name).join(', ')})`);
 
 // ---------- check ----------
@@ -90,14 +91,14 @@ function check(p) {
     lines.push(`${tr.name}${tr.mute ? ' (muted)' : ''}${tr.hidden ? ' (hidden)' : ''}: ${clips.length} clip(s)`);
     clips.forEach((c, i) => {
       if (c.src && !existsSync(resolve(dir, c.src))) problems.push(`${tr.name}: missing ${c.src}`);
-      const stop = c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : null);
+      const stop = clipEnd(c, null);
       if (stop != null) end = Math.max(end, stop);
       const next = clips[i + 1];
       const video = (x) => x?.src && (x.type || 'video') === 'video' && !/\.(mp3|wav|m4a|aac|ogg|opus|flac|png|jpe?g|webp|gif|avif)$/i.test(x.src);
-      if (stop != null && video(c) && video(next) && next.at > stop + 0.001) problems.push(`${tr.name}: ${r2(next.at - stop)}s of black at ${r2(stop)}s`);
+      if (stop != null && video(c) && video(next) && next.at > stop + 0.001) problems.push(`${tr.name}: ${round(next.at - stop)}s of black at ${round(stop)}s`);
     });
   }
-  console.log(`${(doc.size || [1080, 1920]).join('x')} @ ${doc.fps || 30} fps · ${r2(doc.duration ?? end)}s`);
+  console.log(`${(doc.size || [1080, 1920]).join('x')} @ ${doc.fps || 30} fps · ${round(doc.duration ?? end)}s`);
   for (const l of lines) console.log('  ' + l);
   for (const pr of problems) console.log('PROBLEM: ' + pr);
   if (!problems.length) console.log('ok');
@@ -148,7 +149,7 @@ function placeCmd(p) {
 // ---------- cut ----------
 const isKeys = (v) => Array.isArray(v) && Array.isArray(v[0]);
 // Keyframes on the timeline clock after removing [a, b): keys inside drop, later ones move up.
-const cutKeys = (v, a, b) => v.filter(([t]) => t < a || t >= b).map(([t, ...rest]) => [t >= b ? r2(t - (b - a)) : t, ...rest]);
+const cutKeys = (v, a, b) => v.filter(([t]) => t < a || t >= b).map(([t, ...rest]) => [t >= b ? round(t - (b - a)) : t, ...rest]);
 function cutValues(o, a, b) {
   for (const [k, v] of Object.entries(o || {})) {
     if (isKeys(v)) o[k] = cutKeys(v, a, b);
@@ -159,30 +160,30 @@ function cutValues(o, a, b) {
 function cutCmd(p) {
   const a = +args.from, b = +args.to;
   if (!(b > a)) die('--from and --to (seconds, from < to) are required');
-  const doc = readDoc(p), d = b - a, shift = (t) => (t >= b ? r2(t - d) : t > a ? a : t);
+  const doc = readDoc(p), d = b - a, shift = (t) => (t >= b ? round(t - d) : t > a ? a : t);
   for (const tr of doc.tracks || []) {
     cutValues(tr, a, b);
     const out = [];
     for (const c of tr.clips || []) {
-      const at = c.at ?? 0, end = c.end ?? (c.dur != null ? at + c.dur : Infinity), rate = c.rate ?? 1;
+      const at = c.at ?? 0, end = clipEnd(c), rate = c.rate ?? 1;
       cutValues(c, a, b);
       if (c.lines) c.lines = c.lines.filter((l) => l.at < a || l.at >= b).map((l) => ({ ...l, at: shift(l.at), end: shift(l.end), ...(l.words && { words: l.words.map(([w, s, e, ...x]) => [w, shift(s), shift(e), ...x]) }) }));
-      if (end <= a || at >= b) { if (at >= b) { c.at = r2(at - d); if (c.end != null) c.end = r2(end - d); } out.push(c); continue; }
+      if (end <= a || at >= b) { if (at >= b) { c.at = round(at - d); if (c.end != null) c.end = round(end - d); } out.push(c); continue; }
       if (at >= a && end <= b) continue; // wholly inside: gone
       if (at < a && end > b && c.src && !c.lines) { // spans the cut: split, the second part skips the cut's source
         out.push({ ...c, end: a });
-        out.push({ ...c, at: a, in: r2((c.in ?? 0) + (b - at) * rate), ...(c.end != null && { end: r2(end - d) }), transition: undefined });
+        out.push({ ...c, at: a, in: round((c.in ?? 0) + (b - at) * rate), ...(c.end != null && { end: round(end - d) }), transition: undefined });
         continue;
       }
-      if (at < a) { if (c.end != null || c.dur != null) { c.end = r2(Math.max(a, end - d)); delete c.dur; } } // trims its tail (or the cut, inside it)
-      else { c.in = r2((c.in ?? 0) + (b - at) * rate); c.at = a; if (c.end != null) c.end = r2(end - d); } // trims its head
+      if (at < a) { if (c.end != null || c.dur != null) { c.end = round(Math.max(a, end - d)); delete c.dur; } } // trims its tail (or the cut, inside it)
+      else { c.in = round((c.in ?? 0) + (b - at) * rate); c.at = a; if (c.end != null) c.end = round(end - d); } // trims its head
       out.push(c);
     }
     tr.clips = out.filter((c) => c.end == null || c.end - (c.at ?? 0) >= 1 / (doc.fps || 30)); // slivers left by rounding
   }
-  if (doc.duration != null) doc.duration = r2(doc.duration - d);
+  if (doc.duration != null) doc.duration = round(doc.duration - d);
   saveDoc(p, doc);
-  console.log(`cut ${r2(a)}–${r2(b)}s (${r2(d)}s) from every track`);
+  console.log(`cut ${round(a)}–${round(b)}s (${round(d)}s) from every track`);
 }
 
 // ---------- reframe ----------
@@ -307,8 +308,8 @@ async function exportCmd(p) {
     });
     const meta = ffprobeJson(out);
     const rel = relative(dirname(p), out).split(sep).join('/');
-    setStatus(p, { state: 'done', out: rel, seconds: r2((Date.now() - t0) / 1000) });
-    console.error(`done      ${r2(+meta.format.duration)}s in ${r2((Date.now() - t0) / 1000)}s`);
+    setStatus(p, { state: 'done', out: rel, seconds: round((Date.now() - t0) / 1000) });
+    console.error(`done      ${round(+meta.format.duration)}s in ${round((Date.now() - t0) / 1000)}s`);
     console.log('Saved: ' + out);
   } catch (e) {
     setStatus(p, { state: 'failed', error: String(e.message || e) });
@@ -350,7 +351,7 @@ function captionsCmd(p) {
     const next = groups[i + 1];
     const last = grp[grp.length - 1].end;
     const end = next && next[0].start - last < 1.2 ? next[0].start : last + 0.4;
-    return { text: grp.map((w) => clean(w.word)).join(' '), at: r2(grp[0].start), end: r2(end), words: grp.map((w) => [clean(w.word), r2(w.start), r2(w.end)]) };
+    return { text: grp.map((w) => clean(w.word)).join(' '), at: round(grp[0].start), end: round(end), words: grp.map((w) => [clean(w.word), round(w.start), round(w.end)]) };
   });
   const tr = (doc.tracks ||= []).find((t) => t.name === (args.track || 'Captions')) || (doc.tracks.unshift({ name: args.track || 'Captions', clips: [] }), doc.tracks[0]);
   let clip = tr.clips.find((c) => c.type === 'captions' || c.lines);
@@ -436,7 +437,7 @@ function movesCmd(p) {
     if (peaks.length && x.t - peaks[peaks.length - 1].t < 0.6) { if (x.e > peaks[peaks.length - 1].e) peaks[peaks.length - 1] = x; return; }
     peaks.push(x);
   });
-  console.log(JSON.stringify(peaks.map((x) => ({ t: r2(x.t), strength: r2(x.e / (floor || 1)) }))));
+  console.log(JSON.stringify(peaks.map((x) => ({ t: round(x.t), strength: round(x.e / (floor || 1)) }))));
 }
 
 // ---------- ducking ----------
@@ -447,7 +448,7 @@ function duckCmd(p) {
   const spans = [];
   for (const w of ws) { const s = spans[spans.length - 1]; if (s && w.start - s[1] < 0.6) s[1] = Math.max(s[1], w.end); else spans.push([w.start, w.end]); }
   const keys = [[0, base]];
-  for (const [a, b] of spans) keys.push([r2(Math.max(0, a - 0.25)), base], [r2(a), base + dip], [r2(b), base + dip], [r2(b + 0.4), base]);
+  for (const [a, b] of spans) keys.push([round(Math.max(0, a - 0.25)), base], [round(a), base + dip], [round(b), base + dip], [round(b + 0.4), base]);
   tr.volume = keys.filter((k, i) => !i || k[0] > keys[i - 1][0]);
   saveDoc(p, doc);
   console.log(`${tr.name}: ${dip} dB under ${spans.length} spoken stretch(es)${args.speaker ? ` of ${args.speaker}` : ''}`);
@@ -462,12 +463,12 @@ function onScreen(doc, t) {
   for (const tr of doc.tracks || []) {
     const sorted = [...(tr.clips || [])].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     sorted.forEach((c, i) => {
-      const end = c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : Infinity);
+      const end = clipEnd(c);
       if (t < (c.at ?? 0) || t >= end) return;
       const line = c.lines?.find((l) => t >= l.at && t < l.end);
       if (c.lines && !line) return;
       const [what, a, b] = line ? [`caption line "${line.text}"`, line.at, line.end] : [c.text != null ? `text "${c.text}"` : c.src || c.draw || c.type, c.at ?? 0, end];
-      (out[tr.name] ||= []).push(`#${i} ${what} (${r2(a)}–${Number.isFinite(b) ? `${r2(b)}s` : 'end'})`);
+      (out[tr.name] ||= []).push(`#${i} ${what} (${round(a)}–${Number.isFinite(b) ? `${round(b)}s` : 'end'})`);
     });
   }
   return out;
@@ -508,5 +509,5 @@ async function commentsCmd(dir) {
 
 const p = target && resolve(target);
 const cmds = { check, place: placeCmd, cut: cutCmd, reframe: reframeCmd, export: exportCmd, frames: framesCmd, captions: captionsCmd, match: matchCmd, moves: movesCmd, duck: duckCmd, comments: commentsCmd };
-if (!cmds[cmd]) { console.log(HELP); process.exit(1); }
+if (!cmds[cmd]) usage(HELP);
 Promise.resolve(cmds[cmd](cmd === 'comments' ? target : p)).catch((e) => die(e?.stack || String(e)));

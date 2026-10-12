@@ -1,8 +1,5 @@
 // clean-image.mjs — strip metadata (C2PA, EXIF, XMP, text chunks) from PNG/JPEG without touching
 // pixels; other formats pass through. generate-image.mjs runs every saved file through it.
-// Usage: node tools/lib/clean-image.mjs <file> [file …]
-import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Ancillary PNG chunks that carry metadata only (caBX = C2PA manifest).
@@ -42,13 +39,3 @@ export function cleanImage(buf) {
   return buf;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const files = process.argv.slice(2);
-  if (!files.length) { console.error('Usage: node tools/lib/clean-image.mjs <file> [file …]'); process.exit(1); }
-  for (const f of files) {
-    const before = readFileSync(f);
-    const after = cleanImage(before);
-    writeFileSync(f, after);
-    console.log(`${f}: ${before.length - after.length} bytes of metadata removed`);
-  }
-}

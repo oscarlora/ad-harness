@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 // search-media.mjs — search the media catalog: filters narrow, then keyword and vector rankings are
 // fused. A video scene hit returns its time range. Without vectors or a key, keywords alone (no npm deps).
-//
-// Usage:
-//   node tools/search-media.mjs --media <media dir> [--query "bowl de pollo visto desde arriba"] \
-//        [--like <id>] [--type image|video|audio] [--orientation portrait|landscape|square] \
-//        [--product "Bowl de Pollo"] [--person "Kathe"] [--source brand|generated|external] \
-//        [--keywords-only] [--limit 20] [--json]
-//   --like <id>  rank by similarity to that asset's description (combine with filters)
-import { pathToFileURL } from 'node:url';
-import { catalogPaths, readRecords, readProducts, parseArgs, mediaDirFrom } from './lib/catalog.mjs';
+import { catalogPaths, readRecords, readRoster, parseArgs, mediaDirFrom, usage } from './lib/catalog.mjs';
 import { gatewayKey, embed, queryText, unpackVec, cosine } from './lib/gateway.mjs';
 import { readVectors } from './embed-media.mjs';
 
+const HELP = `search-media.mjs — search a brand's media catalog
+
+  node tools/search-media.mjs --media <media dir> [--query "bowl de pollo visto desde arriba"]
+       [--like <id>] [--type image|video|audio] [--orientation portrait|landscape|square]
+       [--product "Bowl de Pollo"] [--person "Kathe"] [--source brand|generated|external]
+       [--keywords-only] [--limit 20] [--json]
+    --like <id>      rank by similarity to that asset's description (combine with filters)
+    --keywords-only  skip the vector ranking
+    --json           machine-readable results`;
+
 function loadAliases(mediaDir) {
   const map = new Map(); // alias/canonical (lower) -> [canonical names]
-  for (const prod of readProducts(mediaDir)) {
+  for (const prod of readRoster(mediaDir).products) {
     const names = [prod.name, ...(prod.aliases || [])].filter(Boolean);
     for (const n of names) map.set(String(n).toLowerCase(), names);
   }
@@ -28,12 +30,11 @@ const haystacks = (r) => ({
   people: lc([...(r.people || []), ...(r.unknown_people || []).map((u) => u.description)].join(' ')),
   tags: lc((r.tags || []).join(' ')),
   name: lc(r.file?.name),
-  text: lc(r.text_in_media),
   vis: lc(r.visual_description) + ' ' + lc((r.scenes || []).map((s) => s.description).join(' ')),
   audio: lc(r.audio_description) + ' ' + lc(r.audio_transcript?.text),
   source: lc(r.source?.name),
 });
-const WEIGHT = { products: 5, people: 4, tags: 3, name: 3, text: 2, vis: 1, audio: 1, source: 1 };
+const WEIGHT = { products: 5, people: 4, tags: 3, name: 3, vis: 1, audio: 1, source: 1 };
 
 function keywordRank(rows, tokens) {
   return rows.map((r) => {
@@ -70,7 +71,7 @@ function fuse(lists, k = 60) {
   return [...acc.values()].sort((a, b) => b.score - a.score);
 }
 
-export async function search(mediaDir, opts = {}) {
+async function search(mediaDir, opts = {}) {
   const recs = readRecords(catalogPaths(mediaDir));
   const aliases = loadAliases(mediaDir);
   const expand = (term) => { const t = lc(term); const set = new Set([t]); if (aliases.has(t)) aliases.get(t).forEach((n) => set.add(lc(n))); return [...set]; };
@@ -109,22 +110,20 @@ export async function search(mediaDir, opts = {}) {
   return opts.limit ? Object.assign(res.slice(0, opts.limit), { mode }) : res;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const a = parseArgs(process.argv.slice(2));
-  const mediaArg = a.media || a._[0];
-  if (!mediaArg) { console.error('Usage: node tools/search-media.mjs --media <media dir> [--query ..] [--like <id>] [--type ..] [--orientation ..] [--product ..] [--person ..] [--source ..] [--keywords-only] [--limit N] [--json]'); process.exit(1); }
-  const mediaDir = mediaDirFrom(mediaArg);
-  const opts = { query: a.query === true ? '' : a.query, like: a.like, type: a.type, orientation: a.orientation, product: a.product, person: a.person, source: a.source, keywordsOnly: !!a['keywords-only'], limit: a.limit ? +a.limit : 20 };
-  const res = await search(mediaDir, opts);
-  if (a.json) {
-    console.log(JSON.stringify(res.map((r) => ({ id: r.id, type: r.file?.type, name: r.file?.name, path: `inputs/media/${r.file?.name}`, proxy: r.file?.type === 'image' ? `_catalog/proxies/${r.id}.jpg` : `_catalog/thumbs/${r.id}.jpg`, match: r._match, products: r.products, people: r.people })), null, 2));
-  } else {
-    console.log(`${res.length} result${res.length === 1 ? '' : 's'}${opts.query ? ` for "${opts.query}"` : opts.like ? ` like ${opts.like}` : ''} [${res.mode}]:`);
-    for (const r of res) {
-      const snip = (r.visual_description || r.audio_description || r.audio_transcript?.text || '').replace(/\s+/g, ' ').slice(0, 90);
-      console.log(`  ${r.id}  [${r.file?.type}/${r.file?.orientation || '?'}]  ${r.file?.name}${r._match ? `  ▸ scene ${r._match.scene} @ ${r._match.start}–${r._match.end}s` : ''}`);
-      if (r.products?.length) console.log(`        products: ${r.products.join(', ')}`);
-      if (snip) console.log(`        ${snip}…`);
-    }
+const a = parseArgs(process.argv.slice(2), { flags: ['keywords-only', 'json'], help: HELP });
+const mediaArg = a.media || a._[0];
+if (!mediaArg) usage(HELP);
+const mediaDir = mediaDirFrom(mediaArg);
+const opts = { query: a.query === true ? '' : a.query, like: a.like, type: a.type, orientation: a.orientation, product: a.product, person: a.person, source: a.source, keywordsOnly: !!a['keywords-only'], limit: a.limit ? +a.limit : 20 };
+const res = await search(mediaDir, opts);
+if (a.json) {
+  console.log(JSON.stringify(res.map((r) => ({ id: r.id, type: r.file?.type, name: r.file?.name, path: `inputs/media/${r.file?.name}`, proxy: r.file?.type === 'image' ? `_catalog/proxies/${r.id}.jpg` : `_catalog/thumbs/${r.id}.jpg`, match: r._match, products: r.products, people: r.people })), null, 2));
+} else {
+  console.log(`${res.length} result${res.length === 1 ? '' : 's'}${opts.query ? ` for "${opts.query}"` : opts.like ? ` like ${opts.like}` : ''} [${res.mode}]:`);
+  for (const r of res) {
+    const snip = (r.visual_description || r.audio_description || r.audio_transcript?.text || '').replace(/\s+/g, ' ').slice(0, 90);
+    console.log(`  ${r.id}  [${r.file?.type}/${r.file?.orientation || '?'}]  ${r.file?.name}${r._match ? `  ▸ scene ${r._match.scene} @ ${r._match.start}–${r._match.end}s` : ''}`);
+    if (r.products?.length) console.log(`        products: ${r.products.join(', ')}`);
+    if (snip) console.log(`        ${snip}…`);
   }
 }

@@ -1,25 +1,23 @@
 #!/usr/bin/env node
 // generate-video.mjs — generate or edit video ads via Segmind, kie.ai or the Vercel AI Gateway.
-//
-// Usage:
-//   node tools/generate-video.mjs --prompt-file <prompt.txt> --first-frame <img> --out <clip.mp4>
-//   node tools/generate-video.mjs --model flux-3-video-edit --video <clip.mp4> \
-//     --prompt "Change the gold laptop to a matte black one" --out <edit.mp4>
-//
 // Which provider carries which model: tools/lib/providers.mjs (MODELS) — change it there.
 // Each saved file gets a <stem>.gen.json sidecar.
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { applyEnv, die, mimeOf, parseArgs } from './lib/catalog.mjs';
+import { applyEnv, die, mimeOf, parseArgs, usage } from './lib/catalog.mjs';
 import {
-  PROVIDER_ORDER, errorText, gatewayClient, kieJob, kieUpload, logGatewayWarnings, modelEntry, planRoute, presignRef, preSubmit,
-  runRoute, saveResults, segmindJob, workspaceKeys, writeSidecars,
+  MODELS, PROVIDER_ORDER, errorText, gatewayClient, kieJob, kieUpload, logGatewayWarnings, modelEntry, planRoute, presignRef, preSubmit,
+  runRoute, saveResults, segmindJob, times, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
 
 applyEnv();
 
 const HELP = `generate-video.mjs — video generator/editor. Providers in order: ${PROVIDER_ORDER.join(' -> ')}
+
+  node tools/generate-video.mjs --prompt-file <prompt.txt> --first-frame <img> --out <clip.mp4>
+  node tools/generate-video.mjs --model flux-3-video-edit --video <clip.mp4> \\
+    --prompt "Change the gold laptop to a matte black one" --out <edit.mp4>
 
 Required:
   --prompt "<text>"        Inline prompt, OR
@@ -46,7 +44,8 @@ Optional:
                            flux-3-video-edit (Segmind only): edits exactly one --video (MP4, max 15s /
                              50 MB) from a prompt naming only the change; output keeps the clip's shape
                            gemini-omni-1.1-flash (kie only): native audio + voices, always on
-                           a raw Gateway id (sent to kie.ai as-is with --provider kie)
+                           Any provider's id for these works too (e.g. bytedance/seedance-2.5).
+                           Else a raw Gateway id (sent to kie.ai as-is with --provider kie)
   --aspect <ratio>         1:1 4:3 3:4 16:9 9:16 21:9 (9x16 also works). Default: 9:16 on minimax and
                            omni, adaptive on Seedance. minimax takes adaptive only with --image refs;
                            omni takes 9:16 or 16:9 only
@@ -64,20 +63,8 @@ Optional:
 Env: <WORKSPACE>_SEGMIND_API_KEY / <WORKSPACE>_KIE_API_KEY / <WORKSPACE>_AI_GATEWAY_API_KEY; the
 workspace comes from --out.`;
 
-// Every accepted spelling -> its short model name.
-const KNOWN_MODELS = {
-  'minimax-h3-max': 'minimax-h3-max', 'minimax/minimax-h3-max': 'minimax-h3-max',
-  'seedance-2': 'seedance-2', 'seedance-2.0': 'seedance-2', 'bytedance/seedance-2': 'seedance-2',
-  'seedance-2-mini': 'seedance-2-mini', 'seedance-2.0-mini': 'seedance-2-mini',
-  'bytedance/seedance-2-mini': 'seedance-2-mini',
-  'seedance-2.5': 'seedance-2.5', 'seedance-2-5': 'seedance-2.5',
-  'bytedance/seedance-2-5': 'seedance-2.5',
-  'flux-3-video-edit': 'flux-3-video-edit',
-  'gemini-omni-1.1-flash': 'gemini-omni-1.1-flash', 'google/gemini-omni-flash-1-1': 'gemini-omni-1.1-flash',
-};
-
-// Per-model limits on Segmind/kie. Unknown raw ids use the seedance-2 row and skip the resolution
-// check. minimax video/audio refs work on kie only.
+// Per-model limits on Segmind/kie. Raw ids use the seedance-2 row and skip the resolution check.
+// minimax video/audio refs work on kie only.
 const MODEL_CAPS = {
   'minimax-h3-max':  { minDuration: 5, maxDuration: 15, images: 9, videos: 3, audios: 3, resolutions: ['480p', '768p'], silent: true, aspect: '9:16' },
   'seedance-2':      { minDuration: 4, maxDuration: 15, images: 9,  videos: 3,  audios: 3,  resolutions: ['480p', '720p', '1080p'] },
@@ -97,7 +84,7 @@ const GATEWAY_VIDEO_CAPS = {
 // The AI SDK takes WxH. 768p is not documented on the Gateway — verify on first use.
 const GATEWAY_RESOLUTION = { '480p': '854x480', '720p': '1280x720', '768p': '1366x768', '1080p': '1920x1080' };
 
-// Why the Gateway can't carry this request (null = it can). Unknown raw ids get no checks.
+// Why the Gateway can't carry this request (null = it can). Raw ids get no checks.
 function gatewayBlocker(gwId, { resolution, aspect, videos, images, audios, frames }) {
   const c = GATEWAY_VIDEO_CAPS[gwId];
   if (!c) return null;
@@ -110,33 +97,26 @@ function gatewayBlocker(gwId, { resolution, aspect, videos, images, audios, fram
   return null;
 }
 
-// kie request body (Seedance).
-function kieVideoInput(opts) {
-  const input = { prompt: opts.prompt, resolution: opts.resolution, duration: opts.duration };
-  if (opts.aspect) input.aspect_ratio = opts.aspect;
-  if (opts.generateAudio !== undefined) input.generate_audio = opts.generateAudio;
-  if (opts.firstFrameUrl) input.first_frame_url = opts.firstFrameUrl;
-  if (opts.lastFrameUrl) input.last_frame_url = opts.lastFrameUrl;
-  if (opts.imageUrls.length) input.reference_image_urls = opts.imageUrls;
-  if (opts.videoUrls.length) input.reference_video_urls = opts.videoUrls;
-  if (opts.audioUrls.length) input.reference_audio_urls = opts.audioUrls;
+// Reference fields per provider: [images, videos, audios].
+const REF_FIELDS = {
+  segmind: ['reference_images', 'reference_videos', 'reference_audios'],
+  kie: ['reference_image_urls', 'reference_video_urls', 'reference_audio_urls'],
+};
+const withRefs = (input, opts, provider) => {
+  REF_FIELDS[provider].forEach((field, i) => { const urls = [opts.imageUrls, opts.videoUrls, opts.audioUrls][i]; if (urls.length) input[field] = urls; });
   return input;
-}
+};
 
-// Segmind request body (Seedance). generate_audio is always explicit (default on): Segmind's own
-// default differs between models.
-function segmindVideoInput(opts) {
-  const input = {
-    prompt: opts.prompt, resolution: opts.resolution, duration: opts.duration,
-    generate_audio: opts.generateAudio !== undefined ? opts.generateAudio : true,
-  };
+// Seedance request body. Segmind always gets generate_audio (default on): its own default differs
+// between models.
+function seedanceInput(provider, opts) {
+  const input = { prompt: opts.prompt, resolution: opts.resolution, duration: opts.duration };
+  const audio = provider === 'segmind' ? opts.generateAudio ?? true : opts.generateAudio;
+  if (audio !== undefined) input.generate_audio = audio;
   if (opts.aspect) input.aspect_ratio = opts.aspect;
   if (opts.firstFrameUrl) input.first_frame_url = opts.firstFrameUrl;
   if (opts.lastFrameUrl) input.last_frame_url = opts.lastFrameUrl;
-  if (opts.imageUrls.length) input.reference_images = opts.imageUrls;
-  if (opts.videoUrls.length) input.reference_videos = opts.videoUrls;
-  if (opts.audioUrls.length) input.reference_audios = opts.audioUrls;
-  return input;
+  return withRefs(input, opts, provider);
 }
 
 // MiniMax H3 Max on Segmind: Reference-to-Video with --image refs, else Turbo. Returns [slug, input].
@@ -158,11 +138,8 @@ function segmindMinimaxInput(base, opts) {
 function kieMinimaxInput(base, opts) {
   const input = { prompt: opts.prompt, duration: opts.duration, resolution: '768P' };
   if (opts.imageUrls.length || opts.videoUrls.length || opts.audioUrls.length) {
-    if (opts.imageUrls.length) input.reference_image_urls = opts.imageUrls;
-    if (opts.videoUrls.length) input.reference_video_urls = opts.videoUrls;
-    if (opts.audioUrls.length) input.reference_audio_urls = opts.audioUrls;
     if (opts.aspect) input.aspect_ratio = opts.aspect;
-    return [`${base}/reference-to-video`, input];
+    return [`${base}/reference-to-video`, withRefs(input, opts, 'kie')];
   }
   if (opts.firstFrameUrl || opts.lastFrameUrl) {
     if (opts.firstFrameUrl) input.first_frame_url = opts.firstFrameUrl;
@@ -183,9 +160,9 @@ function kieOmniInput(opts) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { repeat: ['video', 'image', 'audio'] });
+  const args = parseArgs(process.argv.slice(2), { repeat: ['video', 'image', 'audio'], flags: ['no-audio', 'generate-audio'], help: HELP });
   for (const k of ['video', 'image', 'audio']) args[k] ||= [];
-  if (args.help || (!args.prompt && !args['prompt-file'])) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+  if (!args.prompt && !args['prompt-file']) usage(HELP);
   if (!args.out) die('--out is required');
   const { W, keys } = workspaceKeys(args.out);
 
@@ -194,16 +171,17 @@ async function main() {
 
   const provider = String(args.provider || 'auto').toLowerCase();
   const modelArg = String(args.model || 'minimax-h3-max').toLowerCase();
-  const modelName = KNOWN_MODELS[modelArg] || null;
-  const isRawId = modelArg.includes('/') && !modelName;
-  if (!modelName && !isRawId) die(`unknown --model "${modelArg}" (minimax-h3-max | seedance-2.5 | seedance-2 | seedance-2-mini | flux-3-video-edit | gemini-omni-1.1-flash | a raw creator/model id)`);
-  // A raw id with --provider kie is sent to kie.ai as-is.
-  const entry = isRawId && provider === 'kie' ? { name: modelArg, kind: 'video', kie: modelArg } : modelEntry(modelName || modelArg, 'video');
+  // A MODELS name or any provider's id for it; else a raw id: Gateway only, or sent to kie.ai as-is
+  // with --provider kie.
+  const known = modelEntry(modelArg, 'video');
+  const modelName = MODELS[known?.name]?.kind === 'video' ? known.name : null;
+  if (!modelName && !modelArg.includes('/')) die(`unknown --model "${modelArg}" (minimax-h3-max | seedance-2.5 | seedance-2 | seedance-2-mini | flux-3-video-edit | gemini-omni-1.1-flash | a raw creator/model id)`);
+  const entry = modelName ? known : { name: modelArg, kind: 'video', [provider === 'kie' ? 'kie' : 'gateway']: modelArg };
   const isMinimax = modelName === 'minimax-h3-max';
   const isOmni = modelName === 'gemini-omni-1.1-flash';
-  const gcaps = (entry.gateway && GATEWAY_VIDEO_CAPS[entry.gateway]) || {};
-  const caps = MODEL_CAPS[modelName] || { ...MODEL_CAPS['seedance-2'], ...gcaps.maxDuration && { maxDuration: gcaps.maxDuration }, ...gcaps.minDuration && { minDuration: gcaps.minDuration } };
-  const aspect = args.aspect ? String(args.aspect).replace('x', ':') : caps.aspect || (!modelName && gcaps.adaptive === false ? '9:16' : 'adaptive');
+  const gcaps = GATEWAY_VIDEO_CAPS[entry.gateway] || {};
+  const caps = MODEL_CAPS[modelName] || MODEL_CAPS['seedance-2'];
+  const aspect = args.aspect ? String(args.aspect).replace('x', ':') : caps.aspect || 'adaptive';
   const resolution = ((r) => (isOmni && r === '480p' ? '360p' : r))(String(args.resolution || '480p').toLowerCase());
   const num = Math.max(1, parseInt(args.num || '1', 10));
   const timeout = parseInt(args.timeout || '600', 10);
@@ -220,19 +198,15 @@ async function main() {
     const plan = planRoute({ model: modelName, provider, keys, ws: W, entry, kind: 'video' });
     const runSegmind = async () => {
       const input = { prompt, video: await presignRef(String(args.video[0]), args.out) };
-      return Promise.all(Array.from({ length: num }, () => segmindJob(entry.segmind, input, timeout)));
+      return times(num, () => segmindJob(entry.segmind, input, timeout));
     };
-    const saved = await saveResults(await runRoute(plan, { segmind: runSegmind }, W), args.out, { fallbackExt: 'mp4' });
+    const saved = await saveResults((await runRoute(plan, { segmind: runSegmind }, W)).results, args.out, { fallbackExt: 'mp4' });
     await writeSidecars(saved, { tool: 'generate-video', model: modelName, provider: 'segmind', prompt, refs: [{ role: 'video', path: args.video[0] }] });
     return;
   }
 
-  const silent = caps.silent || gcaps.audio === false;
   const avRefs = args.video.length + args.audio.length;
-  const unsupported = !isMinimax && gcaps.images === false && avRefs ? 'video/audio references (--video/--audio)'
-    : !isMinimax && gcaps.images === false && args.image.length ? 'reference images (--image)'
-    : silent && generateAudio ? 'generated audio (--generate-audio) — it has no audio control' : null;
-  if (unsupported) die(`${modelName || modelArg} takes no ${unsupported}. Pass --model seedance-2.5 for that.`);
+  if (caps.silent && generateAudio) die(`${modelName} takes no generated audio (--generate-audio) — it has no audio control. Pass --model seedance-2.5 for that.`);
   if (isMinimax && (args.image.length || avRefs) && (firstFrame || lastFrame)) die('minimax-h3-max takes --image/--video/--audio references OR --first-frame/--last-frame, not both.');
   if (isMinimax && aspect === 'adaptive' && !args.image.length) die("minimax-h3-max takes 'adaptive' only with --image references — pass --aspect (e.g. 9:16).");
   if (args.video.length > caps.videos) die(`max ${caps.videos} reference videos on ${modelName || 'this model'}`);
@@ -281,13 +255,13 @@ async function main() {
     if (isMinimax) {
       console.error(`WARN: kie has only base MiniMax H3 (not H3 Max)${resolution === '480p' ? ', at 768P/2K — rendering at 768P, not 480p' : ''}.`);
       [model, input] = kieMinimaxInput(entry.kie, opts);
-    } else input = isOmni ? kieOmniInput(opts) : kieVideoInput(opts);
-    return (await Promise.all(Array.from({ length: num }, () => kieJob(model, input, timeout)))).flat();
+    } else input = isOmni ? kieOmniInput(opts) : seedanceInput('kie', opts);
+    return times(num, () => kieJob(model, input, timeout));
   }
   async function runSegmind() {
     const opts = await hostRefs(r2Host);
-    const [slug, input] = isMinimax ? segmindMinimaxInput(entry.segmind, opts) : [entry.segmind, segmindVideoInput(opts)];
-    return Promise.all(Array.from({ length: num }, () => segmindJob(slug, input, timeout)));
+    const [slug, input] = isMinimax ? segmindMinimaxInput(entry.segmind, opts) : [entry.segmind, seedanceInput('segmind', opts)];
+    return times(num, () => segmindJob(slug, input, timeout));
   }
 
   // The Gateway takes refs as URLs only.
@@ -322,12 +296,10 @@ async function main() {
       logGatewayWarnings(r.warnings);
       return r.videos.map((v) => ({ bytes: v.uint8Array, mediaType: v.mediaType }));
     };
-    return (await Promise.all(Array.from({ length: num }, one))).flat();
+    return times(num, one);
   }
 
-  let ran; // the provider that generated
-  const via = (name, run) => () => { ran = name; return run(); };
-  const results = await runRoute(plan, { gateway: via('gateway', runGateway), segmind: via('segmind', runSegmind), kie: via('kie', runKie) }, W);
+  const { results, provider: ran } = await runRoute(plan, { gateway: runGateway, segmind: runSegmind, kie: runKie }, W);
   const saved = await saveResults(results, args.out, { fallbackExt: 'mp4' });
   const refs = [['first-frame', firstFrame], ['last-frame', lastFrame], ...['image', 'video', 'audio'].flatMap((k) => args[k].map((p) => [k, p]))];
   await writeSidecars(saved, {

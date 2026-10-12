@@ -120,10 +120,11 @@ const isKieOutage = (e) => /temporarily unavailable|aspect ratios|Internal error
 // Segmind: 5xx, 429 rate limit, 406 credits, and a FAILED job (422 on the result fetch).
 const isSegmindOutage = (e) => /HTTP 5\d\d|HTTP 429|HTTP 406|HTTP 422|status.*FAILED/i.test(e?.message || '');
 
+// Runs the plan's providers in order until one generates: { results, provider }.
 export async function runRoute(plan, runners, ws) {
   const failover = { gateway: isGatewayPreSubmit, segmind: isSegmindOutage, kie: isKieOutage };
   for (let i = 0; ; i++) {
-    try { return await runners[plan[i]](); }
+    try { return { results: await runners[plan[i]](), provider: plan[i] }; }
     catch (e) {
       if (plan[i] === 'gateway' && isGatewayAuth(e))
         throw userError(`AI Gateway authentication failed for workspace ${ws}. Add ${ws}_AI_GATEWAY_API_KEY=... to .env with a valid key (Vercel → AI Gateway → API keys), or pass --provider segmind|kie.\n  (${e.name}: ${firstLine(e.message)})`);
@@ -285,6 +286,9 @@ export async function kieJob(model, input, timeoutSec, pollMs = 5000) {
     await sleep(pollMs);
   }
 }
+
+// n calls of fn at once (one per variation), flattened: kie returns a list per task.
+export const times = async (n, fn) => (await Promise.all(Array.from({ length: n }, fn))).flat();
 
 // ---------- saving results ----------
 // foo.png + index 1 -> foo_2.png

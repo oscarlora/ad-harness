@@ -1,28 +1,26 @@
-// upload-to-notion.mjs — upsert ONE ad/idea (matched by Name) on a brand's Notion Ads Board; new pages
-// get the next board ID.
-//
-// Usage:
-//   node tools/upload-to-notion.mjs [--list] [--confirm] <spec.json>
-//     --list     list boards whose title contains the brand, with their schema; writes nothing
-//     (plain)    plan: resolve the board and map properties; writes nothing
-//     --confirm  write (only after the plan is confirmed). Upserts by Name, so re-runs never duplicate
-//   node tools/upload-to-notion.mjs next-id <Workspace> "<brand>"   print the next free board ID
-//
-// Board = spec.board (title) or spec.boardId, else the brand's inputs/uploads.json notion.board /
-// notion.boardId, else a search on spec.brand. Properties map to each board's own schema; map odd
-// names with spec.propertyMap, e.g. { "primaryText": "Body", "adCode": "Link" }.
+// upload-to-notion.mjs — upsert one ad on a brand's Notion Ads Board; new pages get the next board ID.
 import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { inferWorkspace, parseArgs, findBrandDir, die } from './lib/catalog.mjs';
-import { notionClient, resolveBoard as findBoard, boardQuery, titleOf } from './lib/notion.mjs';
+import { inferWorkspace, parseArgs, findBrandDir, die, markSent, mimeOf, typeOf, usage } from './lib/catalog.mjs';
+import { notionClient, resolveBoard as findBoard, boardQuery, titleOf, allPages } from './lib/notion.mjs';
 
-const USAGE = 'Usage: node tools/upload-to-notion.mjs [--list] [--confirm] <spec.json>  |  next-id <Workspace> "<brand>"';
-const args = parseArgs(process.argv.slice(2), { flags: ['list', 'confirm'] });
+const HELP = `upload-to-notion.mjs — upsert one ad/idea (matched by Name) on a brand's Notion Ads Board
+
+  node tools/upload-to-notion.mjs [--list] [--confirm] <spec.json>
+    --list     list boards whose title contains the brand, with their schema; writes nothing
+    (plain)    plan: resolve the board and map properties; writes nothing
+    --confirm  write (only after the plan is confirmed). Upserts by Name, so re-runs never duplicate
+  node tools/upload-to-notion.mjs next-id <Workspace> "<brand>"   print the next free board ID
+
+Spec: skills/upload-ads. Board = spec.board (title) or spec.boardId, else the brand's
+inputs/uploads.json notion.board / notion.boardId, else a search on spec.brand. Properties map to
+each board's own schema; map odd names with spec.propertyMap.`;
+const args = parseArgs(process.argv.slice(2), { flags: ['list', 'confirm'], help: HELP });
 const LIST = !!args.list;
 const CONFIRM = !!args.confirm;
 const positional = args._;
 
-if (!positional.length) { console.error(USAGE); process.exit(1); }
+if (!positional.length) usage(HELP);
 const isNextId = positional[0] === 'next-id';
 const { headers: H, api } = notionClient(isNextId ? positional[1] : positional[0] && inferWorkspace(positional[0]));
 const rt = (s) => [{ type: 'text', text: { content: String(s) } }];
@@ -44,12 +42,12 @@ const FIELDS = [
   { key: 'adCode',      aliases: ['ad link/code', 'ad link', 'ad code', 'link', 'url', 'code'],     val: (s) => s.adCode },
 ];
 
+// → { prop } on a match, { missing } when a propertyMap name isn't on the board, else null.
 function matchProp(schema, field, propertyMap) {
   const override = propertyMap?.[field.key];
-  if (override) return schema[override] ? override : '__MISSING__:' + override;
-  const names = Object.keys(schema);
-  for (const a of field.aliases) { const hit = names.find((n) => n.toLowerCase() === a); if (hit) return hit; }
-  return null;
+  if (override) return schema[override] ? { prop: override } : { missing: override };
+  const hit = field.aliases.map((a) => Object.keys(schema).find((n) => n.toLowerCase() === a)).find(Boolean);
+  return hit ? { prop: hit } : null;
 }
 function buildValue(type, value) {
   switch (type) {
@@ -67,14 +65,8 @@ function buildValue(type, value) {
 const preview = (v) => { const s = Array.isArray(v) ? v.join(', ') : String(v); return s.length > 60 ? s.slice(0, 57) + '…' : s; };
 
 async function usedIds(dbId, idProp) {
-  const used = new Set();
-  let cursor;
-  do {
-    const q = await api(`/databases/${dbId}/query`, 'POST', { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
-    for (const p of q.results || []) { const n = p.properties?.[idProp]?.number; if (typeof n === 'number') used.add(n); }
-    cursor = q.has_more ? q.next_cursor : undefined;
-  } while (cursor);
-  return used;
+  const pages = await allPages(api, `/databases/${dbId}/query`, {});
+  return new Set(pages.map((p) => p.properties?.[idProp]?.number).filter((n) => typeof n === 'number'));
 }
 const maxOf = (set) => (set.size ? Math.max(...set) : 0);
 
@@ -82,7 +74,7 @@ const maxOf = (set) => (set.size ? Math.max(...set) : 0);
 if (isNextId) {
   const [, workspace, ...rest] = positional;
   const name = rest.join(' ');
-  if (!name) { console.error('Usage: node tools/upload-to-notion.mjs next-id <Workspace> "<brand>"'); process.exit(1); }
+  if (!name) usage(HELP);
   const b = await resolveBoard(boardQuery({ brand: name }, findBrandDir(workspace, name)));
   if (!b.id) die(`Could not uniquely match a board for "${name}". Candidates: ${b.candidates.map(titleOf).join(', ') || '(none)'}. Pin it in inputs/uploads.json (run --list on a spec).`);
   const schema = await getSchema(b.id);
@@ -93,6 +85,11 @@ if (isNextId) {
 
 const specPath = positional[0];
 const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+// The board's ID property is a number: "12" counts as 12.
+if (typeof spec.id === 'string' && spec.id !== 'auto') {
+  if (!/^\d+$/.test(spec.id.trim())) die(`spec.id must be "auto" or a number (got "${spec.id}").`);
+  spec.id = Number(spec.id);
+}
 const query = boardQuery(spec, specPath);
 const board = await resolveBoard(query);
 
@@ -134,9 +131,9 @@ else skipped.push({ key: 'name', value: spec.name, reason: 'board has no title p
 for (const f of FIELDS) {
   const value = f.val(spec);
   if (value == null) continue;
-  const prop = matchProp(schema, f, pmap);
+  const { prop, missing: unmapped } = matchProp(schema, f, pmap) || {};
+  if (unmapped) { skipped.push({ key: f.key, value, reason: `propertyMap → "${unmapped}" not on board` }); continue; }
   if (!prop) { skipped.push({ key: f.key, value, reason: 'no matching board property (use propertyMap)' }); continue; }
-  if (prop.startsWith('__MISSING__:')) { skipped.push({ key: f.key, value, reason: `propertyMap → "${prop.slice(12)}" not on board` }); continue; }
   const built = buildValue(schema[prop].type, value);
   if (!built) { skipped.push({ key: f.key, value, reason: `unsupported property type "${schema[prop].type}"` }); continue; }
   planned.push({ prop, type: schema[prop].type, key: f.key, value });
@@ -150,7 +147,7 @@ function printPlan() {
   if (idProp) console.log(`  ${idProp} (number)  ← id = ${spec.id === 'auto' || spec.id == null ? 'auto (next in sequence)' : spec.id}`);
   else if (spec.id != null) skipped.push({ key: 'id', value: spec.id, reason: 'no ID number property on board' });
   if (skipped.length) { console.log(`\nSKIPPED (not written):`); for (const s of skipped) console.log(`  ${s.key} = ${preview(s.value)}  — ${s.reason}`); }
-  console.log(`\nBODY: ${(spec.images || []).length} image block(s): ${(spec.images || []).map((i) => basename(i)).join(', ') || '(none)'}`);
+  console.log(`\nBODY: ${(spec.images || []).length} image/video block(s): ${(spec.images || []).map((i) => basename(i)).join(', ') || '(none)'}`);
 }
 
 if (!CONFIRM) {
@@ -165,23 +162,23 @@ printPlan();
 console.log('');
 
 async function upload(path) {
-  const fname = basename(path);
-  const cu = await api('/file_uploads', 'POST', { filename: fname, content_type: 'image/png' });
+  const fname = basename(path), type = mimeOf(path);
+  const cu = await api('/file_uploads', 'POST', { filename: fname, content_type: type });
   if (!cu.id) throw new Error('upload create: ' + JSON.stringify(cu));
   const fd = new FormData();
-  fd.append('file', new Blob([readFileSync(path)], { type: 'image/png' }), fname);
+  fd.append('file', new Blob([readFileSync(path)], { type }), fname);
   const sr = await (await fetch(cu.upload_url || `https://api.notion.com/v1/file_uploads/${cu.id}/send`, { method: 'POST', headers: H, body: fd })).json();
   if (sr.status !== 'uploaded') throw new Error('upload send: ' + JSON.stringify(sr));
   console.log('uploaded', fname);
-  return { id: cu.id, fname };
+  return { id: cu.id, fname, block: typeOf(path) === 'video' ? 'video' : 'image' };
 }
 const ups = [];
 for (const f of spec.images || []) ups.push(await upload(f));
 
 const children = [];
 for (const u of ups) {
-  children.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: rt(u.fname.replace(/\.png$/, '')) } });
-  children.push({ object: 'block', type: 'image', image: { type: 'file_upload', file_upload: { id: u.id } } });
+  children.push({ object: 'block', type: 'heading_3', heading_3: { rich_text: rt(u.fname.replace(/\.[^.]+$/, '')) } });
+  children.push({ object: 'block', type: u.block, [u.block]: { type: 'file_upload', file_upload: { id: u.id } } });
 }
 
 const props = {};
@@ -211,8 +208,7 @@ if (idProp) {
 let page;
 if (existing) {
   await api(`/pages/${existing.id}`, 'PATCH', { properties: props, cover: null });
-  const before = await api(`/blocks/${existing.id}/children?page_size=100`);
-  const oldIds = (before.results || []).map((b) => b.id);
+  const oldIds = (await allPages(api, `/blocks/${existing.id}/children`)).map((b) => b.id);
   if (children.length) await api(`/blocks/${existing.id}/children`, 'PATCH', { children });
   for (const bid of oldIds) await fetch(`https://api.notion.com/v1/blocks/${bid}`, { method: 'DELETE', headers: H });
   page = await api(`/pages/${existing.id}`);
@@ -222,4 +218,5 @@ if (existing) {
   if (page.object === 'error') { console.error('CREATE ERROR', page.message); process.exit(1); }
   console.log('CREATED page');
 }
+markSent(specPath, spec, 'notion', page.url);
 console.log('url:', page.url, '\nName:', spec.name, '| images:', ups.length);

@@ -1,28 +1,27 @@
 #!/usr/bin/env node
 // generate-voice.mjs — generate voiceovers: Gemini 3.8 Flash TTS (default) or Seed Audio 1.0.
-//
-// Usage:
-//   node tools/generate-voice.mjs --script-file <vo.txt> --voice-name Kore --out <vo-A.mp3>
-//   node tools/generate-voice.mjs --model seed-audio --script-file <vo.txt> \
-//     --voices-file <voices.txt> --target-length 30 --out <vo-A.mp3>
-//
-// Which provider carries which model: tools/lib/providers.mjs (MODELS). File formats: HELP below.
-// Seed Audio's multi-speaker prompt mapping is best-effort (its docs show no worked example).
+// Which provider carries which model: tools/lib/providers.mjs (MODELS). Each saved file gets a
+// <stem>.gen.json sidecar. Seed Audio's multi-speaker prompt mapping is best-effort (its docs show no
+// worked example).
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { applyEnv, die, parseArgs } from './lib/catalog.mjs';
+import { applyEnv, die, extForMime, parseArgs, usage } from './lib/catalog.mjs';
 import {
   MODELS, PROVIDER_ORDER, errorText, gatewayClient, kieJob, logGatewayWarnings, modelEntry, planRoute, presignRef, runRoute,
-  saveResults, segmindJob, userError, workspaceKeys,
+  saveResults, segmindJob, times, userError, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
 
 applyEnv();
 
 const HELP = `generate-voice.mjs — voiceover generator: Gemini 3.8 Flash TTS (default) or Seed Audio 1.0.
 Providers in order: ${PROVIDER_ORDER.join(' -> ')}
+
+  node tools/generate-voice.mjs --script-file <vo.txt> --voice-name Kore --out <vo-A.mp3>
+  node tools/generate-voice.mjs --model seed-audio --script-file <vo.txt> \\
+    --voices-file <voices.txt> --target-length 30 --out <vo-A.mp3>
 
 Required (one of):
   --script-file <path>     Script file (format below)
@@ -193,9 +192,9 @@ function transcode(audio, want) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2), { help: HELP });
   const rawPromptMode = !!(args.prompt || args['prompt-file']);
-  if (args.help || (!args['script-file'] && !rawPromptMode)) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+  if (!args['script-file'] && !rawPromptMode) usage(HELP);
   if (!args.out) die('--out is required');
 
   const provider = String(args.provider || 'auto').toLowerCase();
@@ -208,7 +207,8 @@ async function main() {
   const characters = args['voices-file']
     ? parseVoicesFile(await readFile(resolve(String(args['voices-file'])), 'utf8'))
     : {};
-  const script = rawPromptMode ? null : parseScript(await readFile(resolve(String(args['script-file'])), 'utf8'));
+  const scriptText = rawPromptMode ? null : await readFile(resolve(String(args['script-file'])), 'utf8');
+  const script = scriptText && parseScript(scriptText);
   const host = (p) => presignRef(p, args.out);
 
   const num = Math.max(1, parseInt(args.num || '1', 10));
@@ -219,6 +219,7 @@ async function main() {
     if (!Number.isFinite(targetLength) || targetLength <= 0) die(`--target-length must be a positive number of seconds, got: ${args['target-length']}`);
   }
 
+  let sentPrompt; // Seed Audio's composed prompt, for the sidecar
   async function runSegmind() {
     let textPrompt, referenceAudioUrls = [];
     if (rawPromptMode) {
@@ -243,7 +244,8 @@ async function main() {
       speechRate: args['speech-rate'] !== undefined ? Number(args['speech-rate']) : undefined,
     });
     console.error(`prompt    ${textPrompt.length} chars  refs: ${referenceAudioUrls.length}`);
-    return Promise.all(Array.from({ length: num }, () => segmindJob(entry.segmind, input, timeout)));
+    sentPrompt = textPrompt;
+    return times(num, () => segmindJob(entry.segmind, input, timeout));
   }
 
   async function runKie() {
@@ -256,7 +258,7 @@ async function main() {
     const model = entry.kie;
     const input = { dialogue, stability, language_code: String(args.language || 'en') };
     console.error(`turns     ${dialogue.length}  voices: ${[...new Set(dialogue.map((i) => i.voice_id))].join(', ')}`);
-    return (await Promise.all(Array.from({ length: num }, () => kieJob(model, input, timeout)))).flat();
+    return times(num, () => kieJob(model, input, timeout));
   }
 
   // Gemini TTS by default; Seed Audio when the job needs it.
@@ -305,8 +307,7 @@ async function main() {
   async function fetchAudio(url) {
     const res = await fetch(url);
     if (!res.ok) throw userError(`download ${url} -> HTTP ${res.status}`);
-    const ct = res.headers.get('content-type') || '';
-    const have = /mpeg|mp3/i.test(ct) ? 'mp3' : /wav/i.test(ct) ? 'wav' : /ogg/i.test(ct) ? 'ogg' : extname(new URL(url).pathname).slice(1).toLowerCase() || 'wav';
+    const have = extForMime(res.headers.get('content-type')) || extname(new URL(url).pathname).slice(1).toLowerCase() || 'wav';
     return transcode({ bytes: new Uint8Array(await res.arrayBuffer()), format: have }, format);
   }
 
@@ -321,7 +322,7 @@ async function main() {
       ...(direction ? { style: direction } : {}),
     };
     console.error(`segmind   ${entry.segmind}  voices=${[input.voice_1, input.voice_2].filter(Boolean).join(',')}  ${input.text.length} chars${direction ? '  +style' : ''}`);
-    const urls = await Promise.all(Array.from({ length: num }, () => segmindJob(entry.segmind, input, timeout)));
+    const urls = await times(num, () => segmindJob(entry.segmind, input, timeout));
     return Promise.all(urls.map(fetchAudio));
   }
 
@@ -337,7 +338,7 @@ async function main() {
       dialogue_turns: turns.map((t) => ({ speaker_id: id(t.label), text: t.text })),
     };
     console.error(`kie       ${entry.kie}  voices=${input.speakers.map((x) => x.voice_name).join(',')}  turns=${turns.length}`);
-    const urls = (await Promise.all(Array.from({ length: num }, () => kieJob(entry.kie, input, timeout)))).flat();
+    const urls = await times(num, () => kieJob(entry.kie, input, timeout));
     return Promise.all(urls.map(fetchAudio));
   }
 
@@ -358,7 +359,7 @@ async function main() {
       logGatewayWarnings(r.warnings);
       return transcode({ bytes: r.audio.uint8Array, format: r.audio.format }, format);
     };
-    return Promise.all(Array.from({ length: num }, one));
+    return times(num, one);
   }
 
   const blockers = isCast
@@ -366,8 +367,13 @@ async function main() {
     : { gateway: speakers.length > 1 ? `${speakers.length}-speaker dialogue needs Segmind/kie (the Gateway speech call takes one voice)` : null };
   const plan = planRoute({ model: entry.name, provider, keys, ws: W, blockers, entry, kind: 'speech', label: entry.name });
   const runners = isCast ? { segmind: runSegmind, kie: runKie } : { segmind: geminiSegmind, kie: geminiKie, gateway: runGateway };
-  const results = await runRoute(plan, runners, W);
-  await saveResults(results, args.out, { fallbackExt: 'mp3' });
+  const { results, provider: ran } = await runRoute(plan, runners, W);
+  const saved = await saveResults(results, args.out, { fallbackExt: 'mp3' });
+  await writeSidecars(saved, {
+    tool: 'generate-voice', model: entry.name, provider: ran, prompt: sentPrompt || scriptText.trim(),
+    params: { format, 'voice-name': args['voice-name'], 'target-length': targetLength },
+    refs: [['voices', args['voices-file']], ['image', args.image]].filter(([, p]) => typeof p === 'string').map(([role, path]) => ({ role, path })),
+  });
 }
 
 main().catch((e) => die(errorText(e)));

@@ -20,7 +20,8 @@ Every file here — skills, docs, code, comments — is as short and plain as it
   otherwise get it wrong).
 - Edit before adding: fold into existing lines and delete what the change makes redundant. No new
   file or rule when an edit will do.
-- Code: reuse `tools/lib`, no dead code, comment only what isn't obvious.
+- Code: reuse `tools/lib`, no dead code, comment only what isn't obvious. Studio's look follows
+  `studio/DESIGN.md`.
 - Names: two or three words, action then object (`pull-media`, `make-image-ad`). A skill and its tool share
   the name whenever possible (`skills/pull-media/` ↔ `tools/pull-media.mjs`).
 - Before finishing, reread the change and cut anything not needed. Check that every `tools/` path
@@ -50,7 +51,7 @@ workspace's R2 bucket when it has one (see Operating principles).
     workspaces/<WS>/
       _custom/           # the workspace's own skills and tools (extensions or changes to the harness)
       <Brand>/
-        inputs/          # <product>-research.md (+ -personas, -angles), memory.md, uploads.json, reviews.csv, products.json
+        inputs/          # DESIGN.md, <product>-research.md (+ -personas, -angles), memory.md, uploads.json, reviews.csv, products.json
           media/         # the searchable media library (catalog-media)
         outputs/         # one folder per ad (naming: write-prompt) · json/ records (tools/record-ad.mjs) · index.md · batches/
     workspaces/Shared/Library/   # the public shared library (music, SFX, references): anyone pulls it,
@@ -73,15 +74,20 @@ page without asking (**open-studio**; the user watches each step land there), th
 - **make-ai-animation** — animated video ads, narrated or dialogue
 - **make-ai-slides** — slides video ads, a narrated explainer
 
-Scripts need no workflow: **write-copy**, on the brand's brief template if it has one. Once the ad
-has an ID, title the session `<brand initials> ad <ID> – <concept> (<format>)`, e.g.
-`AC ad 11 – Up to 40% off (static)`.
+Scripts need no workflow: **write-copy**, on the brand's brief template if it has one.
+
+Every workflow starts by loading the brand context: the product's `-research.md`, `-personas.md`
+and `-angles.md`, and the brand's `inputs/DESIGN.md` and `inputs/memory.md`; if research or
+DESIGN.md is missing or thin, run **research-brand** first. Once the ad has an ID, title the
+session `<brand initials> ad <ID> – <concept> (<format>)` (e.g. `AC ad 11 – Up to 40% off
+(static)`) and write its record (`outputs/json/<ID>.json`, schema in `tools/record-ad.mjs`) as
+`in-progress`; set `pending-review` when its output lands for the user, and `approved` on their yes.
 
 Steps (each owns its procedure and rules):
 
-- **Brand setup:** pull-reviews, research-brand, ideate-personas, ideate-angles, pull-fonts
+- **Brand setup:** pull-reviews, research-brand, ideate-personas-angles, pull-fonts
 - **Media library:** pull-media, catalog-media, search-media
-- **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, design-ad, write-prompt,
+- **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, write-prompt,
   generate-voice, add-music, generate-sfx, caption-video, edit-video
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
 
@@ -106,7 +112,7 @@ When the user asks to set up the harness from its GitHub link:
   carries the model and has the workspace's key — moving on only when one rejects the request
   before generating. A workspace can set its own exact list (`<WS>_PROVIDER_ORDER` in `.env`);
   `--provider` forces one. Order, models and defaults: `tools/lib/providers.mjs`. Music and SFX run
-  on Seed Audio (Segmind); Suno only when asked. Media analysis runs on Gemini Flash Lite, never a
+  on Seed Audio (Segmind); Suno for song ads or when asked. Media analysis runs on Gemini Flash Lite, never a
   Pro model (`tools/lib/gateway.mjs`).
 - **Video: draft at 480p, never upscale.** Iterate at 480p. After approval, and only when the user
   asks, generate a fresh take at a higher tier the model supports with the same prompt and
@@ -120,8 +126,8 @@ When the user asks to set up the harness from its GitHub link:
 - **Private brand data never goes in tracked files.** Examples use the placeholder brand Acme. A
   brand's rules go in its `memory.md` (**save-brand-memory**). A workspace's own skills and tools
   (extensions or changes to the harness) live in `workspaces/<WS>/_custom/` (synced with its R2);
-  load them when working that workspace. A pre-commit check (`tools/check-public.mjs`) blocks local
-  workspace and brand names and the terms in `_custom/private-terms.txt`.
+  load them when working that workspace. Commit hooks (`tools/check-public.mjs`) block local workspace
+  and brand names and the terms in `_custom/private-terms.txt`, in files and commit messages.
 - **Approved generations go into the media library** (**catalog-media**, `--source-type
   generated`). Never unapproved takes, intermediates or trimmed copies: analysis costs money per file.
 - **Speed:** only when the user asks how to get changes faster, suggest leaving all their notes and
@@ -129,7 +135,7 @@ When the user asks to set up the harness from its GitHub link:
 - **Sub-agents only for long work** — a large ingestion, a batch, a long video revision — never for
   routine steps. Heavy video revisions run one at a time, most progressed first. Parallel agents
   write only their own records; the main agent then refreshes the index
-  (`node tools/record-ad.mjs --index`) and pushes once.
+  (`node tools/record-ad.mjs --index <brand outputs/ dir>`) and pushes once.
 - **Update by reset, never merge.** At session start, `git fetch origin` and compare `HEAD` to
   `origin/main`; if behind, offer `git fetch origin && git reset --hard origin/main` (brand work and
   `.env` are untracked, so it's safe). Never `git pull`; never `git clean` (it deletes brand work

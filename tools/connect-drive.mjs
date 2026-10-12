@@ -1,17 +1,21 @@
 // connect-drive.mjs — one-time Google sign-in → captures a workspace's Drive refresh token into .env.
-// Usage: node tools/connect-drive.mjs <WORKSPACE> [<oauth-client.json>]
-// The workspace's OAuth client (Desktop) lives in workspaces/<WS>/_custom/drive-client.json, which syncs to the
-// team with R2; passing a client JSON stores it there. Writes <WORKSPACE>_DRIVE_CLIENT_ID / _CLIENT_SECRET /
-// _REFRESH_TOKEN to the repo-root .env.
 import fs from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { REPO_ROOT, parseArgs } from './lib/catalog.mjs';
+import { REPO_ROOT, parseArgs, usage } from './lib/catalog.mjs';
 
-const pos = parseArgs(process.argv.slice(2))._;
+const HELP = `connect-drive.mjs — one-time Google sign-in for a workspace's Drive
+
+  node tools/connect-drive.mjs <WORKSPACE> [<oauth-client.json>]
+
+The workspace's OAuth client (Desktop) lives in workspaces/<WS>/_custom/drive-client.json, which syncs
+to the team with R2; passing a client JSON stores it there. Writes <WORKSPACE>_DRIVE_CLIENT_ID /
+_CLIENT_SECRET / _REFRESH_TOKEN to the repo-root .env.`;
+
+const pos = parseArgs(process.argv.slice(2), { help: HELP })._;
 const given = pos.find((a) => a.endsWith('.json')), workspace = pos.find((a) => a !== given);
-if (!workspace) { console.error('Usage: node tools/connect-drive.mjs <WORKSPACE> [<oauth-client.json>]'); process.exit(1); }
+if (!workspace) usage(HELP);
 const PREFIX = workspace.toUpperCase();
 const ENV_FILE = join(REPO_ROOT, '.env');
 const wsDir = fs.readdirSync(join(REPO_ROOT, 'workspaces')).find((d) => d.toUpperCase() === PREFIX) || workspace;

@@ -1,13 +1,13 @@
 ---
 name: write-meta-copy
-description: Write the Meta ad's in-platform text — the headline and primary text that run in Ads Manager, not on the creative. Optional. Use when preparing an ad for Meta. Follows the writing rules in the write-copy skill; provides 3 differentiated options per piece.
+description: Write the Meta ad's in-platform text — the headline and primary text that run in Ads Manager, not on the creative. Optional. Use when preparing an ad for Meta (make-image-ad's last step, or before upload-ads). Follows the writing rules in the write-copy skill.
 ---
 
 # Write Meta copy
 
 The text that runs in Meta Ads Manager, not on the creative. Writing rules and claims follow
 **write-copy**; this owns the Meta formats. Pull wording from the product's `-research.md` Reviews
-analysis. Give **3 differentiated options** per piece.
+analysis.
 
 ## Headline
 

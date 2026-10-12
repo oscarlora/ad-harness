@@ -1,12 +1,12 @@
 ---
 name: ideate-image-format
-description: Ideate an image ad's format — pick the image type (photo- vs graphic-centric), set the mandatory background + product + hook, then add layers and lay out the composition. Image ads only; built from the layer toolkit, not a fixed list. Provides 3 differentiated options.
+description: Ideate an image ad's format and design — pick the image type (photo- vs graphic-centric), set the mandatory background + product + hook, add layers, lay out the composition in bands, then decide colors, fonts, hierarchy and legibility. Image ads only; built from the layer toolkit, not a fixed list. Use when choosing an ad's format, or when an ad looks off-brand, hard to read or cluttered. Feeds write-prompt's Composition and Design sections.
 ---
 
 # Ideate image format
 
-A format is how an image ad looks: the **image type**, the **layers** it stacks, and where each
-sits. Image ads only.
+A format is how an image ad looks: the **image type**, the **layers** it stacks, where each sits,
+and its **design**. Image ads only.
 
 ## Image type — the base
 
@@ -56,12 +56,37 @@ visual. Across a batch, vary the device, and never repeat a format from the bran
 3. **Add layers** to sharpen the message. Keep **3 to 7 layers in total, background included**.
    Vary how many and which across a batch.
 
-4. **Write the composition.** A **2–4 word name**, then a layout by **areas**: each layer by its
-   toolkit name, each text slot with an identifiable name (`subline-top`, `pill-1`/`pill-2`),
-   positions as anchor points or percentages, stacking order where layers overlap. Sample:
+4. **Write the composition.** A **2–4 word name**, then the layout: each layer by its toolkit
+   name, each text slot with an identifiable name (`subline-top`, `pill-1`/`pill-2`), stacking
+   order where layers overlap. Place a portrait ad in **five equal horizontal bands**, 1 at the
+   bottom to 5 at the top, never percentages; keep essential text and action in bands 2–4 so they
+   survive feed crops, and give subject and overlay bands separately when needed. Other layouts use
+   anchor points. Sample:
    - **Name:** Horizontal split before & after
-   - **Top 15%:** hook
-   - **Bottom 85%:** center divider — left 50% "before"; right 50% "after" with the product
+   - **Band 5:** hook
+   - **Bands 1–4:** center divider — left half "before"; right half "after" with the product
 
-Propose **3 deliberately differentiated** formats (vary image type, structure, or layer mix). If a
-reference ad or photo already locks the format, use it.
+Options vary image type, structure, or layer mix. If a reference ad or photo already locks the
+format, use it.
+
+## Design
+
+On-brand (`inputs/DESIGN.md`), instantly scannable, legible at thumbnail size. Decide per ad, and
+state the concrete choices (hex colors, fonts, hierarchy order, legibility treatments) for
+**write-prompt**'s Design section:
+
+- **Colors** — start from the product and packaging colors; an on-brand or near-on-brand
+  background that gives the product strong contrast, never one that flattens it.
+- **Fonts** — the brand's (**pull-fonts**). Always write the word "font" when naming one ("bold
+  grotesque sans font").
+- **Hierarchy** — the eye lands on the hook, then the product, then supporting text; size, weight
+  and position set the order. Consistent margins; nothing crowded, nothing adrift.
+- **Text over photo** — on the calmest part of the photo. On a long hook, emphasize the key
+  word(s), not the whole line: an accent color, a marker swash, an underline, a lozenge or knockout
+  panel, heavier weight; shadows, strokes, gradients or scrims for legibility. On UGC and lifestyle
+  photos, make overlays **social-organic** (native story-editor text, stickers, slightly imperfect
+  placement) so the ad reads as a post, not a banner.
+- **Layers that explain** (charts, diagrams, timelines, tables) — few elements, clear labels,
+  generous spacing. If it needs study, simplify it.
+- **Assortment** — a variety or multi-pack shows the full set somewhere (the hero, an explaining
+  graphic, the footer band), never a single unit.

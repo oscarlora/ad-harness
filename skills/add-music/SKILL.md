@@ -20,7 +20,8 @@ loudness. This skill owns the track and the taste.
 
 `tools/generate-music.mjs` renders a purpose-length instrumental bed with **Seed Audio 1.0** by
 default, from the prompt and `--duration`. Use `--provider suno` only when the user explicitly wants
-Suno, a full song, or a long-form track; it returns two full-length takes and `--duration` trims them.
+Suno, a full song, or a long-form track; it returns two full-length takes and `--duration` trims them. A sung song
+ad: **make-ai-song**.
 
 - **Trend research first.** Browse TikTok Creative Center's trending sounds or a licensed library's
   viral charts, then translate the sound's anatomy (tempo, drum palette, bounce, vocal treatment)
@@ -28,18 +29,12 @@ Suno, a full song, or a long-form track; it returns two full-length takes and `-
 - **Prompt like a producer.** Micro-genre + BPM + production markers ("jersey club, 140bpm,
   sidechained 808s, pitched-up chops"), always ending "hook-first, loopable, no intro".
   Instrumental under dialogue: vocal chops fine, sung lyrics never.
-- **Suno length.** Suno ignores length requests. For a short vocal song: tempo ≥140bpm, short
-  `[Verse N]`/`[Outro]` tags, and `--negative-tags "intro, instrumental intro, vocalise intro,
-  humming, vamp, ad-libs, repeated lines, instrumental break, long outro, fade out"`. The closing
-  line lands in about a third of takes — roll several and check by transcript. Keep bracket tags
-  short; long ones get sung.
-- **3 differentiated rolls per brief**, shown side by side; the user picks.
 - **Rights** follow the provider's terms; confirm them when the client asks or the stakes are high.
 
 ## Choosing
 
-Match the vibe to the brand voice in the product's `-research.md` (Branding). With no direction,
-offer 3 differentiated vibes. Under dialogue, prefer instrumental or vocal-light.
+Match the vibe to the brand's feel (Overview in `inputs/DESIGN.md`); with no direction, options
+vary the vibe. Under dialogue, prefer instrumental or vocal-light.
 
 ## Levels
 

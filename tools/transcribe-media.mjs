@@ -1,14 +1,16 @@
 #!/usr/bin/env node
-// transcribe-media.mjs — any audio/video clip -> transcript JSON (lib/transcribe.mjs). Run with --help.
+// transcribe-media.mjs — any audio/video clip -> transcript JSON (lib/transcribe.mjs).
 // A library item reuses its catalog transcript. Without a Gateway key it exits 3 (SKIP).
 
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { typeOf, inferWorkspace, inferBrand, brandDirFrom, mediaDirFrom, catalogPaths, readRecords, parseArgs, die } from './lib/catalog.mjs';
+import { typeOf, inferWorkspace, inferBrand, brandDirFrom, mediaDirFrom, catalogPaths, readRecords, parseArgs, die, usage } from './lib/catalog.mjs';
 import { gatewayKey, spend, ANALYSIS_MODEL } from './lib/gateway.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary, alignWords } from './lib/transcribe.mjs';
 
 const HELP = `transcribe-media.mjs — audio/video clip -> transcript JSON
+
+  node tools/transcribe-media.mjs --in <clip> [--out <json>] [--words] [--workspace <WS>]
 
 Required:
   --in <path>              Audio or video file to transcribe
@@ -27,8 +29,8 @@ function libraryRecord(input) {
 }
 
 async function main() {
-  const a = parseArgs(process.argv.slice(2));
-  if (a.help || !a.in) { console.log(HELP); process.exit(a.help ? 0 : 1); }
+  const a = parseArgs(process.argv.slice(2), { flags: ['words'], help: HELP });
+  if (!a.in) usage(HELP);
 
   const input = resolve(String(a.in));
   if (!existsSync(input)) die(`input not found: ${input}`);

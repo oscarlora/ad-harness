@@ -1,0 +1,5 @@
+#!/bin/sh
+# commit-msg — block a commit message that names a local client workspace or brand (tools/check-public.mjs).
+PATH="$HOME/.local/node/bin:$PATH"
+command -v node >/dev/null 2>&1 || { echo "commit-msg: node not found, so the client-name check can't run." >&2; exit 1; }
+exec node "$(git rev-parse --show-toplevel)/tools/check-public.mjs" --message "$1"

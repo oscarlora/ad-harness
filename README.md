@@ -1,4 +1,4 @@
-# Ad Production Harness
+# Ad Harness
 
 Skills and tools to make Meta ads end to end with AI agents like Claude and Codex.
 
@@ -63,7 +63,7 @@ Teams share brands through cloud storage:
 ## How to set it up
 
 1. Install an AI agent (Claude Code, Codex, Cursor…).
-2. Tell it: *"Set up Ad Production Harness from https://github.com/oscarlora/ad-harness"*
+2. Tell it: *"Set up Ad Harness from https://github.com/oscarlora/ad-harness"*
 
 The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
 keys ([.env.example](.env.example)):
@@ -76,8 +76,7 @@ keys ([.env.example](.env.example)):
 - **Uploads (optional):** Google Drive, Notion.
 
 Videos are edited in the harness's own editor and exported through Chrome, Edge, or a Chromium that
-setup installs. It runs on macOS, Windows and Linux. When there's a newer version, it asks before
-updating; your brand work is never touched.
+setup installs. It runs on macOS, Windows and Linux.
 
 ## How it's organized
 

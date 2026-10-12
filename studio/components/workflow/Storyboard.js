@@ -3,8 +3,11 @@
 // Media loads lazily: a frame as it nears view, a clip only once played.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../lib/client/api.js';
-import { IcCal, IcCamera, IcChip, IcClock, IcCut, IcEye, IcFile, IcFilm, IcFrame, IcGrid, IcImage, IcMotion, IcPlay, IcQuote, IcServer, IcSound, IcSpark, IcText, IcX } from '../media/icons.js';
+import { isTyping } from '../../lib/client/hooks.js';
+import { IcCal, IcCamera, IcChip, IcClock, IcCut, IcEye, IcFile, IcFilm, IcFrame, IcGrid, IcImage, IcLeft, IcMotion, IcPlay, IcQuote, IcRight, IcServer, IcSound, IcSpark, IcText, IcX } from '../icons.js';
+import { when } from '../BrandPage.js';
 import Markdown, { Inline } from './Markdown.js';
+import Player from '../Player.js';
 
 const MODEL = { s25: 'Seedance 2.5', minimax: 'MiniMax', mini: 'Seedance Mini', orig: 'First take', preview: 'Preview' };
 
@@ -13,7 +16,6 @@ const defaultTake = (clips) => clips.find((c) => c.model === 's25') || clips.fin
 
 const PROVIDER = { kie: 'kie.ai', segmind: 'Segmind', gateway: 'AI Gateway' };
 const span = (ns) => (ns.length > 1 ? `${Math.min(...ns)}–${Math.max(...ns)}` : '');
-const when = (iso) => { const d = new Date(iso); return Number.isNaN(+d) ? '' : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }); };
 
 // [icon, name, value] per non-empty parameter.
 const genRows = (g, shots) => [
@@ -55,9 +57,9 @@ function GenInfo({ ws, brand, label, gen, shots }) {
             <tr>
               <th scope="row"><IcText />Prompt</th>
               <td>
-                <details className="gen__prompt">
+                <details className="disclosure">
                   <summary>{gen.prompt.length.toLocaleString()} characters</summary>
-                  <div>{gen.prompt}</div>
+                  <div className="disclosure__body">{gen.prompt}</div>
                 </details>
               </td>
             </tr>
@@ -99,7 +101,7 @@ function ShotMedia({ ws, brand, shot, take, onTake, ratio, onRatio }) {
     <>
       <div className="sb-media" style={ratio ? { aspectRatio: ratio } : undefined}>
         {playing && take ? (
-          <video key={take.p} src={fileUrl(ws, brand, take.p, take.v)} poster={frame || undefined} controls autoPlay muted playsInline preload="none"
+          <Player key={take.p} src={fileUrl(ws, brand, take.p, take.v)} poster={frame || undefined} autoPlay muted preload="none" label={`Clip ${shot.n}`}
             onLoadedMetadata={(e) => e.target.videoWidth && onRatio(e.target.videoWidth / e.target.videoHeight)} />
         ) : frame ? (
           <img src={frame} alt={`Frame ${shot.n}`} loading="lazy" onLoad={(e) => onRatio(e.target.naturalWidth / e.target.naturalHeight)} />
@@ -142,20 +144,20 @@ function ShotCard({ ws, brand, shot }) {
           <div className="sb-fields">
             {(isShot || shot.secs) && (
               <div className="sb-fields__row">
-                {isShot && <span className="sb-pill" title="Shot"><span className="sb-pill__hash" aria-hidden="true">#</span>{shot.n}</span>}
-                {shot.secs && <span className="sb-pill" title="Time"><IcClock />{shot.from && shot.to ? `${shot.from}–${shot.to} (${shot.secs} s)` : `${shot.secs} s`}</span>}
+                {isShot && <span className="pill-mark" title="Shot"><span className="sb-hash" aria-hidden="true">#</span>{shot.n}</span>}
+                {shot.secs && <span className="pill-mark" title="Time"><IcClock />{shot.from && shot.to ? `${shot.from}–${shot.to} (${shot.secs} s)` : `${shot.secs} s`}</span>}
               </div>
             )}
             {shot.lines.map((l, i) => (
-              <div key={i} className="sb-pill sb-pill--block" title={l.who || 'Line'}>
-                <IcQuote /><span>{l.who && <span className="sb-pill__who">{l.who} </span>}<strong>“<Inline text={l.text} />”</strong></span>
+              <div key={i} className="sb-line" title={l.who || 'Line'}>
+                <IcQuote /><span>{l.who && <span className="sb-line__who">{l.who} </span>}<strong>“<Inline text={l.text} />”</strong></span>
               </div>
             ))}
-            {shot.see && <div className="sb-pill sb-pill--block" title="Scene"><IcEye /><span><Inline text={shot.see} /></span></div>}
-            {shot.moves && <div className="sb-pill sb-pill--block" title="What moves"><IcMotion /><span><Inline text={shot.moves} /></span></div>}
-            {shot.hear && <div className="sb-pill sb-pill--block" title="What we hear"><IcSound /><span><Inline text={shot.hear} /></span></div>}
-            {shot.camera && <div className="sb-pill sb-pill--block" title="Camera"><IcCamera /><span><Inline text={shot.camera} /></span></div>}
-            {shot.transition && <div className="sb-pill sb-pill--block" title="Transition in"><IcCut /><span><Inline text={shot.transition} /></span></div>}
+            {shot.see && <div className="sb-line" title="Scene"><IcEye /><span><Inline text={shot.see} /></span></div>}
+            {shot.moves && <div className="sb-line" title="What moves"><IcMotion /><span><Inline text={shot.moves} /></span></div>}
+            {shot.hear && <div className="sb-line" title="What we hear"><IcSound /><span><Inline text={shot.hear} /></span></div>}
+            {shot.camera && <div className="sb-line" title="Camera"><IcCamera /><span><Inline text={shot.camera} /></span></div>}
+            {shot.transition && <div className="sb-line" title="Transition in"><IcCut /><span><Inline text={shot.transition} /></span></div>}
           </div>
         )}
         {isShot && <GenInfo ws={ws} brand={brand} label="Frame" gen={shot.frame?.gen} />}
@@ -181,10 +183,10 @@ export default function Storyboard({ ws, brand, sb }) {
   const stepRef = useRef(step);
   stepRef.current = step;
 
-  // Arrow keys step the strip unless a field or player has focus.
+  // Arrow keys step the strip unless a field has focus.
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target?.closest?.('input, textarea, select, video, audio')) return;
+      if (isTyping(e)) return;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); stepRef.current(e.key === 'ArrowRight' ? 1 : -1); }
     };
     document.addEventListener('keydown', onKey);
@@ -199,9 +201,9 @@ export default function Storyboard({ ws, brand, sb }) {
             <summary>Blocking</summary>
             <Markdown text={sb.blocking} />
           </details>
-        ) : <div className="toolbar__spacer" />}
-        <button type="button" className="btn" aria-label="Previous shot" onClick={() => step(-1)}>‹</button>
-        <button type="button" className="btn" aria-label="Next shot" onClick={() => step(1)}>›</button>
+        ) : <div className="spacer" />}
+        <button type="button" className="btn btn--icon" aria-label="Previous shot" title="Previous shot (←)" onClick={() => step(-1)}><IcLeft /></button>
+        <button type="button" className="btn btn--icon" aria-label="Next shot" title="Next shot (→)" onClick={() => step(1)}><IcRight /></button>
       </div>
       <div className="sb__strip" ref={strip} aria-label="Storyboard shots">
         {sb.rows.map((r, i) => (

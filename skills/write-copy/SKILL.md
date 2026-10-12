@@ -100,4 +100,4 @@ Every claim, anywhere in an ad:
 
 ## Output
 
-For every piece (hook, subline, tertiary set), give **3 options, deliberately differentiated** in angle or style. Label each hook's writing style so supporting pieces can match it.
+For every piece (hook, subline, tertiary set), options differ in angle or style. Label each hook's writing style so supporting pieces can match it.

@@ -1,4 +1,4 @@
-// Board data: ad records plus unmade batch-plan slots (as `planned` rows), with persona details and renders.
+// Board data: ad records plus batch-plan slots not made yet, with persona details and renders.
 // Returned paths are brand-relative (POSIX), for the /file route.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -100,9 +100,8 @@ function adsWithPlan(outputs, plans) {
       if (existing) { existing.batch = plan.name; if (slot.angleSource) existing.angleSource = slot.angleSource; continue; }
       planned.push({
         id: slot.id,
-        status: slot.status || 'planned',
+        status: 'in-progress',
         batch: plan.name,
-        planned: true,
         concept: { product: plan.subject || plan.defaults?.product || '', persona: slot.persona || '', angle: slot.angle || '', format: slot.format || '', imageType: slot.imageType || '' },
         angleSource: slot.angleSource || '',
         refs: slot.refs || [],

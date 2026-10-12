@@ -44,30 +44,22 @@ export async function fileResponse(req, abs) {
   const size = st.size;
   const type = mimeOf(abs);
   const range = req.headers.get('range');
+  let start = 0, end = size - 1;
   if (range) {
     const m = /bytes=(\d*)-(\d*)/.exec(range) || [];
-    const start = m[1] ? +m[1] : 0;
-    const end = m[2] ? Math.min(+m[2], size - 1) : size - 1;
+    start = m[1] ? +m[1] : 0;
+    end = m[2] ? Math.min(+m[2], size - 1) : size - 1;
     if (start >= size || start > end) {
       return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
     }
-    return new Response(Readable.toWeb(createReadStream(abs, { start, end })), {
-      status: 206,
-      headers: {
-        'Content-Type': type,
-        'Accept-Ranges': 'bytes',
-        'Content-Range': `bytes ${start}-${end}/${size}`,
-        'Content-Length': String(end - start + 1),
-      },
-    });
   }
-  return new Response(Readable.toWeb(createReadStream(abs)), {
-    status: 200,
+  return new Response(Readable.toWeb(createReadStream(abs, range ? { start, end } : {})), {
+    status: range ? 206 : 200,
     headers: {
       'Content-Type': type,
       'Accept-Ranges': 'bytes',
-      'Content-Length': String(size),
-      'Cache-Control': 'no-cache',
+      'Content-Length': String(end - start + 1),
+      ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : { 'Cache-Control': 'no-cache' }),
     },
   });
 }

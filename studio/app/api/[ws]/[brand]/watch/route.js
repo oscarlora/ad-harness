@@ -10,6 +10,10 @@ export const dynamic = 'force-dynamic';
 const HEARTBEAT_MS = 25_000;
 const DEBOUNCE_MS = 400;
 
+// Open streams end when the server stops; otherwise they keep the old process alive and pages never reconnect.
+const open = new Set();
+for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { for (const end of open) end(); });
+
 export const GET = brandRoute((req, ctx) => {
   const dirs = [join(ctx.dir, 'outputs'), join(ctx.dir, 'inputs', 'media', '_catalog')].filter((d) => existsSync(d));
 
@@ -25,11 +29,13 @@ export const GET = brandRoute((req, ctx) => {
       cleanup = () => {
         if (closed) return;
         closed = true;
+        open.delete(cleanup);
         clearInterval(heartbeat);
         clearTimeout(debounce);
         for (const w of watchers) try { w.close(); } catch {}
         try { controller.close(); } catch {}
       };
+      open.add(cleanup);
       send(`: watching ${dirs.length} dir(s)\n\n`);
       for (const dir of dirs) {
         try {

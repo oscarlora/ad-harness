@@ -1,16 +1,19 @@
 'use client';
 // Full-screen media viewer (image, video, audio + transcript) with the editable sidebar; edits save via /record.
 import { useEffect, useRef, useState } from 'react';
-import { apiBase, fileUrl, postJson } from '../../lib/client/api.js';
+import { apiBase, fileUrl, getJson, mediaPath, postJson } from '../../lib/client/api.js';
+import { useCopied } from '../../lib/client/hooks.js';
+import { clock, Param } from '../BrandPage.js';
+import Player from '../Player.js';
 import ViewerShell from '../ViewerShell.js';
-import { IcDl, IcFolder, IcInfo, IcLink, IcOpen, IcX } from './icons.js';
-import { drawWave, fmtDur, loadPeaks } from './wave.js';
+import { IcDl, IcFolder, IcLink, IcOpen, IcPanelClose, IcPanelOpen } from '../icons.js';
+import { Wave } from './wave.js';
 
 const csv = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 function ImageStage({ ws, brand, rec }) {
-  const proxy = fileUrl(ws, brand, `inputs/media/_catalog/proxies/${rec.id}.jpg`);
-  const original = fileUrl(ws, brand, `inputs/media/${rec.file?.name}`);
+  const proxy = fileUrl(ws, brand, mediaPath(`_catalog/proxies/${rec.id}.jpg`));
+  const original = fileUrl(ws, brand, mediaPath(rec.file.name));
   const [src, setSrc] = useState(proxy);
   useEffect(() => {
     setSrc(proxy);
@@ -19,203 +22,182 @@ function ImageStage({ ws, brand, rec }) {
     full.src = original; // may 302 to R2
     return () => { full.onload = null; };
   }, [proxy, original]);
-  return <img src={src} alt={rec.file?.name || rec.id} />;
+  return <img src={src} alt={rec.file.name || rec.id} />;
 }
 
+// The waveform and transcript (the word being said lit) over the player; a click on either seeks there.
 function AudioStage({ ws, brand, rec }) {
-  const canvasRef = useRef(null);
-  const wrapRef = useRef(null);
-  const audioRef = useRef(null);
-  const peaksRef = useRef([]);
+  const audio = useRef(null);
   const [time, setTime] = useState(0);
-  const [nowIdx, setNowIdx] = useState(-1);
-
   const words = rec.audio_transcript?.words || [];
-  const segments = rec.audio_transcript?.segments || [];
-
-  useEffect(() => {
-    let dead = false;
-    const cv = canvasRef.current;
-    cv.width = wrapRef.current?.clientWidth || 800;
-    cv.height = 160;
-    const audio = new Audio(fileUrl(ws, brand, `inputs/media/${rec.file?.name}`));
-    audioRef.current = audio;
-    loadPeaks(ws, brand, rec.id).then((peaks) => {
-      if (dead) return;
-      peaksRef.current = peaks;
-      drawWave(cv, peaks, { color: '#d4d4d4' });
-    });
-    const onTime = () => {
-      if (dead) return;
-      const dur = audio.duration || rec.file?.duration || 1;
-      drawWave(cv, peaksRef.current, { color: '#d4d4d4', progress: audio.currentTime / dur });
-      setTime(audio.currentTime);
-    };
-    audio.addEventListener('timeupdate', onTime);
-    return () => { dead = true; audio.pause(); audio.removeEventListener('timeupdate', onTime); audioRef.current = null; };
-  }, [ws, brand, rec.id]);
-
-  useEffect(() => {
-    const list = words.length ? words : segments;
-    const idx = list.findIndex((x) => time >= x.start && time <= (x.end ?? x.start + 0.4));
-    setNowIdx(idx);
-  }, [time, words, segments]);
-
-  const seek = (t) => { const a = audioRef.current; if (a) { a.currentTime = t; a.play().catch(() => {}); } };
+  const list = words.length ? words : rec.audio_transcript?.segments || [];
+  const now = list.findIndex((x) => time >= x.start && time <= (x.end ?? x.start + 0.4));
+  const dur = rec.file.duration || 0;
+  const seek = (t) => { const a = audio.current; if (a) { a.currentTime = t; a.play().catch(() => {}); } };
 
   return (
-    <div className="wf-wrap" ref={wrapRef}>
-      <canvas
-        ref={canvasRef}
-        onClick={(e) => {
-          const a = audioRef.current;
-          if (!a) return;
-          const rect = e.currentTarget.getBoundingClientRect();
-          seek(((e.clientX - rect.left) / rect.width) * (a.duration || rec.file?.duration || 0));
-        }}
+    <div className="wf-wrap">
+      <Wave
+        ws={ws} brand={brand} id={rec.id} color="--line-strong" progress={dur && time ? time / dur : -1}
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * (audio.current?.duration || dur)); }}
       />
-      <div className="wf-time">{fmtDur(time)} / {fmtDur(rec.file?.duration)}</div>
-      {(words.length > 0 || segments.length > 0) && (
+      <Player
+        kind="audio" src={fileUrl(ws, brand, mediaPath(rec.file.name))} label={rec.file.name} keys
+        onLoadedMetadata={(e) => { audio.current = e.currentTarget; }} onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+      />
+      {list.length > 0 && (
         <div className="wf-transcript">
-          {words.length
-            ? words.map((w, i) => (
-                <span key={i} className={i === nowIdx ? 'now' : ''} onClick={() => seek(w.start)}>{w.word} </span>
-              ))
-            : segments.map((s, i) => (
-                <span key={i} className={i === nowIdx ? 'now' : ''} onClick={() => seek(s.start)}>
-                  {s.speaker ? `${s.speaker}: ` : ''}{s.text}{' '}
-                </span>
-              ))}
+          {list.map((x, i) => (
+            <span key={i} className={i === now ? 'now' : ''} onClick={() => seek(x.start)}>
+              {words.length ? x.word : `${x.speaker ? `${x.speaker}: ` : ''}${x.text}`}{' '}
+            </span>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function SidePanel({ ws, brand, rec, onSaved, toast }) {
+const FILE_MANAGER = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform) ? 'Finder' : /Win/.test(globalThis.navigator?.platform || '') ? 'Explorer' : 'folder';
+
+// Where the original lives: its public link (R2, presigned) and its path on this device, each with its actions.
+function Location({ ws, brand, rec, actions }) {
+  const [where, setWhere] = useState(null);
+  const [copied, copy] = useCopied();
+  useEffect(() => {
+    let dead = false;
+    getJson(`${apiBase(ws, brand)}/presign?id=${encodeURIComponent(rec.id)}`).then((r) => { if (!dead) setWhere(r); }).catch(() => {});
+    return () => { dead = true; };
+  }, [ws, brand, rec.id]);
+  if (!where) return null;
+  return (
+    <>
+      <Param label="Public link">
+        {where.local
+          ? <span className="param__hint">None: this workspace has no R2 keys.</span>
+          : <><span className="param__link" title={where.url}>{where.url}</span>{where.expires ? <span className="param__hint">Expires {Math.round(where.expires / 86400)} days after opening.</span> : null}</>}
+        <span className="param__actions">
+          {!where.local && <button type="button" className="btn btn--mini" onClick={() => copy(where.url)}><IcLink />{copied ? 'Copied' : 'Copy link'}</button>}
+          <button type="button" className="btn btn--mini" onClick={() => actions.download(rec)}><IcDl />Download</button>
+        </span>
+      </Param>
+      {where.onDevice && (
+        <Param label="On this device">
+          {where.onDevice}
+          <span className="param__actions">
+            <button type="button" className="btn btn--mini" onClick={() => actions.open(rec, 'open')}><IcOpen />{where.app ? `Open in ${where.app}` : 'Open'}</button>
+            <button type="button" className="btn btn--mini" onClick={() => actions.open(rec, 'reveal')}><IcFolder />Show in {FILE_MANAGER}</button>
+          </span>
+        </Param>
+      )}
+    </>
+  );
+}
+
+// Edits save on their own when a field loses focus (or the panel closes), only if something changed.
+function SidePanel({ ws, brand, rec, onSaved, actions, toast }) {
   const [products, setProducts] = useState((rec.products || []).join(', '));
   const [people, setPeople] = useState((rec.people || []).join(', '));
   const [tags, setTags] = useState((rec.tags || []).join(', '));
   const [sourceName, setSourceName] = useState(rec.source?.name || '');
   const [vd, setVd] = useState(rec.visual_description || '');
   const [unkNames, setUnkNames] = useState({});
-  const [saving, setSaving] = useState(false);
+  const queue = useRef(Promise.resolve()); // one save at a time, in order
+  const sent = useRef(''); // the last patch sent, so a blur and a close never send it twice
   const f = rec.file || {};
 
-  const save = async () => {
-    setSaving(true);
-    try {
-      const nextPeople = csv(people);
-      const remaining = [];
-      const named = [];
-      (rec.unknown_people || []).forEach((u, i) => {
-        const nm = (unkNames[i] || '').trim();
-        if (nm) { nextPeople.push(nm); named.push({ name: nm, description: u.description || '' }); }
-        else remaining.push(u);
-      });
-      const patch = {
-        products: csv(products),
-        people: [...new Set(nextPeople)],
-        unknown_people: remaining,
-        tags: csv(tags),
-        visual_description: vd,
-        source: { ...rec.source, name: sourceName },
-      };
-      const r = await postJson(`${apiBase(ws, brand)}/record`, { id: rec.id, patch, addPeople: named });
-      toast('Saved');
-      setUnkNames({});
-      onSaved(r.record);
-    } catch (e) {
-      toast(String(e.message || e));
-    } finally {
-      setSaving(false);
-    }
+  const saveIfChanged = () => {
+    const nextPeople = csv(people);
+    const remaining = [];
+    const named = [];
+    (rec.unknown_people || []).forEach((u, i) => {
+      const nm = (unkNames[i] || '').trim();
+      if (nm) { nextPeople.push(nm); named.push({ name: nm, description: u.description || '' }); }
+      else remaining.push(u);
+    });
+    const patch = {
+      products: csv(products),
+      people: [...new Set(nextPeople)],
+      unknown_people: remaining,
+      tags: csv(tags),
+      visual_description: vd,
+      source: { ...rec.source, name: sourceName },
+    };
+    const before = { products: rec.products || [], people: rec.people || [], unknown_people: rec.unknown_people || [], tags: rec.tags || [], visual_description: rec.visual_description || '', source: { ...rec.source, name: rec.source?.name || '' } };
+    const key = JSON.stringify(patch);
+    if (key === JSON.stringify(before) || key === sent.current) return;
+    sent.current = key;
+    queue.current = queue.current.then(async () => {
+      try {
+        const r = await postJson(`${apiBase(ws, brand)}/record`, { id: rec.id, patch, addPeople: named });
+        toast('Saved');
+        setUnkNames({});
+        onSaved(r.record);
+      } catch (e) {
+        toast(String(e.message || e));
+      }
+    });
   };
+  const saveRef = useRef(saveIfChanged);
+  saveRef.current = saveIfChanged;
+  useEffect(() => () => saveRef.current(), []); // closing or moving to the next file saves too
 
+  const unknown = rec.unknown_people || [];
+  const field = (id, value, set, props = {}) => (
+    <input className="field" id={id} value={value} onChange={(e) => set(e.target.value)} onBlur={saveIfChanged}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} {...props} />
+  );
   return (
     <aside className="vw__side rise">
-      <h2 style={{ fontSize: '1rem', fontFamily: 'var(--font-sans)', fontWeight: 600, overflowWrap: 'anywhere' }}>{f.name || rec.id}</h2>
-      <div className="vw__file">
-        {[f.type, f.width ? `${f.width}×${f.height}` : '', f.orientation, f.aspect, f.bytes ? `${(f.bytes / 1e6).toFixed(2)} MB` : '', f.duration != null ? fmtDur(f.duration) : ''].filter(Boolean).join(' · ')}
+      <h2>{f.name || rec.id}</h2>
+      <div className="params">
+        <Param label="Type">{f.type}</Param>
+        {f.width ? <Param label="Dimensions">{f.width} × {f.height}</Param> : null}
+        {f.aspect && <Param label="Ratio">{f.aspect}{f.orientation ? `, ${f.orientation}` : ''}</Param>}
+        {f.duration != null && <Param label="Duration">{clock(f.duration)}</Param>}
+        {f.bytes ? <Param label="File size">{(f.bytes / 1e6).toFixed(2)} MB</Param> : null}
+        <Param label="Source">{rec.source?.type || ''}</Param>
+        <Param label="ID">{rec.id}</Param>
+        <Location ws={ws} brand={brand} rec={rec} actions={actions} />
       </div>
-      <div className="prop">
-        <label className="eyebrow" htmlFor="p-products">Products (comma-sep)</label>
-        <input id="p-products" value={products} onChange={(e) => setProducts(e.target.value)} />
-      </div>
-      <div className="prop">
-        <label className="eyebrow" htmlFor="p-people">People (comma-sep)</label>
-        <input id="p-people" value={people} onChange={(e) => setPeople(e.target.value)} />
-      </div>
-      {(rec.unknown_people || []).length > 0 && (
-        <div className="prop">
-          <label className="eyebrow">Unidentified — name to add</label>
-          {(rec.unknown_people || []).map((u, i) => (
-            <div className="unk" key={i}>
-              <span className="desc">{u.description}</span>
-              <input placeholder="name" value={unkNames[i] || ''} onChange={(e) => setUnkNames((m) => ({ ...m, [i]: e.target.value }))} />
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="prop">
-        <label className="eyebrow" htmlFor="p-tags">Tags (comma-sep)</label>
-        <input id="p-tags" value={tags} onChange={(e) => setTags(e.target.value)} />
-      </div>
-      <div className="prop">
-        <label className="eyebrow" htmlFor="p-source">Source name</label>
-        <input id="p-source" value={sourceName} onChange={(e) => setSourceName(e.target.value)} />
-      </div>
-      <div className="prop">
-        <label className="eyebrow" htmlFor="p-vd">Visual description</label>
-        <textarea id="p-vd" rows={5} value={vd} onChange={(e) => setVd(e.target.value)} />
-      </div>
-      {rec.audio_description && (
-        <div className="prop"><label className="eyebrow">Sound</label><div className="ro">{rec.audio_description}</div></div>
-      )}
-      {rec.text_in_media && (
-        <div className="prop"><label className="eyebrow">Text in media</label><div className="ro">{rec.text_in_media}</div></div>
-      )}
-      <div className="prop"><label className="eyebrow">Source type</label><div className="ro">{rec.source?.type || ''}</div></div>
-      <div className="prop"><label className="eyebrow">ID</label><div className="ro">{rec.id}</div></div>
-      <div className="prop"><label className="eyebrow">sha256</label><div className="ro">{(rec.sha256 || '').slice(0, 16)}…</div></div>
-      <div className="prop" style={{ borderTop: 0 }}>
-        <button type="button" className="btn btn--primary" disabled={saving} onClick={save}>{saving ? 'Saving' : 'Save'}</button>
+      <div className="params">
+        <Param label="Products" id="p-products">{field('p-products', products, setProducts, { placeholder: 'Separate with commas' })}</Param>
+        <Param label="People" id="p-people">{field('p-people', people, setPeople, { placeholder: 'Separate with commas' })}</Param>
+        {unknown.map((u, i) => (
+          <Param key={i} label={i ? '' : 'Unnamed'} id={`p-unk-${i}`}>
+            <p className="param__note">{u.description}</p>
+            {field(`p-unk-${i}`, unkNames[i] || '', (v) => setUnkNames((m) => ({ ...m, [i]: v })), { placeholder: 'Name them' })}
+          </Param>
+        ))}
+        <Param label="Tags" id="p-tags">{field('p-tags', tags, setTags, { placeholder: 'Separate with commas' })}</Param>
+        <Param label="Source name" id="p-source">{field('p-source', sourceName, setSourceName)}</Param>
+        <Param label="Description" id="p-vd"><textarea className="field" id="p-vd" rows={8} value={vd} onChange={(e) => setVd(e.target.value)} onBlur={saveIfChanged} /></Param>
+        {rec.audio_description && <Param label="Sound">{rec.audio_description}</Param>}
       </div>
     </aside>
   );
 }
 
 // actions: Gallery's per-asset actions.
-export default function MediaViewer({ ws, brand, rec, hasR2, sideOpen, onToggleSide, onNav, onClose, onSaved, actions, toast }) {
-  if (!rec) return null;
-  const t = rec.file?.type;
-  const originalRel = `inputs/media/${rec.file?.name}`;
-
+export default function MediaViewer({ ws, brand, rec, sideOpen, onToggleSide, onNav, onClose, onSaved, actions, toast }) {
+  const f = rec.file || {};
+  const panel = sideOpen ? 'Hide details' : 'Show details';
   return (
     <ViewerShell
       onStep={onNav}
       onClose={onClose}
-      close={<><IcX /> Close</>}
-      closeTitle="Close"
-      backdrop={false}
-      tools={<>
-        <button type="button" className="btn" onClick={() => actions.useRef(rec.id)} title={hasR2 ? 'Copy a presigned R2 URL' : 'No R2 creds — copies a local URL'}><IcLink /> Use as reference</button>
-        <button type="button" className="btn" onClick={() => actions.download(rec)} title="Download original"><IcDl /> Download</button>
-        <button type="button" className="btn" onClick={() => actions.open(rec, 'open')} title="Open original locally"><IcOpen /> Open</button>
-        <button type="button" className="btn" onClick={() => actions.open(rec, 'reveal')} title="Reveal in file manager"><IcFolder /> Reveal</button>
-        <button type="button" className="btn" onClick={onToggleSide} aria-pressed={sideOpen} title="Details"><IcInfo /> Details</button>
-      </>}
-      side={sideOpen && <SidePanel key={rec.id} ws={ws} brand={brand} rec={rec} onSaved={onSaved} toast={toast} />}
+      ratio={f.type === 'image' && f.width ? f.width / f.height : 0}
+      tools={<button type="button" className="btn btn--icon" aria-label={panel} title={panel} onClick={onToggleSide}>{sideOpen ? <IcPanelClose /> : <IcPanelOpen />}</button>}
+      side={sideOpen && <SidePanel key={rec.id} ws={ws} brand={brand} rec={rec} onSaved={onSaved} actions={actions} toast={toast} />}
     >
-      {t === 'image' && <ImageStage ws={ws} brand={brand} rec={rec} />}
-      {t === 'video' && (
-        <video
-          controls
-          poster={fileUrl(ws, brand, `inputs/media/_catalog/thumbs/${rec.id}.jpg`)}
-          src={fileUrl(ws, brand, originalRel)}
+      {f.type === 'image' && <ImageStage ws={ws} brand={brand} rec={rec} />}
+      {f.type === 'video' && (
+        <Player
+          key={rec.id} src={fileUrl(ws, brand, mediaPath(f.name))} poster={fileUrl(ws, brand, mediaPath(`_catalog/thumbs/${rec.id}.jpg`))} label={f.name} keys
+          captions={rec.audio_transcript?.segments || []} scenes={rec.scenes || []} sprites={rec.sprites && { ...rec.sprites, url: fileUrl(ws, brand, mediaPath(rec.sprites.sheet)) }}
         />
       )}
-      {t === 'audio' && <AudioStage ws={ws} brand={brand} rec={rec} />}
+      {f.type === 'audio' && <AudioStage key={rec.id} ws={ws} brand={brand} rec={rec} />}
     </ViewerShell>
   );
 }

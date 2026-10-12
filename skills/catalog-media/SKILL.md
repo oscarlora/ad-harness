@@ -27,7 +27,7 @@ node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> --source "<folder|D
 It runs pull (links only, via **pull-media**) → probe (skips duplicates; `--jobs` / `MEDIA_JOBS`
 videos at a time, default 2) → analyze (`tools/analyze-media.mjs`; prompts in
 `tools/lib/analysis-prompt.mjs`) → embed (`tools/embed-media.mjs`) → index → push to R2 when the
-workspace has R2 creds. Transcripts are by sentence; **caption-video** aligns word timings later.
+workspace has R2 keys (`.env.example`). Transcripts are by sentence; **caption-video** aligns word timings later.
 
 Idempotent: already-cataloged files and near-duplicate re-exports are skipped (each skip logged with
 its reason); failed analyses retry next run. Without `--source` it finishes what is pending and
@@ -50,9 +50,3 @@ Single steps: `analyze-media.mjs --media <…/media> --ids 00012 --force` (redo 
   and ask the user to name them once. Add each to `people.json`, move the entry from
   `unknown_people` to `people` in the matching records, then re-run `embed-media`.
 - Browse in Studio's Media page (**open-studio**): `/<Workspace>/<Brand>/media`.
-
-## Setup (one-time)
-
-- **Video / audio** → `ffmpeg` + `ffprobe` (macOS: `bash tools/setup.sh`; Windows: `winget install Gyan.FFmpeg`).
-- **URL / social pulls** → `yt-dlp` (macOS: `brew install yt-dlp`; Windows: `winget install yt-dlp.yt-dlp`).
-- **R2** → `<WS>_R2_ACCOUNT_ID`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_BUCKET`. Without them the library stays local.

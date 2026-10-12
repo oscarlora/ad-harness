@@ -1,17 +1,12 @@
 #!/usr/bin/env node
 // generate-music.mjs — generate a music bed (Seed Audio 1.0), or a song on Suno when asked for.
-//
-// Usage:
-//   node tools/generate-music.mjs --prompt "<style>" --out <bed.mp3> [--duration 30]
-//   node tools/generate-music.mjs --lyrics <lyrics.txt> --prompt "<style>" --out <song.mp3>
-//
 // Seed Audio beds are always instrumental. Suno returns two full takes per run and has no length
-// setting. Prompt craft: skills/add-music.
+// setting. Each saved file gets a <stem>.gen.json sidecar. Prompt craft: skills/add-music.
 
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { applyEnv, die, ffprobeJson, findBin, parseArgs, run, sleep } from './lib/catalog.mjs';
-import { downloadTo, errorText, kie, retryTransient, runSeedAudio, suffixed, userError, workspaceKeys } from './lib/providers.mjs';
+import { applyEnv, die, ffprobeJson, findBin, parseArgs, run, sleep, usage } from './lib/catalog.mjs';
+import { downloadTo, errorText, kie, retryTransient, runSeedAudio, suffixed, times, userError, workspaceKeys, writeSidecars } from './lib/providers.mjs';
 
 applyEnv();
 
@@ -19,6 +14,9 @@ applyEnv();
 const CALLBACK_PLACEHOLDER = 'https://example.com/suno-callback';
 
 const HELP = `generate-music.mjs — ad-bed / song generator: Seed Audio 1.0 (default) or Suno (explicit)
+
+  node tools/generate-music.mjs --prompt "<style>" --out <bed.mp3> [--duration 30]
+  node tools/generate-music.mjs --lyrics <lyrics.txt> --prompt "<style>" --out <song.mp3>
 
 Required:
   --prompt "<text>"        Style: micro-genre + BPM + production markers
@@ -129,8 +127,8 @@ async function trimTo(file, seconds) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.help || !args.prompt) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+  const args = parseArgs(process.argv.slice(2), { flags: ['vocals'], help: HELP });
+  if (!args.prompt) usage(HELP);
   if (!args.out) die('--out is required');
   const provider = String(args.provider || (args.lyrics ? 'suno' : 'seed-audio')).toLowerCase();
   if (!['seed-audio', 'segmind', 'suno', 'kie'].includes(provider))
@@ -173,26 +171,31 @@ async function main() {
   console.error(`music     ${lyrics ? 'song from --lyrics' : instrumental ? 'instrumental bed' : 'song with vocals'}  "${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}"`);
 
   // Only a failed create is retried; once Suno returns a task id, the task is polled to the end.
-  const trackGroups = await Promise.all(Array.from({ length: num }, async () => {
+  const tracks = await times(num, async () => {
     const taskId = await retryTransient(() => createTask(opts));
     return (await pollResult(taskId, timeout)).map((t) => ({ ...t, taskId }));
-  }));
-  const tracks = trackGroups.flat();
+  });
+  const saved = [];
 
   for (let i = 0; i < tracks.length; i++) {
     const url = tracks[i].audioUrl || tracks[i].streamAudioUrl;
     if (!url) die(`take ${i + 1} has no audio url: ${JSON.stringify(tracks[i])}`);
-    const saved = await downloadTo(url, suffixed(args.out, i), { fallbackExt: 'mp3' });
-    if (duration && !lyrics) await trimTo(saved, duration);
-    if (lyrics) await saveWords(tracks[i], saved);
+    const file = await downloadTo(url, suffixed(args.out, i), { fallbackExt: 'mp3' });
+    if (duration && !lyrics) await trimTo(file, duration);
+    if (lyrics) await saveWords(tracks[i], file);
     if (findBin('ffprobe')) {
-      const meta = ffprobeJson(saved);
+      const meta = ffprobeJson(file);
       const f = meta.format || {};
-      if (!(meta.streams || []).some((s) => s.codec_type === 'audio')) die(`${saved} has no audio stream`);
+      if (!(meta.streams || []).some((s) => s.codec_type === 'audio')) die(`${file} has no audio stream`);
       console.error(`audio     take ${i + 1}: ${Math.round(Number(f.duration || 0))}s  ${(Number(f.size || 0) / 1e6).toFixed(1)}MB  ${(meta.streams[0] || {}).codec_name || '?'}`);
     }
-    console.log('Saved: ' + saved);
+    console.log('Saved: ' + file);
+    saved.push(file);
   }
+  await writeSidecars(saved, {
+    tool: 'generate-music', model: `suno-${model}`, provider: 'kie', prompt: lyrics || prompt,
+    params: { style: lyrics ? prompt : null, vocals: !instrumental, duration: lyrics ? null : duration, 'negative-tags': opts.negativeTags },
+  });
 }
 
 main().catch((e) => die(errorText(e)));

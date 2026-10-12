@@ -1,14 +1,10 @@
 'use client';
 // The edit's tracks over time: clips, cuts with transitions, caption lines, volume moves, keyframes and notes.
 // Read-only: changes go through notes. Click or drag anywhere to move the playhead.
-import { memo, useRef } from 'react';
-import { keyed } from '../../engine/doc.js';
-import { IcQuote } from '../media/icons.js';
-
-export const clock = (s) => {
-  const m = Math.floor(s / 60), r = s - m * 60;
-  return `${m}:${r.toFixed(2).padStart(5, '0')}`;
-};
+import { memo } from 'react';
+import { keyed, tin } from '../../engine/doc.js';
+import { clock } from '../BrandPage.js';
+import { IcQuote } from '../icons.js';
 
 const pct = (x, dur) => `${(x / dur) * 100}%`;
 const base = (src) => String(src).split('/').pop().replace(/\.[^.]+$/, '');
@@ -39,11 +35,11 @@ const Track = memo(function Track({ tr, dur }) {
       <div className="tl-name" title={tr.name}>{tr.name}</div>
       <div className="tl-lane" data-muted={tr.mute || tr.hidden || undefined}>
         {tr.clips.map((c) => (
-          <div key={c.id} className="tl-clip" data-type={c.type} style={{ left: pct(c.at, dur), width: pct(c.end - c.at, dur) }} title={`${labelOf(c)} · ${clock(c.at)}–${clock(c.end)}`}>
+          <div key={c.id} className="tl-clip" data-type={c.type} style={{ left: pct(c.at, dur), width: pct(c.end - c.at, dur) }} title={`${labelOf(c)} · ${clock(c.at, true)}–${clock(c.end, true)}`}>
             {c.type === 'captions'
               ? (c.lines || []).map((l, i) => <span key={i} className="tl-line" style={{ left: pct(l.at - c.at, c.end - c.at), width: pct(l.end - l.at, c.end - c.at) }} />)
               : <span className="tl-label">{labelOf(c)}</span>}
-            {c.transition && c.prev && c.transition.type !== 'cut' && <span className="tl-tr" title={c.transition.type} />}
+            {tin(c) > 0 && <span className="tl-tr" title={c.transition.type} />}
             {keyTimes(c).map((k) => <span key={k} className="tl-key" style={{ left: pct(k - c.at, c.end - c.at) }} />)}
             {keyed(c.volume) && <Volume keys={c.volume.map(([k, v]) => [k - c.at, v])} dur={c.end - c.at} />}
           </div>
@@ -61,26 +57,17 @@ function Ruler({ dur }) {
   for (let s = 0; s < dur; s += step) marks.push(s);
   return (
     <div className="tl-ruler">
-      {marks.map((s) => <span key={s} style={{ left: pct(s, dur) }}>{clock(s).replace(/\.\d+$/, '')}</span>)}
+      {marks.map((s) => <span key={s} style={{ left: pct(s, dur) }}>{clock(s)}</span>)}
     </div>
   );
 }
 
 // children: the transport (play and time), in the corner above the track names.
 export default function Timeline({ doc, t, notes, onSeek, onPick, children }) {
-  const ref = useRef(null);
   const dur = doc.duration || 1;
   const seekAt = (e) => {
-    const r = ref.current.getBoundingClientRect();
+    const r = e.currentTarget.getBoundingClientRect();
     onSeek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur);
-  };
-  const onPointerDown = (e) => {
-    if (e.button !== 0 || e.target.closest('.tl-note')) return;
-    seekAt(e);
-    const move = (ev) => seekAt(ev);
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
   };
   return (
     <div className="tl">
@@ -93,10 +80,12 @@ export default function Timeline({ doc, t, notes, onSeek, onPick, children }) {
           ))}
         </div>
       </div>
-      <div className="tl-body">
-        {doc.tracks.map((tr, i) => <Track key={i} tr={tr} dur={dur} />)}
-      </div>
-      <div className="tl-hit" ref={ref} onPointerDown={onPointerDown}>
+      {doc.tracks.map((tr, i) => <Track key={i} tr={tr} dur={dur} />)}
+      <div
+        className="tl-hit"
+        onPointerDown={(e) => { if (e.button === 0) { e.currentTarget.setPointerCapture(e.pointerId); seekAt(e); } }}
+        onPointerMove={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) seekAt(e); }}
+      >
         <div className="tl-head" style={{ left: pct(t, dur) }} />
       </div>
     </div>

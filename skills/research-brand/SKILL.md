@@ -1,6 +1,6 @@
 ---
 name: research-brand
-description: Research a brand before making ads — the first onboarding step. From product link(s), reviews, and any notes, produce the brand's source-of-truth files per product: research, personas, and angles (plus a brand overview for multi-sku brands). Use when onboarding a new brand, when a product's research is missing or thin, or when asked to research a product, build personas, or analyze reviews/market/competitors.
+description: Research a brand before making ads — the first onboarding step. From product link(s), reviews, and any notes, produce the brand's source-of-truth files: its DESIGN.md, and per product research, personas, and angles (plus a brand overview for multi-sku brands). Use when onboarding a new brand, when a product's research or the brand's DESIGN.md is missing or thin, or when asked to research a product, build personas, or analyze reviews/market/competitors.
 ---
 
 # Research brand
@@ -22,7 +22,7 @@ customers verbatim; never invent quotes or numbers; write `Unknown` rather than 
 3. Research each product from its page, web search, and the reviews, and write the files below.
 4. Write **`inputs/products.json`**.
 5. Optionally ingest the brand's media (**catalog-media**).
-6. Build the brand **type sheet** once fonts + cases are known (**pull-fonts**).
+6. Write **`inputs/DESIGN.md`** and its type sheet (**pull-fonts**).
 
 ## Outputs
 
@@ -39,22 +39,41 @@ Written to `inputs/`.
   product addresses exactly that. Back each with one common-sense line and one hard line (a study,
   a spec, or a pattern across reviews). Customer words, ready for copy. If it can't be said simply,
   keep digging or write `Unknown`.
-- **Market** — background, position, sophistication stage (1–5).
+- **Market** — background, position, sophistication stage (1 first-to-market · 2 direct claims ·
+  3 mechanism · 4 better mechanism · 5 identity/experience).
 - **Competitors** — table: competitor · price(s) · their differentiation · ours.
-- **Branding** — colors (hex, labeled by use: primary, accent, background, text…); font(s); headline + body case; headline + body punctuation; spacing/layout feel; tone.
 - **Reviews analysis** — count, rating, distribution; then insight + verbatim quote per: physical
   pains, emotional pains, desired outcomes, reasons to buy, objections (+ counter), what they
   tried before (what they liked, what let them down); end with the exact recurring words and
   phrases customers use for the problem and the product.
 
-**`[product]-personas.md`** — ≥5 personas to start (**ideate-personas**).
+**`[product]-personas.md`** and **`[product]-angles.md`** — ≥5 of each to start
+(**ideate-personas-angles**).
 
-**`[product]-angles.md`** — ≥5 angles to start (**ideate-angles**).
+**`DESIGN.md`** (brand-level) — the brand's look and feel, which every image, video and doc follows,
+in the DESIGN.md format (github.com/google-labs-code/design.md). Exact values go in the front
+matter, everything else in the sections below it, in this order:
+
+```yaml
+---
+name: Acme
+colors:            # hex, keyed by use: primary, accent, background, text, packaging…
+  primary: "#1F3A2E"
+typography:        # per role: headline, body, any other
+  headline: { fontFamily: Big Shoulders Display, fontWeight: 700 }
+omitted: [rounded, spacing]
+---
+```
+
+- **Overview** — personality, tone, the feel (also sets the music and voiceover vibe).
+- **Colors** — what each color is for.
+- **Typography** — each font's role; headline + body case and punctuation; the type sheet path.
+- **Layout** — density and spacing, how the brand's own creative is composed.
+- **Shapes** — corners, badges, frames, recurring graphic devices.
+- **Components** — recurring pieces: logo lockup, CTA, offer tag, review stars.
+- **Imagery** — photo style, lighting, settings, how the product is shown.
+- **Motion & Video** — pacing, transitions, caption look.
+- **Do's and Don'ts**.
 
 **`products.json`** (brand-level) — one entry per SKU:
 `{ "name": canonical full name (no abbreviations), "aliases": ["ASG", …], "look": "packaging colors, wrapper text, shape, distinguishing marks" }`. Read by **catalog-media** and **search-media**. When a name is said differently than it's spelled, use `{ "products": [...], "vocabulary": ["Acme (said \"Ack-mee\")"] }`. When known people (founder, recurring creators) are obvious, also seed `inputs/media/_catalog/people.json` — `{ "name", "description" }`, the description being stable physical traits (age range, build, skin tone, hair, face).
-
-## Notes
-
-- Sophistication stages: 1 first-to-market · 2 direct claims · 3 mechanism · 4 better mechanism · 5 identity/experience.
-- Keep every file specific and concrete; every later skill draws from them.

@@ -28,20 +28,10 @@ Pull a store's public reviews into `inputs/reviews.csv`, before **research-brand
 
 ## Platforms
 
-Each platform's store id sits in the page HTML; its public feed needs no API key.
-
-| Platform | Status | Key fact |
-|---|---|---|
-| Okendo | Working | Subscriber id in page as `subscriberId":"<uuid>"`. Feed: `api.okendo.io/v1/stores/<sub>/reviews?limit=100`, follow `nextUrl`. |
-| Stamped | Working | Keyed by the store's `.myshopify.com` domain; `getappkey` → `apiKey`+`sId`; `/widget` returns rendered HTML, parsed per page (no JSON feed). |
-| Judge.me | Working | Keyed by the store's `.myshopify.com` domain (in page HTML). JSON feed: `api.judge.me/reviews/reviews_for_widget?shop_domain=<dom>&platform=shopify&product_id=<id>&page=N&per_page=30` (caps at 30), `pagination.total_pages`. Reviews are shared across grouped sister products — crawl every id in `/products.json` and dedupe by `uuid`. No incentivized flag; invitation-collected reviews are marked `store_invitation` (check the page's `jdgmSettings.coupon_*` for whether invites carry a coupon). |
-| Loox | Working | Store id in the page's `loox.io/widget/<id>/loox.js` URL. No JSON: `loox.io/widget/<id>/reviews?limit=20&page=N` returns rendered HTML (20/page cap), parsed per page. Two tabs: product reviews (default) and store reviews (`&currentTab=store`, product = "Store review"); page 1 embeds both totals. |
-| Yotpo | Detect only | Keyed by an `app_key` in the page. |
-| Reviews.io | Detect only | Keyed by a store token in the page. |
-
-## Adding an adapter
-
-The guide is in the header of `tools/pull-reviews.mjs`. When one lands, flip its row to "Working".
+Which work, how each feed is read, and how to add an adapter: the header and code of
+`tools/pull-reviews.mjs`. Not in the tool yet: Yotpo is keyed by an `app_key` in the page,
+Reviews.io by a store token; for Judge.me's `store_invitation` reviews, check the page's
+`jdgmSettings.coupon_*` for whether invites carry a coupon.
 
 ## CSV
 

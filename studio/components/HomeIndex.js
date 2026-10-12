@@ -28,12 +28,12 @@ export default function HomeIndex({ brands, error }) {
   if (!ready) return null;
 
   return (
-    <div className="home rise">
+    <div className="home">
       <h1>Ad Harness</h1>
       <p className="home__lede">Every brand in this project — its ads board, media library and workflow, live.</p>
-      {error && <div className="home__empty">{error}</div>}
+      {error && <div className="empty-state">{error}</div>}
       {!error && brands.length === 0 && (
-        <div className="home__empty">
+        <div className="empty-state">
           No brands found under <code>workspaces/</code>. Pull one first:{' '}
           <code>node tools/sync-brand.mjs --pull workspaces/&lt;WS&gt;/&lt;Brand&gt;</code>
         </div>

@@ -152,6 +152,7 @@ const ROOT_EXPORT = (f) => ROOT_VIDEO(f) || (!f.rel.includes('/') && f.type === 
 const ROOT_MD = (f) => !f.rel.includes('/') && f.type === 'md' && !/^analysis\.md$/i.test(f.rel);
 const under = (dir, ...types) => (f) => f.rel.startsWith(`${dir}/`) && (!types.length || types.includes(f.type));
 const any = (...preds) => (f) => preds.some((p) => p(f));
+const EXPORTED = any(ROOT_VIDEO, under('final', 'video')); // edit-video exports to final/
 const count = (files) => { const n = files.filter((f) => ['image', 'video', 'audio'].includes(f.type)).length; return n > 1 ? String(n) : ''; };
 
 // Each step lists the files that evidence it (and optionally record fields); optional steps show only when they have files.
@@ -160,7 +161,8 @@ const FAMILIES = {
     { key: 'copy', label: 'Copy', fields: (rec) => Object.entries(rec?.copy || {}).map(([k, v]) => [k, displayText(v)]) },
     { key: 'design', label: 'Design', fields: (rec) => (rec?.design ? [['design', displayText(rec.design)]] : []) },
     { key: 'drafts', label: 'Drafts', files: any(under('drafts', 'image'), (f) => !f.rel.includes('/') && f.type === 'image') },
-    { key: 'final', label: 'Final', files: under('final', 'image'), done: (rec) => ['approved', 'synced'].includes(rec?.status) },
+    { key: 'final', label: 'Final', files: under('final', 'image'), done: (rec) => rec?.status === 'approved' },
+    { key: 'meta', label: 'Meta copy', fields: (rec) => Object.entries(rec?.meta || {}).map(([k, v]) => [k, displayText(v)]) },
   ],
   song: [ // make-ai-song
     { key: 'concept', label: 'Concept', files: ROOT_MD },
@@ -169,7 +171,7 @@ const FAMILIES = {
     { key: 'look', label: 'Look', files: under('sheets', 'image') },
     { key: 'storyboard', label: 'Storyboard', files: any(under('storyboards', 'image'), (f) => f.rel === 'storyboard.md') },
     { key: 'clips', label: 'Clips', files: under('clips', 'video') },
-    { key: 'edit', label: 'Edit', files: ROOT_VIDEO },
+    { key: 'edit', label: 'Edit', files: EXPORTED },
   ],
   voice: [ // voiceover / audio-story ads (generate-voice)
     { key: 'script', label: 'Script', files: any(ROOT_MD, under('voice', 'txt')) },
@@ -187,7 +189,7 @@ const FAMILIES = {
     { key: 'look', label: 'Look', optional: true, files: (f) => f.type === 'image' && f.rel.includes('/') && !/^(drafts|final|clips|reference)\//.test(f.rel) },
     { key: 'clips', label: 'Clips', files: under('clips', 'video') },
     { key: 'music', label: 'Music', optional: true, files: under('music', 'audio') },
-    { key: 'edit', label: 'Edit', files: ROOT_VIDEO },
+    { key: 'edit', label: 'Edit', files: EXPORTED },
   ],
 };
 
@@ -229,7 +231,7 @@ function animationSteps(brandDirAbs, folder, files) {
   const script = files.find((f) => f.rel === 'script.md');
   const sheets = files.filter(under('sheets', 'image', 'txt'));
   const voices = files.filter(any((f) => f.rel === 'voices.md', under('audio', 'audio'), under('voice', 'audio')));
-  const edit = files.filter(ROOT_VIDEO);
+  const edit = files.filter(EXPORTED);
   const progress = (n) => (shots.length ? `${n}/${shots.length}` : '');
   const steps = [
     { key: 'concept', label: 'Concept', done: !!(sb.header || script), panel: sb.header ? { md: sb.header } : {} },

@@ -25,7 +25,7 @@ For **more than one** ad, plan the batch before making any. The plan survives ac
 ## How
 
 1. **Settle the goal and split** with the user — the total, how to divide it (personas × count,
-   products, angles), and the constraints. Offer 3 differentiated structures.
+   products, angles), and the constraints; options differ in structure.
 2. **Write the plan** to `outputs/batches/[name].json`.
 3. **Build against it** — the ad's workflow makes each ad from the next open slot, writes its record,
    then appends the id to `made` and decrements `remaining`. Honor the constraints (check the records

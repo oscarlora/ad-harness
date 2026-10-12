@@ -1,24 +1,23 @@
 // upload-to-drive.mjs — upload approved ad files to <workspace Drive folder>/<brand>/<ad group>/.
-//
-// Usage:
-//   node tools/upload-to-drive.mjs [--list] [--confirm] [--create] [--archive] <spec.json>
-//     --list     show the brand folders and their groups; writes nothing
-//     (plain)    plan: print what would be written where; writes nothing
-//     --confirm  upload. Same-named files are replaced, so re-runs never duplicate
-//     --create   allow creating a missing brand or group folder (ask the user first)
-//     --archive  move same-named files to the group's "Archived" folder first (revisions)
-//
-// Spec (shared with upload-to-notion): { brand, name, images:[...], driveSubfolder? }; the workspace and
-// brand come from its path. Group folder = driveSubfolder, else name. Brand folder = the brand's
-// inputs/uploads.json drive.folder (exact), else spec.brand (lib/drive.mjs).
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
-import { parseArgs, die } from './lib/catalog.mjs';
+import { parseArgs, die, markSent, usage } from './lib/catalog.mjs';
 import { driveApi, listChildren, findChild, createFolder, brandFolders, driveForSpec, resolveGroupFolder, uploadFile } from './lib/drive.mjs';
 
-const args = parseArgs(process.argv.slice(2), { flags: ['list', 'confirm', 'create', 'archive'] });
+const HELP = `upload-to-drive.mjs — upload approved ad files to <workspace Drive folder>/<brand>/<ad group>/
+
+  node tools/upload-to-drive.mjs [--list] [--confirm] [--create] [--archive] <spec.json>
+    --list     show the brand folders and their groups; writes nothing
+    (plain)    plan: print what would be written where; writes nothing
+    --confirm  upload. Same-named files are replaced, so re-runs never duplicate
+    --create   allow creating a missing brand or group folder (ask the user first)
+    --archive  move same-named files to the group's "Archived" folder first (revisions)
+
+Spec: skills/upload-ads; the workspace and brand come from its path. Group folder = driveSubfolder,
+else name. Brand folder = the brand's inputs/uploads.json drive.folder (exact), else spec.brand.`;
+const args = parseArgs(process.argv.slice(2), { flags: ['list', 'confirm', 'create', 'archive'], help: HELP });
 const specPath = args._[0];
-if (!specPath) { console.error('Usage: node tools/upload-to-drive.mjs [--list] [--confirm] [--create] [--archive] <spec.json>'); process.exit(1); }
+if (!specPath) usage(HELP);
 
 const { spec, workspace, token, parent, brand, exact } = await driveForSpec(specPath);
 if (!brand) die('Spec needs "brand".');
@@ -74,4 +73,6 @@ if (args.archive) {
   }
 }
 for (const f of files) console.log(`  ${(await uploadFile(groupFolder.id, f, token)).updated ? 'replaced' : 'created'} ${basename(f)}`);
-console.log('done →', `https://drive.google.com/drive/folders/${groupFolder.id}`);
+const folderUrl = `https://drive.google.com/drive/folders/${groupFolder.id}`;
+markSent(specPath, spec, 'drive', folderUrl);
+console.log('done →', folderUrl);

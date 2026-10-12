@@ -16,15 +16,13 @@
 import { statSync, writeFileSync, existsSync, copyFileSync, readdirSync, readFileSync, mkdirSync, mkdtempSync, rmSync, renameSync, constants } from 'node:fs';
 import { join, basename, extname, relative, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, sha256File, readRecords, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, RESERVED } from './catalog.mjs';
-import { writeRecord, mergeRecord } from '../record-media.mjs';
+import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, RESERVED } from './catalog.mjs';
 import { readDriveSources } from './drive.mjs';
 import { INLINE_MAX } from './gateway.mjs';
 
 const HAS_FFMPEG = have('ffmpeg') && have('ffprobe');
 const HAS_SIPS = have('sips');
 const INSTALL_FFMPEG = 'install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)';
-const round1 = (n) => Math.round(n * 10) / 10;
 
 // ---------- heavy-work pool + hardware decoding ----------
 const jobLimit = () => Math.max(1, parseInt(process.env.MEDIA_JOBS, 10) || 2);
@@ -57,12 +55,9 @@ function imageDims(file) {
   const v = (ffprobeJson(file).streams || []).find((s) => s.codec_type === 'video') || {}; // ffprobe reports a still image as one video stream
   return { width: +v.width || 0, height: +v.height || 0 };
 }
-// ffmpeg twin of `sips -Z <px>`: fit the longest edge to px, keep aspect, never upscale;
-// even dims for the jpeg encoder.
-const fitFilter = (px) => `scale=w='min(iw,${px})':h='min(ih,${px})':force_original_aspect_ratio=decrease:force_divisible_by=2`;
 function imageFit(file, px, out) {
-  if (HAS_SIPS) run('sips', ['-s', 'format', 'jpeg', '-Z', String(px), file, '--out', out], { allowFail: true });
-  else run('ffmpeg', ['-y', '-v', 'error', '-i', file, '-frames:v', '1', '-vf', fitFilter(px), '-q:v', '3', out], { allowFail: true });
+  const [bin, args] = imageFitCmd(file, px, out);
+  run(bin, args, { allowFail: true });
   return existsSync(out);
 }
 function imageDerivatives(file, paths, id) {
@@ -80,7 +75,7 @@ export function videoMeta(file) {
   const turned = rot === 90 || rot === 270, exact = +p.format?.duration || 0;
   return {
     width: +(turned ? v.height : v.width) || 0, height: +(turned ? v.width : v.height) || 0,
-    duration: exact ? round1(exact) : null, exact, rot, pixFmt: v.pix_fmt, codedW: +v.width || 0, codedH: +v.height || 0,
+    duration: exact ? round(exact, 1) : null, exact, rot, pixFmt: v.pix_fmt, codedW: +v.width || 0, codedH: +v.height || 0,
     hasAudio: (p.streams || []).some((s) => s.codec_type === 'audio'),
   };
 }
@@ -174,21 +169,17 @@ async function videoDerivatives(file, paths, id, meta, work) {
     const mid = start + Math.min(0.5, (end - start) / 2);
     const kf = join(paths.keyframes, `${id}_${String(i + 1).padStart(2, '0')}.jpg`);
     grab(file, mid, ['-vf', 'scale=1536:-1', kf]);
-    if (existsSync(kf)) scenes.push({ start: round1(start), end: round1(end), keyframe: `_catalog/keyframes/${basename(kf)}`, description: '' });
+    if (existsSync(kf)) scenes.push({ start: round(start, 1), end: round(end, 1), keyframe: `_catalog/keyframes/${basename(kf)}`, description: '' });
   }
-  const sprites = existsSync(sheet) ? { sheet: `_catalog/sprites/${id}.jpg`, cols, rows, interval: round1(interval), frameW: 192, frameH } : null;
+  const sprites = existsSync(sheet) ? { sheet: `_catalog/sprites/${id}.jpg`, cols, rows, interval: round(interval, 1), frameW: 192, frameH } : null;
   return { scenes, sprites };
 }
 // ~400 max-amplitude samples from low-rate PCM.
 function audioPeaks(file, paths, id) {
   const N = 400;
-  const r = run('ffmpeg', ['-v', 'quiet', '-i', file, '-ac', '1', '-ar', '4000', '-f', 's16le', '-'], { allowFail: true, binary: true });
-  let peaks = [];
-  if (r.stdout && r.stdout.length) {
-    const pcm = new Int16Array(r.stdout.buffer, r.stdout.byteOffset, Math.floor(r.stdout.length / 2));
-    const per = Math.max(1, Math.floor(pcm.length / N));
-    for (let i = 0; i < pcm.length; i += per) { let m = 0; for (let j = i; j < i + per && j < pcm.length; j++) m = Math.max(m, Math.abs(pcm[j])); peaks.push(Math.round((m / 32768) * 100) / 100); }
-  }
+  const samples = pcm(file, 4000) || [];
+  const peaks = [], per = Math.max(1, Math.floor(samples.length / N));
+  for (let i = 0; i < samples.length; i += per) { let m = 0; for (let j = i; j < i + per && j < samples.length; j++) m = Math.max(m, Math.abs(samples[j])); peaks.push(round(m / 32768)); }
   if (peaks.length) writeFileSync(join(paths.peaks, `${id}.json`), JSON.stringify(peaks));
 }
 
@@ -219,7 +210,7 @@ const hamming = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += P
 const turn = (g) => { const o = new Uint8Array(S * S); for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) o[x * S + (S - 1 - y)] = g[y * S + x]; return o; };
 const pixelsOff = (a, b) => { let n = 0; for (let i = 0; i < a.length; i++) n += Math.abs(a[i] - b[i]) > 18; return n / a.length; };
 // Frame times a new video is hashed at: the poster's time and two more across the clip.
-const sampleTimes = (d) => [Math.min(1, round1(d) / 10), d * 0.5, d * 0.9].map((t) => Math.round(t * 1000) / 1000);
+const sampleTimes = (d) => [Math.min(1, round(d, 1) / 10), d * 0.5, d * 0.9].map((t) => round(t, 3));
 const nameKey = (n) => String(n || '').toLowerCase().trim();
 
 // Fingerprint one new file (before any probing): { type, name, duration?, phash, gray?, frames? }.
@@ -259,7 +250,7 @@ function nearDupFinder(paths, records) {
       const shots = [{ t: Math.min(1, d / 10), path: join(paths.thumbs, `${c.id}.jpg`) }];
       const sc = c.rec.scenes || [];
       for (const s of [sc[0], sc[Math.floor(sc.length / 2)]]) if (s?.keyframe && !shots.some((x) => x.path === at(s.keyframe))) shots.push({ t: s.start + Math.min(0.5, (s.end - s.start) / 2), path: at(s.keyframe) });
-      const frames = shots.map((x) => { const g = grayImage(x.path); return g && { t: Math.round(x.t * 1000) / 1000, h: phashOf(g) }; }).filter(Boolean);
+      const frames = shots.map((x) => { const g = grayImage(x.path); return g && { t: round(x.t, 3), h: phashOf(g) }; }).filter(Boolean);
       ph = frames.length ? { frames } : null;
     }
     if (ph) { c.rec.phash = ph; mergeRecord(paths, { id: c.id, phash: ph }); }
@@ -273,7 +264,7 @@ function nearDupFinder(paths, records) {
       const h = own?.h ?? (() => { const g = grayFrame(file, f.t); return g && phashOf(g); })();
       return h ? hamming(h, f.h) : null;
     }).filter((d) => d != null);
-    return ds.length ? Math.round((ds.reduce((s, d) => s + d, 0) / ds.length) * 10) / 10 : null;
+    return ds.length ? round(ds.reduce((s, d) => s + d, 0) / ds.length, 1) : null;
   }
 
   return {
@@ -321,7 +312,7 @@ async function probe({ file, media, id, sha256, phash, sourceType, sourceName })
   if (!type) throw new Error(`not a media file: ${file}`);
   const ext = extname(file).slice(1).toLowerCase();
   const name = `${id}_${slugify(basename(file, extname(file)))}.${ext}`;
-  const base = { id, sha256: sha256 || await sha256File(file), name, type, mime: mimeOf(file), bytes: statSync(file).size, sourceType, sourceName };
+  const base = { id, sha256: sha256 || await hashFile(file), name, type, mime: mimeOf(file), bytes: statSync(file).size, sourceType, sourceName };
   const warnings = [];
   let dims = {}, video = null;
 
@@ -341,7 +332,7 @@ async function probe({ file, media, id, sha256, phash, sourceType, sourceName })
     catch (e) { warnings.push(`${basename(file)}: ${e.message} — record created without scenes/sprites`); }
   } else {
     const d = ffprobeJson(file).format?.duration;
-    if (d) dims = { duration: round1(+d) };
+    if (d) dims = { duration: round(+d, 1) };
     audioPeaks(file, paths, id);
   }
 
@@ -366,8 +357,8 @@ function collect(dir, out = []) {
 
 // Planning (hash, dedupe, allocate ids) is sequential so ids never race; probing runs in parallel.
 // Returns [{ id, src, existing, reason?, type?, name?, warnings? }]; skipped files give the id they
-// duplicate. planOnly returns the list without probing.
-export async function planAndProbe({ dir, media, sourceType = 'brand', sourceName = '', planOnly = false, log = console.log }) {
+// duplicate.
+export async function planAndProbe({ dir, media, sourceType = 'brand', sourceName = '' }) {
   const paths = catalogPaths(media);
   const records = readRecords(paths);
   const bySha = new Map(records.map((r) => [r.sha256, r.id]));
@@ -377,19 +368,18 @@ export async function planAndProbe({ dir, media, sourceType = 'brand', sourceNam
   const manifest = [], todo = [];
   try {
     for (const src of collect(dir)) {
-      const sha256 = await sha256File(src);
+      const sha256 = await hashFile(src);
       const same = bySha.get(sha256);
       if (same) { manifest.push({ id: same, src, existing: true, reason: `same bytes as ${same}` }); continue; }
       const fp = fingerprint(src, tmp);
       const hit = finder.match(src, fp);
-      if (hit) { manifest.push({ id: hit.id, src, existing: true, reason: hit.reason }); log(`skip ${basename(src)} — near-duplicate: ${hit.reason}`); continue; }
+      if (hit) { manifest.push({ id: hit.id, src, existing: true, reason: hit.reason }); console.log(`skip ${basename(src)} — near-duplicate: ${hit.reason}`); continue; }
       const id = padId(++next);
       bySha.set(sha256, id);
       finder.add(id, src, fp);
       todo.push({ src, id, sha256, phash: fp.phash });
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
-  if (planOnly) return [...manifest, ...todo.map((f) => ({ id: f.id, src: f.src, existing: false }))];
 
   await Promise.all(todo.map(async (f) => {
     const sub = relative(dir, dirname(f.src)); // preserve the source's folder as this file's source.name

@@ -35,10 +35,12 @@ export default function Switcher({ ws, brand }) {
 
   return (
     <div className="switcher">
-      <select className="select" aria-label="Workspace" value={ws} onChange={(e) => router.push(brandUrl(e.target.value, brandsOf(e.target.value)[0], tab))}>
+      <span className="switcher__sep" aria-hidden="true">/</span>
+      <select className="select select--ghost" aria-label="Workspace" value={ws} onChange={(e) => router.push(brandUrl(e.target.value, brandsOf(e.target.value)[0], tab))}>
         {[...groups.keys()].map((w) => <option key={w} value={w}>{w}</option>)}
       </select>
-      <select className="select" aria-label="Brand" value={brand} onChange={(e) => router.push(brandUrl(ws, e.target.value, tab))}>
+      <span className="switcher__sep" aria-hidden="true">/</span>
+      <select className="select select--ghost" aria-label="Brand" value={brand} onChange={(e) => router.push(brandUrl(ws, e.target.value, tab))}>
         {brandsOf(ws).map((b) => <option key={b} value={b}>{b}</option>)}
       </select>
     </div>

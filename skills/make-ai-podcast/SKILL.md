@@ -9,26 +9,9 @@ A podcast-style video ad: one to four people talking, one on screen at a time, s
 **Seedance 2.5** generates the footage and the voices; **GPT Image 2.5** locks each speaker's look in
 a base image first. Any length, any language: longer just means more clips (step 8).
 
-## Workflow
-
-Run in order. Show each step's artifact and wait for the user before moving on.
-
-1. **Research** — ground in the brand's research files; sign off product, persona + angle, claims.
-2. **Concept** — product · persona · angle · market/language · speaker count; 3 options per element.
-3. **Characters** — design each speaker's look and voice; 3 options.
-4. **Set** — generate the podcast-set photo; a facing per speaker.
-5. **Base-image prompts** — one edit-instruction prompt per character, from their set photo.
-6. **Generate the base images** — three rolls per character; the user picks.
-7. **Script** — a casual dialogue written to the chosen faces; 3 options.
-8. **Video prompts** — split into clips within the model's per-clip cap.
-9. **Generate the video** — Seedance, one run per clip, once the prompts are approved.
-10. **Finish** — self-edit or editor handoff via **upload-ads**; record the ad.
-
 ## 1. Research
 
-Ground in the product's `-research.md`, `-personas.md` and `-angles.md`, the brand's
-`inputs/memory.md` (**save-brand-memory**), and any client brief in `inputs/`. If the research is
-missing or thin, onboard first (**research-brand**, with **pull-reviews**). Work from the research doc
+Load the brand context (AGENTS.md) and any client brief in `inputs/`. Work from the research doc
 itself; don't re-summarize it into a brief, since paraphrase overstates claims.
 
 The gate: the user signs off the product (and doc), the persona + angle (picked in step 2), the
@@ -40,12 +23,11 @@ the doc — never stitch one together from features and benefits.
 
 ## 2. Concept
 
-Propose **3 deliberately differentiated options** per element, in order; skip any element the brief
-or the user already set.
+Settle each element in order; skip any the brief or the user already set.
 
 - **Product** — usually set by step 1's gate.
-- **Persona** — from `-personas.md`; ideate fresh ones when none fits (**ideate-personas**).
-- **Angle** — from `-angles.md`, likewise (**ideate-angles**).
+- **Persona** and **angle** — from `-personas.md` and `-angles.md`; ideate fresh ones when none
+  fits (**ideate-personas-angles**).
 - **Target market** — sets the voices' **accent** (US → American, UK → British) and the script's
   **language, idioms and phrasing**.
 - **Format variation** — a one-, two-, three-, or four-person show.
@@ -53,7 +35,7 @@ or the user already set.
 ## 3. Characters
 
 Per speaker: age, ethnicity, look, outfit, and a **detailed voice design** (checklist in
-**generate-voice**). Propose **3 deliberately differentiated** casts; the user locks one.
+**generate-voice**).
 
 Make the voices **clearly contrasting** (a low, warm alto against a bright, airy mezzo): Seedance
 builds the voices from this text, and similar descriptions blur into one voice. This block gets
@@ -62,8 +44,8 @@ pasted verbatim into every video prompt.
 ## 4. Set
 
 Generate the **podcast-set photo** with **write-prompt** (`tools/generate-image.mjs`, 9:16 at 1K,
-three rolls; the user picks; save as `base/set.png`). Offer 3 set vibes that fit the brand and persona
-(backdrop, light, props). Use a real set photo only when the brand owns one the user wants
+three rolls; save the pick as `base/set.png`). Options vary the vibe (backdrop, light, props) to
+fit the brand and persona. Use a real set photo only when the brand owns one the user wants
 (**search-media**); never adapt a photo of someone else's show.
 
 The prompt asks for:
@@ -112,8 +94,7 @@ node tools/generate-image.mjs \
 ```
 
 Roll `-a`/`-b`/`-c`; the second speaker's `--ref` is the `-flipped` copy. Keep `--out` under
-`workspaces/<WS>/…` (the tool picks the workspace's keys from it). Show the rolls; **the user
-picks** — never grade them yourself. If no roll lands, tighten the
+`workspaces/<WS>/…` (the tool picks the workspace's keys from it). If no roll lands, tighten the
 prompt and reroll.
 
 ## 7. Script
@@ -124,8 +105,7 @@ the problem in the guest's lived words · what she tried that didn't work · wha
 simply and hedged like a layperson · the result, with a number and a timeframe (signed-off claims
 only) · the after, a scene from her week now · the product, named naturally near the end.
 
-Offer **3 deliberately differentiated** scripts, each opening on a different beat (the result, the
-problem, what she tried). Agree the target length with the user. Label every line with the speaker's
+Options each open on a different beat (the result, the problem, what she tried). Agree the target length with the user. Label every line with the speaker's
 name and role: `MAYA (HOST):`, `CHLOE (GUEST):`. Writing and claim rules live in **write-copy**; load
 it. The podcast-specific dialogue craft:
 
@@ -198,7 +178,7 @@ node tools/generate-video.mjs \
   --image <host-base>.png --image <guest-base>.png \
   --model seedance-2.5 \
   --aspect 9:16 --resolution 480p --duration <within the model's cap> --generate-audio \
-  --out workspaces/<WS>/<Brand>/outputs/<ad-name>/<clip>.mp4 --timeout 600
+  --out workspaces/<WS>/<Brand>/outputs/<ad-name>/clips/<clip>.mp4 --timeout 600
 ```
 
 - `--image`: the base image of each character who speaks in that clip.
@@ -215,16 +195,12 @@ The clips carry no music and no on-screen product; both go in during the edit. T
 
 - **Self-edit in the harness.** Load **edit-video** and build the cut as an edit document: the clips
   in order, the product graphic at the beat that fits (**search-media**), captions and music as
-  wanted (**caption-video**, **add-music**). The user reviews it in Studio and leaves notes there.
-- **Hand off to an editor.** Upload the clips (**upload-ads**: e.g. a Drive folder and a Notion page
-  linking it) with an **editing instructions** block: the opening hook (the exact script line it
-  must match), subtitles, the exact clip order, zoom-in/zoom-out moments, background-music direction
-  (trending, copyright-free), and a note to add a little noise and experiment with
-  highlights/shadows to reduce the AI look.
+  wanted (**caption-video**, **add-music**).
+- **Hand off to an editor:** **write-handoff** (Editor handoff).
 
-Once the cut is approved, write its record to `outputs/json/[id].json` (schema in
-`tools/record-ad.mjs` — concept, script, clip prompts + params, final output). Index refresh and R2
-push: AGENTS.md; a final cut rendered here needs `--originals` (**edit-video**, Export).
+The ad's record (AGENTS.md) holds the concept, script, clip prompts + params and the final output.
+Index refresh and R2 push: AGENTS.md; a final cut rendered here needs `--originals` (**edit-video**,
+Export).
 
 ## Naming
 

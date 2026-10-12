@@ -10,11 +10,10 @@
 import { mkdtempSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { have, run, ffprobeJson, readProducts, inferBrand, catalogPaths } from './catalog.mjs';
+import { have, run, ffprobeJson, readRoster, inferBrand, pcm, round } from './catalog.mjs';
 import { generateJSON, filePart, transcribeWords, ANALYSIS_MODEL, INLINE_MAX, WORDS_MODEL } from './gateway.mjs';
 import { buildAudioPrompt, buildAudioSchema, buildMergePrompt, buildMergeSchema } from './analysis-prompt.mjs';
 
-const round2 = (n) => Math.round(n * 100) / 100;
 const SILENT_DB = -50; // a track whose loudest peak is below this is silence (digital silence reads -91)
 
 // ---------- audio track ----------
@@ -43,10 +42,8 @@ export function audioTrack(src, made = null) {
 // Names to spell right: brand, products (+ aliases), known people, and products.json `vocabulary`
 // (e.g. 'Acme (said "Ack-mee")').
 export function vocabulary(mediaDir) {
-  let extra = [], people = [];
-  try { const d = JSON.parse(readFileSync(join(dirname(mediaDir), 'products.json'), 'utf8')); if (Array.isArray(d?.vocabulary)) extra = d.vocabulary; } catch { /* none */ }
-  try { people = JSON.parse(readFileSync(catalogPaths(mediaDir).people, 'utf8')); } catch { /* no roster */ }
-  const names = [inferBrand(mediaDir), ...extra, ...readProducts(mediaDir).flatMap((p) => [p.name, ...(p.aliases || [])]), ...(Array.isArray(people) ? people : []).map((p) => p.name)];
+  const { products, vocabulary: extra, people } = readRoster(mediaDir);
+  const names = [inferBrand(mediaDir), ...extra, ...products.flatMap((p) => [p.name, ...(p.aliases || [])]), ...people.map((p) => p.name)];
   return [...new Set(names.filter(Boolean).map(String))];
 }
 
@@ -61,7 +58,7 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
 
   const cuts = splitPoints(track.path, dur, Math.ceil(dur / PART));
   const parts = cuts.slice(0, -1).map((own, k) => {
-    const from = round2(Math.max(0, own - OVERLAP)), to = round2(Math.min(dur, cuts[k + 1] + OVERLAP));
+    const from = round(Math.max(0, own - OVERLAP)), to = round(Math.min(dur, cuts[k + 1] + OVERLAP));
     const path = join(track.dir, `part${k + 1}.mp3`);
     run('ffmpeg', ['-y', '-v', 'error', '-ss', String(from), '-t', String(to - from), '-i', track.path, '-c', 'copy', path]);
     return { index: k + 1, of: cuts.length - 1, from, to, own: [own, cuts[k + 1]], path };
@@ -72,7 +69,7 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
   // fits the whole track is read as absolute; others are held at the part's end.
   const kept = outs.map((o, k) => {
     const { from, to } = parts[k];
-    const at = (x) => { x = +x || 0; return round2(Math.min(to, x > to - from + 1 && x >= from && x <= to ? x : x + from)); };
+    const at = (x) => { x = +x || 0; return round(Math.min(to, x > to - from + 1 && x >= from && x <= to ? x : x + from)); };
     return (o.sentences || []).map((x) => ({ ...x, start: at(x.start), end: at(x.end) }))
       .filter((x) => { const mid = (x.start + x.end) / 2; return mid >= parts[k].own[0] && (mid < parts[k].own[1] || k === parts.length - 1); });
   });
@@ -91,7 +88,7 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
 // A cut-off or looping reply is retried once with a repetition limit at temperature 1; loops left
 // after that are collapsed.
 async function soundCall(key, path, { brand, vocab, standalone, duration, part }) {
-  const secs = duration ? Math.round(duration * 10) / 10 : null;
+  const secs = duration ? round(duration, 1) : null;
   const ask = (strict) => generateJSON(key, {
     parts: [filePart(path, 'audio/mpeg'), { type: 'text', text: buildAudioPrompt({ brand, vocab, duration: secs, standalone, part, strict }) }],
     schema: buildAudioSchema({ standalone, part: !!part }),
@@ -140,7 +137,7 @@ function splitPoints(path, dur, n) {
       if (avg < bestDb) { bestDb = avg; best = (f + W / 2) / 100; }
       sum += (db[f + W] ?? 0) - db[f];
     }
-    cuts.push(round2(best));
+    cuts.push(round(best));
   }
   cuts.push(dur);
   return cuts;
@@ -171,7 +168,7 @@ async function mergeParts(key, parts, outs, kept, standalone) {
 
 // The sound call's sentences → the catalog transcript (times clamped to the clip), or null.
 export function toTranscript(out, duration) {
-  const cl = (x) => round2(Math.min(duration || Infinity, Math.max(0, +x || 0)));
+  const cl = (x) => round(Math.min(duration || Infinity, Math.max(0, +x || 0)));
   const segments = (out.sentences || []).filter((s) => String(s.text || '').trim())
     .map((s) => ({ start: cl(s.start), end: Math.max(cl(s.start), cl(s.end)), speaker: String(s.speaker || 'S1').trim(), text: s.text.trim() }));
   if (!out.has_speech || !segments.length) return null;
@@ -203,11 +200,10 @@ function mapTimings(words, timed) {
 
 // Loudness of a file's audio in 10 ms frames (dB), or null.
 function loudness(file) {
-  const r = run('ffmpeg', ['-v', 'quiet', '-i', file, '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], { allowFail: true, binary: true });
-  if (!r.stdout?.length) return null;
-  const pcm = new Int16Array(r.stdout.buffer, r.stdout.byteOffset, Math.floor(r.stdout.length / 2));
+  const samples = pcm(file, 16000);
+  if (!samples) return null;
   const hop = 160, db = [];
-  for (let i = 0; i + hop <= pcm.length; i += hop) { let s = 0; for (let j = i; j < i + hop; j++) s += (pcm[j] / 32768) ** 2; db.push(10 * Math.log10(s / hop + 1e-12)); }
+  for (let i = 0; i + hop <= samples.length; i += hop) { let s = 0; for (let j = i; j < i + hop; j++) s += (samples[j] / 32768) ** 2; db.push(10 * Math.log10(s / hop + 1e-12)); }
   return db;
 }
 
@@ -257,7 +253,7 @@ export async function alignWords({ file, transcript, key }) {
     if (db?.length) times = tidyTimes(times, db);
   } finally { rmSync(track.dir, { recursive: true, force: true }); }
 
-  const out = words.map((w, i) => ({ start: round2(times[i].start), end: round2(times[i].end), word: w.word, speaker: w.speaker }));
+  const out = words.map((w, i) => ({ start: round(times[i].start), end: round(times[i].end), word: w.word, speaker: w.speaker }));
   const segments = transcript.segments.map((s, si) => {
     const ws = out.filter((_, i) => words[i].si === si);
     return ws.length ? { ...s, start: ws[0].start, end: ws[ws.length - 1].end } : s;

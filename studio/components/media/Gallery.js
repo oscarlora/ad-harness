@@ -1,20 +1,19 @@
 'use client';
-// The media library: justified grid, filter bar, multi-select actions, video scrub, audio waves, and the viewer.
+// The media library: masonry grid, filter bar, multi-select actions, video scrub, audio waves, and the viewer.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiBase, fileUrl, getJson, openFile } from '../../lib/client/api.js';
-import { useBrandData } from '../../lib/client/hooks.js';
-import { LoadError, ToolbarStart } from '../BrandPage.js';
-import { IcCopy, IcDl, IcFolder, IcFull, IcInfo, IcLink } from './icons.js';
+import { apiBase, fileUrl, getJson, mediaPath, openFile } from '../../lib/client/api.js';
+import { masonry, useBrandData, useColumns } from '../../lib/client/hooks.js';
+import { Bars, clock, LoadError } from '../BrandPage.js';
+import { IcCopy, IcDl, IcFolder, IcFull, IcLink } from '../icons.js';
+import { spriteCell } from '../Player.js';
 import MediaViewer from './MediaViewer.js';
-import { drawWave, fmtDur, loadPeaks } from './wave.js';
+import { Wave } from './wave.js';
 
-const TARGET_H = 210;
-const GAP = 8;
-
-const aspectOf = (r) => {
+// A card's width / height: the file's, kept between 1:2 and 2:1; audio is a wide strip.
+const ratioOf = (r) => {
   if (r.file?.type === 'audio') return 1.5;
   const w = r.file?.width, h = r.file?.height;
-  return w && h ? w / h : 1;
+  return w && h ? Math.min(2, Math.max(0.5, w / h)) : 1;
 };
 
 function matches(r, filters) {
@@ -29,7 +28,6 @@ function matches(r, filters) {
       (r.products || []).join(' '),
       (r.people || []).join(' '),
       (r.tags || []).join(' '),
-      r.text_in_media,
       r.visual_description,
       (r.scenes || []).map((s) => s.description).join(' '),
       r.audio_description,
@@ -41,88 +39,37 @@ function matches(r, filters) {
   return true;
 }
 
-function AudioCard({ ws, brand, rec, w, h }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    let dead = false;
-    const cv = ref.current;
-    cv.width = w;
-    cv.height = h;
-    loadPeaks(ws, brand, rec.id).then((peaks) => { if (!dead && ref.current) drawWave(ref.current, peaks, { color: '#a3a3a3' }); });
-    return () => { dead = true; };
-  }, [ws, brand, rec.id, w, h]);
-  return <canvas ref={ref} />;
-}
-
-function Scrub({ ws, brand, rec, w, cardRef }) {
-  const sp = rec.sprites;
-  const scale = w / sp.frameW;
-  const [pos, setPos] = useState('0px 0px');
-  // Clamp to the frames the clip actually filled, so we never land on empty sprite cells.
-  const frames = Math.max(1, Math.min(sp.cols * sp.rows, Math.round((rec.file?.duration || 0) / (sp.interval || 1)) || 1));
-
-  useEffect(() => {
-    const el = cardRef.current;
-    if (!el) return undefined;
-    const onMove = (e) => {
-      const rect = el.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const idx = Math.max(0, Math.min(frames - 1, Math.floor(Math.max(0, Math.min(0.999, x)) * frames)));
-      setPos(`-${(idx % sp.cols) * sp.frameW * scale}px -${Math.floor(idx / sp.cols) * sp.frameH * scale}px`);
-    };
-    el.addEventListener('mousemove', onMove);
-    return () => el.removeEventListener('mousemove', onMove);
-  }, [cardRef, frames, scale, sp.cols, sp.frameW, sp.frameH]);
-
-  return (
-    <div
-      className="scrub"
-      style={{
-        backgroundImage: `url(${fileUrl(ws, brand, `inputs/media/${sp.sheet}`)})`,
-        backgroundSize: `${sp.cols * sp.frameW * scale}px ${sp.rows * sp.frameH * scale}px`,
-        backgroundPosition: pos,
-      }}
-    />
-  );
-}
-
-function Card({ ws, brand, rec, w, h, selected, onToggleSel, onOpen, actions }) {
-  const cardRef = useRef(null);
+function Card({ ws, brand, rec, selected, onToggleSel, onOpen, actions }) {
   const t = rec.file?.type;
+  const sprites = t === 'video' && rec.sprites && { ...rec.sprites, url: fileUrl(ws, brand, mediaPath(rec.sprites.sheet)) };
+  const [x, setX] = useState(0); // the pointer across the card, 0–1, picks the scrub frame
   const pills = [
-    ['Open full screen', IcFull, () => onOpen(false)],
-    ['Use as reference', IcLink, () => actions.useRef(rec.id)],
+    ['Open full screen', IcFull, onOpen],
+    ['Use as reference', IcLink, () => actions.copyRef([rec.id])],
     ['Download', IcDl, () => actions.download(rec)],
     ['Copy file name', IcCopy, () => actions.copyName(rec)],
     ['Reveal', IcFolder, () => actions.open(rec, 'reveal')],
-    ['Details', IcInfo, () => onOpen(true)],
   ];
   return (
-    <div
-      ref={cardRef}
-      className={`g-card${selected ? ' sel' : ''}`}
-      style={{ width: w, height: h }}
-      onClick={() => onOpen(false)}
-    >
-      {t === 'audio'
-        ? <AudioCard ws={ws} brand={brand} rec={rec} w={w} h={h} />
-        : <img className="ph" loading="lazy" src={fileUrl(ws, brand, `inputs/media/_catalog/thumbs/${rec.id}.jpg`)} alt={rec.file?.name || rec.id} />}
-      {t === 'video' && rec.sprites && <Scrub ws={ws} brand={brand} rec={rec} w={w} cardRef={cardRef} />}
-      <div
-        className={`g-check${selected ? ' on' : ''}`}
-        role="checkbox"
-        aria-checked={selected}
-        aria-label="Select"
-        onClick={(e) => { e.stopPropagation(); onToggleSel(rec.id); }}
-      />
+    <div className={`media-frame g-card${selected ? ' sel' : ''}`} style={{ aspectRatio: ratioOf(rec) }}>
+      <button
+        type="button" className="g-card__open" aria-label={`Open ${rec.file?.name || rec.id}`} onClick={onOpen}
+        onPointerMove={sprites ? (e) => { const r = e.currentTarget.getBoundingClientRect(); setX(Math.min(0.999, Math.max(0, (e.clientX - r.left) / r.width))); } : undefined}
+      >
+        {t === 'audio'
+          ? <Wave ws={ws} brand={brand} id={rec.id} />
+          : <img loading="lazy" src={fileUrl(ws, brand, mediaPath(`_catalog/thumbs/${rec.id}.jpg`))} alt="" />}
+        {sprites && <span className="g-card__scrub" style={spriteCell(sprites, x * (rec.file.duration || 0), rec.file.duration || 0)} />}
+        <span className="g-card__meta">
+          <span className="nm">{rec.file?.name || ''}</span>
+          {rec.file?.duration != null && <span className="dur">{clock(rec.file.duration)}</span>}
+        </span>
+      </button>
+      <button type="button" className="g-check" aria-pressed={selected} aria-label="Select" onClick={() => onToggleSel(rec.id)} />
       <div className="g-card__pills">
         {pills.map(([title, Icon, fn]) => (
-          <div key={title} className="g-pill" title={title} onClick={(e) => { e.stopPropagation(); fn(); }}><Icon /></div>
+          <button key={title} type="button" className="g-pill" title={title} aria-label={title} onClick={fn}><Icon /></button>
         ))}
-      </div>
-      <div className="g-card__meta">
-        <span className="nm">{rec.file?.name || ''}</span>
-        {rec.file?.duration != null && <span className="dur">{fmtDur(rec.file.duration)}</span>}
       </div>
     </div>
   );
@@ -133,29 +80,14 @@ export default function Gallery({ ws, brand }) {
   const [filters, setFilters] = useState({ q: '', type: '', source: '', person: '', orientation: '', sort: 'new' });
   const [sel, setSel] = useState(() => new Set());
   const [viewerId, setViewerId] = useState(null);
-  const [sideOpen, setSideOpen] = useState(false);
+  const [sideOpen, setSideOpen] = useState(true);
   const [toastMsg, setToastMsg] = useState('');
-  const [gridW, setGridW] = useState(0);
-  const gridRef = useRef(null);
   const toastTimer = useRef(null);
 
   const toast = useCallback((m) => {
     setToastMsg(m);
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(''), 1800);
-  }, []);
-
-  useEffect(() => {
-    const el = gridRef.current;
-    if (!el) return undefined;
-    const measure = () => {
-      const cs = getComputedStyle(el);
-      setGridW(el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
   }, []);
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
@@ -173,34 +105,21 @@ export default function Gallery({ ws, brand }) {
     return [...s].sort();
   }, [records]);
 
-  const rows = useMemo(() => {
-    if (!gridW) return [];
-    const out = [];
-    let row = [], sum = 0;
-    for (const r of view) {
-      row.push(r);
-      sum += aspectOf(r);
-      if (sum * TARGET_H + GAP * (row.length - 1) >= gridW) {
-        out.push({ items: row, h: (gridW - GAP * (row.length - 1)) / sum });
-        row = []; sum = 0;
-      }
-    }
-    if (row.length) out.push({ items: row, h: TARGET_H });
-    return out;
-  }, [view, gridW]);
+  const n = useColumns();
+  const columns = useMemo(() => masonry(view, n, (r) => 1 / ratioOf(r)), [view, n]);
 
   const actions = useMemo(() => ({
-    useRef: async (id) => {
+    // Each file's reference link, all copied at once (one per line).
+    copyRef: async (ids) => {
       try {
-        const r = await getJson(`${apiBase(ws, brand)}/presign?id=${encodeURIComponent(id)}`);
-        const url = r.url.startsWith('http') ? r.url : window.location.origin + r.url;
-        await navigator.clipboard.writeText(url);
-        toast(r.local ? (r.message || 'No R2 creds — copied a local URL') : 'Copied presigned reference URL');
+        const rs = await Promise.all(ids.map((id) => getJson(`${apiBase(ws, brand)}/presign?id=${encodeURIComponent(id)}`)));
+        await navigator.clipboard.writeText(rs.map((r) => new URL(r.url, window.location.origin).href).join('\n'));
+        toast(rs[0].local ? rs[0].message : ids.length > 1 ? `Copied ${ids.length} reference links` : 'Copied reference link');
       } catch (e) { toast(String(e.message || e)); }
     },
     download: (rec) => {
       const a = document.createElement('a');
-      a.href = fileUrl(ws, brand, `inputs/media/${rec.file?.name}`);
+      a.href = fileUrl(ws, brand, mediaPath(rec.file?.name));
       a.download = rec.file?.name || '';
       a.click();
     },
@@ -208,19 +127,17 @@ export default function Gallery({ ws, brand }) {
       try { await navigator.clipboard.writeText(rec.file?.name || ''); toast('Copied file name'); } catch {}
     },
     open: (rec, mode) =>
-      openFile(ws, brand, `inputs/media/${rec.file?.name}`, mode)
+      openFile(ws, brand, mediaPath(rec.file?.name), mode)
         .then(() => toast(mode === 'open' ? 'Opened' : 'Revealed'))
         .catch((e) => toast(String(e.message || e))),
   }), [ws, brand, toast]);
 
   const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const openViewer = (id, withSide) => { setViewerId(id); if (withSide) setSideOpen(true); };
   const nav = useCallback((d) => {
     setViewerId((cur) => {
       const i = view.findIndex((r) => r.id === cur);
-      const j = i + d;
-      return j >= 0 && j < view.length ? view[j].id : cur;
+      return i < 0 ? cur : view[(i + d + view.length) % view.length].id;
     });
   }, [view]);
 
@@ -234,20 +151,20 @@ export default function Gallery({ ws, brand }) {
 
   return (
     <div>
-      <div className="toolbar">
-        <ToolbarStart ws={ws} brand={brand} current="media" count={data ? `${view.length} of ${records.length} assets` : 'Loading'} updatedAt={updatedAt} />
-        <div className="toolbar__spacer" />
+      <Bars
+        ws={ws} brand={brand} current="media" count={data ? `${view.length} of ${records.length} assets` : 'Loading'} updatedAt={updatedAt}
+        search={sel.size === 0 && <input className="input bar__search" placeholder="Search media" aria-label="Search media" value={filters.q} onChange={(e) => setF('q', e.target.value)} />}
+      >
         {sel.size > 0 ? (
           <>
-            <span className="toolbar__count">{sel.size} selected</span>
-            <button type="button" className="btn" onClick={() => [...sel].forEach((id) => actions.useRef(id))}>Use</button>
+            <span className="bar__count">{sel.size} selected</span>
+            <button type="button" className="btn" onClick={() => actions.copyRef([...sel])}>Use</button>
             <button type="button" className="btn" onClick={() => [...sel].forEach((id) => { const r = records.find((x) => x.id === id); if (r) actions.download(r); })}>Download</button>
             <button type="button" className="btn" onClick={() => [...sel].forEach((id) => { const r = records.find((x) => x.id === id); if (r) actions.open(r, 'reveal'); })}>Reveal</button>
             <button type="button" className="btn" onClick={() => setSel(new Set())}>Clear</button>
           </>
         ) : (
           <>
-            <input className="input toolbar__search" placeholder="Search media" value={filters.q} onChange={(e) => setF('q', e.target.value)} />
             <select className="select" aria-label="Type" value={filters.type} onChange={(e) => setF('type', e.target.value)}>
               <option value="">All types</option><option value="image">Images</option><option value="video">Videos</option><option value="audio">Audio</option>
             </select>
@@ -266,33 +183,33 @@ export default function Gallery({ ws, brand }) {
             </select>
           </>
         )}
-      </div>
+      </Bars>
 
       {error && <LoadError what="the media catalog" error={error} onRetry={load} />}
 
-      <div className="g-page" ref={gridRef}>
+      <div className="grid-page">
         {!error && data && view.length === 0 && <div className="empty-state">No media matches these filters.</div>}
-        {rows.map((row, ri) => (
-          <div className="g-row" key={ri}>
-            {row.items.map((r) => (
-              <Card
-                key={r.id}
-                ws={ws} brand={brand} rec={r}
-                w={Math.floor(aspectOf(r) * row.h)} h={Math.floor(row.h)}
-                selected={sel.has(r.id)}
-                onToggleSel={toggleSel}
-                onOpen={(withSide) => openViewer(r.id, withSide)}
-                actions={actions}
-              />
-            ))}
-          </div>
-        ))}
+        <div className="masonry">
+          {columns.map((col, ci) => (
+            <div className="masonry__col" key={ci}>
+              {col.map((r) => (
+                <Card
+                  key={r.id}
+                  ws={ws} brand={brand} rec={r}
+                  selected={sel.has(r.id)}
+                  onToggleSel={toggleSel}
+                  onOpen={() => setViewerId(r.id)}
+                  actions={actions}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
 
       {viewerRec && (
         <MediaViewer
           ws={ws} brand={brand} rec={viewerRec}
-          hasR2={!!data?.hasR2}
           sideOpen={sideOpen}
           onToggleSide={() => setSideOpen((o) => !o)}
           onNav={nav}

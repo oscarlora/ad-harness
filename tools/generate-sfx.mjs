@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // generate-sfx.mjs — generate isolated sound effects with Seed Audio 1.0.
 
-import { die, parseArgs } from './lib/catalog.mjs';
+import { die, parseArgs, usage } from './lib/catalog.mjs';
 import { runSeedAudio } from './lib/providers.mjs';
 
 const HELP = `generate-sfx.mjs — Seed Audio 1.0 sound-effect generator
@@ -17,8 +17,8 @@ Optional:
 
 Env: <WORKSPACE>_SEGMIND_API_KEY (inferred from --out).`;
 
-const args = parseArgs(process.argv.slice(2));
-if (args.help || !args.prompt) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+const args = parseArgs(process.argv.slice(2), { help: HELP });
+if (!args.prompt) usage(HELP);
 if (!args.out) die('--out is required');
 const duration = Number(args.duration || 2);
 if (!Number.isFinite(duration) || duration <= 0) die(`--duration must be positive, got: ${args.duration}`);

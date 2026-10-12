@@ -1,13 +1,12 @@
 'use client';
-// The ads board: records + planned slots in one table, with filters, search and a full-screen viewer.
+// The ads board: records + batch-plan slots not made yet as a masonry grid, with filters, search and a full-screen viewer.
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 import { fileUrl, openFile, workflowUrl } from '../../lib/client/api.js';
-import { useBrandData, useCopied } from '../../lib/client/hooks.js';
-import { LoadError, ToolbarStart } from '../BrandPage.js';
+import { masonry, useBrandData, useColumns, useCopied } from '../../lib/client/hooks.js';
+import { Badge, Bars, LoadError, Param, STATUSES, statusLabel, statusOf, when, words } from '../BrandPage.js';
+import Player from '../Player.js';
 import ViewerShell from '../ViewerShell.js';
-
-const STATUS_ORDER = ['planned', 'generated', 'draft', 'revision', 'approved', 'synced'];
 
 // Photo- vs graphic-centric: from the record, else photo-centric when a ref is a library photo outside the brand kit.
 function imageType(rec) {
@@ -18,127 +17,85 @@ function imageType(rec) {
   return scene ? 'Photo' : 'Graphic';
 }
 
-const isVideo = (p) => /\.(mp4|mov|webm|m4v)$/i.test(p || '');
-function Render({ video, src, alt, ...props }) {
-  return video
-    ? <video src={src} muted playsInline preload="metadata" aria-label={alt} {...props} />
-    : <img src={src} alt={alt} loading="lazy" {...props} />;
-}
-
-function Clamp({ className = '', children }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div
-      className={`clamp${open ? ' open' : ''} ${className}`}
-      title="Click to expand/collapse"
-      onClick={() => setOpen((o) => !o)}
-    >
-      {children}
-    </div>
-  );
-}
-
-const Badge = ({ status }) => {
-  const s = (status || 'planned').toLowerCase();
-  return <span className="badge" data-status={s}>{s}</span>;
+// The line that names the ad: its hook, else its first hook variant, else its angle.
+const hookOf = (rec) => {
+  const c = rec.copy || {};
+  return c.hook || Object.entries(c).find(([k]) => /^hook/i.test(k))?.[1] || words(rec.concept?.angle) || '';
 };
 
-function PersonaCell({ rec }) {
-  const slug = rec?.concept?.persona || '';
-  const pd = rec?.personaDetail;
-  if (!pd) return slug;
-  const head = [pd.age && pd.gender ? `${pd.age} ${pd.gender}` : pd.age || pd.gender, (pd.awareness || '').toLowerCase()].filter(Boolean).join(' · ');
-  const lines = [['pain', pd.pain], ['feels', pd.feels], ['wants', pd.wants], ['but', pd.but]].filter(([, v]) => v);
-  return (
-    <Clamp>
-      {slug}
-      {head && <div className="persona-detail">{head}</div>}
-      {lines.map(([k, v]) => <div key={k} className="persona-detail"><em>{k}</em> {v}</div>)}
-    </Clamp>
-  );
-}
+const sentence = (s) => { const w = words(s); return w.charAt(0).toUpperCase() + w.slice(1); };
 
-function CopyCell({ copy }) {
-  const c = copy || {};
-  const extras = Object.entries(c).filter(([k]) => k !== 'hook');
-  return (
-    <>
-      {c.hook ? <div className="hook">{c.hook}</div> : <div className="subcopy"><em>—</em></div>}
-      {extras.map(([k, v]) => <div key={k} className="subcopy"><em>{k}:</em> {String(v)}</div>)}
-    </>
-  );
-}
-
-function PromptCell({ prompt }) {
-  const [copied, copy] = useCopied();
-  if (!prompt) return <span className="subcopy"><em>no prompt (creator-delivered)</em></span>;
-  return (
-    <>
-      <Clamp className="prompt-text">{prompt}</Clamp>
-      <button
-        type="button"
-        className="btn btn--mini"
-        style={{ marginTop: '0.35rem' }}
-        onClick={() => copy(prompt)}
-      >
-        {copied ? 'Copied' : 'Copy'}
-      </button>
-    </>
-  );
-}
-
-function CopyField({ label, text, className = '' }) {
+const isVideo = (p) => /\.(mp4|mov|webm|m4v)$/i.test(p || '');
+// A copyable value; the copy button shows on hover.
+function CopyParam({ label, text, className = '' }) {
   const [copied, copy] = useCopied();
   return (
-    <div className="kv">
-      <div className="k kv__head">
-        <span className="eyebrow">{label}</span>
-        <button type="button" className="btn btn--mini" onClick={() => copy(text)}>{copied ? 'Copied' : 'Copy'}</button>
-      </div>
-      <div className={`v ${className}`}>{text}</div>
-    </div>
+    <Param label={label} className={`param--copy ${className}`}>
+      <span>{text}</span>
+      <button type="button" className="btn btn--mini" onClick={() => copy(text)}>{copied ? 'Copied' : 'Copy'}</button>
+    </Param>
   );
 }
 
 function Viewer({ ws, brand, view, index, onStep, onClose }) {
   const rec = view[index];
+  const [loaded, setLoaded] = useState({ src: '', ratio: 0 }); // the shown image's width / height
+  const src = rec ? fileUrl(ws, brand, rec.img, rec.__v) : '';
   if (!rec) return null;
   const cc = rec.concept || {};
+  const pd = rec.personaDetail;
   const gen = rec.generation || null;
   const copyRows = Object.entries(rec.copy || {});
   const openIt = (mode) => openFile(ws, brand, rec.img, mode).catch(() => {});
+  const personaHead = pd && [pd.age && pd.gender ? `${pd.age} ${pd.gender}` : pd.age || pd.gender, (pd.awareness || '').toLowerCase()].filter(Boolean).join(', ');
 
   return (
-    <ViewerShell onStep={onStep} onClose={onClose} side={(
+    <ViewerShell onStep={onStep} onClose={onClose} ratio={!isVideo(rec.img) && loaded.src === src ? loaded.ratio : 0} side={(
       <aside className="vw__side rise">
-        <h2>Ad {rec.id} <Badge status={rec.status} /> {rec.batch && <span className="pill-mark batch-mark">{rec.batch}</span>}</h2>
-        <div className="vw__file">{gen?.output || ''}</div>
-        <div className="kv">
-          <div className="k eyebrow">Concept</div>
-          <div className="v"><strong style={{ color: 'var(--fg)' }}>{cc.product || ''}</strong><br />
-            {[cc.persona, cc.angle, cc.format, imageType(rec)].filter(Boolean).join(' · ')}</div>
+        <h2>Ad {rec.id}</h2>
+        <div className="params">
+          <Param label="Status"><Badge status={rec.status} /></Param>
+          {rec.sentTo && (
+            <Param label="Sent to">
+              <span className="param__links">
+                {Object.entries(rec.sentTo).map(([dest, url]) => <a key={dest} href={url} target="_blank" rel="noreferrer">{sentence(dest)}</a>)}
+              </span>
+            </Param>
+          )}
+          {rec.batch && <Param label="Batch">{rec.batch}</Param>}
+          <Param label="Product">{words(cc.product)}</Param>
+          <Param label="Format">{words(cc.format)}</Param>
+          <Param label="Type">{imageType(rec)}</Param>
         </div>
-        {copyRows.map(([k, v]) => <CopyField key={k} label={k} text={String(v)} className={k === 'hook' ? 'v--big' : ''} />)}
-        {rec.meta?.headline && <CopyField label="Meta headline" text={String(rec.meta.headline)} />}
-        {rec.meta?.primary_text && <CopyField label="Meta primary text" text={String(rec.meta.primary_text)} className="v--pre" />}
-        {rec.design && (
-          <div className="kv">
-            <div className="k eyebrow">Design</div>
-            <div className="v">{rec.design}</div>
-          </div>
-        )}
-        {gen && (
-          <div className="kv">
-            <div className="k eyebrow">Generation</div>
-            <div className="v">{[gen.model, gen.resolution, gen.aspect, gen.size, gen.generatedAt].filter(Boolean).join(' · ')}</div>
-          </div>
-        )}
-        {rec.prompt && (
-          <div className="kv">
-            <div className="k eyebrow">Prompt</div>
-            <div className="v v--mono">{rec.prompt}</div>
-          </div>
-        )}
+        <div className="params">
+          {cc.persona && <Param label="Persona">{words(cc.persona)}</Param>}
+          {personaHead && <Param label="Who">{personaHead}</Param>}
+          {pd && [['Pain', pd.pain], ['Feels', pd.feels], ['Wants', pd.wants], ['But', pd.but]].filter(([, v]) => v).map(([k, v]) => <Param key={k} label={k}>{v}</Param>)}
+          {cc.angle && <Param label="Angle">{words(cc.angle)}</Param>}
+          {rec.angleSource && <Param label="Angle source">{rec.angleSource}</Param>}
+        </div>
+        <div className="params">
+          {copyRows.map(([k, v]) => <CopyParam key={k} label={sentence(k)} text={String(v)} className={k === 'hook' ? 'param--strong' : ''} />)}
+          {rec.meta?.headline && <CopyParam label="Meta headline" text={String(rec.meta.headline)} />}
+          {rec.meta?.primary_text && <CopyParam label="Meta primary text" text={String(rec.meta.primary_text)} />}
+        </div>
+        <div className="params">
+          {rec.design && <Param label="Design">{rec.design}</Param>}
+          {(rec.refs || []).length > 0 && (
+            <Param label="References">
+              <div className="refstrip">
+                {rec.refs.map((r, k) => (
+                  <a key={k} href={fileUrl(ws, brand, r)} target="_blank" rel="noreferrer" title={r}>
+                    <span className="media-frame"><img loading="lazy" src={fileUrl(ws, brand, r, undefined, 160)} alt="" /></span>
+                  </a>
+                ))}
+              </div>
+            </Param>
+          )}
+          {gen && [['Model', gen.model], ['Resolution', gen.resolution], ['Aspect', gen.aspect], ['Dimensions', /^\d+x\d+$/.test(gen.size || '') && gen.size], ['Generated', when(gen.generatedAt)]].filter(([, v]) => v).map(([k, v]) => <Param key={k} label={k}>{String(v)}</Param>)}
+          {rec.prompt && <CopyParam label="Prompt" text={rec.prompt} className="param--long" />}
+          {gen?.output && <Param label="File" className="param--long">{gen.output}</Param>}
+        </div>
         <div className="vw__actions">
           <button type="button" className="btn" onClick={() => openIt('open')}>Open full</button>
           <button type="button" className="btn" onClick={() => openIt('reveal')}>Reveal</button>
@@ -147,9 +104,48 @@ function Viewer({ ws, brand, view, index, onStep, onClose }) {
       </aside>
     )}>
       {isVideo(rec.img)
-        ? <video src={fileUrl(ws, brand, rec.img, rec.__v)} controls autoPlay playsInline aria-label={`Ad ${rec.id}`} />
-        : <img src={fileUrl(ws, brand, rec.img, rec.__v)} alt={`Ad ${rec.id}`} />}
+        ? <Player key={rec.id} src={src} autoPlay keys label={`Ad ${rec.id}`} />
+        : <img src={src} alt={`Ad ${rec.id}`} onLoad={(e) => setLoaded({ src, ratio: e.target.naturalWidth / e.target.naturalHeight })} />}
     </ViewerShell>
+  );
+}
+
+// Width / height: the generation's aspect ("4:5") until the render loads, else a 9:16 video or a 4:5 image.
+function ratioGuess(rec) {
+  const m = String(rec.generation?.aspect || '').match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+  if (m) return m[1] / m[2];
+  return isVideo(rec.img) ? 9 / 16 : 4 / 5;
+}
+
+// Just the render, as in Media; ID and status show on hover.
+function AdCard({ ws, brand, rec, onOpen }) {
+  const [ratio, setRatio] = useState(() => ratioGuess(rec));
+  const fit = (w, h) => w && h && setRatio(w / h);
+  if (!rec.__rendered) {
+    return <div className="media-frame media-frame--empty" style={{ aspectRatio: ratio }}>#{rec.id} · {statusLabel(statusOf(rec))}</div>;
+  }
+  return (
+    <button type="button" className="media-frame" style={{ aspectRatio: ratio }} aria-label={`Open ad ${rec.id}`} onClick={onOpen}>
+      {isVideo(rec.img)
+        // #t= makes the browser paint the video's first frame.
+        ? <video src={`${fileUrl(ws, brand, rec.img, rec.__v)}#t=0.1`} muted playsInline preload="metadata" onLoadedMetadata={(e) => fit(e.target.videoWidth, e.target.videoHeight)} />
+        : <img src={fileUrl(ws, brand, rec.img, rec.__v, 800)} alt={`Ad ${rec.id}`} loading="lazy" onLoad={(e) => fit(e.target.naturalWidth, e.target.naturalHeight)} />}
+      <span className="g-card__meta"><span className="nm">#{rec.id} · {hookOf(rec)}</span><span className="dur">{statusLabel(statusOf(rec))}</span></span>
+    </button>
+  );
+}
+
+function Grid({ ws, brand, view, onOpen }) {
+  const n = useColumns();
+  const index = new Map(view.map((r, i) => [r.id, i]));
+  return (
+    <div className="masonry grid-page">
+      {masonry(view, n, (r) => 1 / ratioGuess(r)).map((col, ci) => (
+        <div className="masonry__col" key={ci}>
+          {col.map((rec) => <AdCard key={rec.id} ws={ws} brand={brand} rec={rec} onOpen={() => onOpen(index.get(rec.id))} />)}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -172,7 +168,7 @@ export default function Board({ ws, brand }) {
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return ads.filter((r) => {
-      if (status !== 'all' && (r.status || 'planned').toLowerCase() !== status) return false;
+      if (status !== 'all' && statusOf(r) !== status) return false;
       if (batch !== 'all' && r.batch !== batch) return false;
       if (!needle) return true;
       const hay = [r.id, r.status, r.batch, r.design, r.angleSource, r.concept?.product, r.concept?.persona, r.concept?.angle, r.concept?.format,
@@ -183,7 +179,7 @@ export default function Board({ ws, brand }) {
 
   const counts = useMemo(() => {
     const c = {};
-    ads.forEach((r) => { const s = (r.status || 'planned').toLowerCase(); c[s] = (c[s] || 0) + 1; });
+    ads.forEach((r) => { const s = statusOf(r); c[s] = (c[s] || 0) + 1; });
     return c;
   }, [ads]);
 
@@ -203,14 +199,15 @@ export default function Board({ ws, brand }) {
 
   return (
     <div>
-      <div className="toolbar">
-        <ToolbarStart ws={ws} brand={brand} current="board" count={data ? `${view.length} of ${ads.length} ads` : 'Loading'} updatedAt={updatedAt} />
-        <div className="toolbar__spacer" />
+      <Bars
+        ws={ws} brand={brand} current="board" count={data ? `${view.length} of ${ads.length} ads` : 'Loading'} updatedAt={updatedAt}
+        search={<input className="input bar__search" placeholder="Search ads" aria-label="Search hook, persona, angle, format" value={q} onChange={(e) => setQ(e.target.value)} />}
+      >
         <div className="chips" role="group" aria-label="Status filter">
           <button type="button" className="chip" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>All<small>{ads.length}</small></button>
-          {STATUS_ORDER.filter((s) => counts[s]).map((s) => (
+          {[...new Set([...Object.keys(STATUSES), ...Object.keys(counts)])].filter((s) => counts[s]).map((s) => (
             <button key={s} type="button" className="chip" aria-pressed={status === s} onClick={() => setStatus(s)}>
-              {s}<small>{counts[s]}</small>
+              {statusLabel(s)}<small>{counts[s]}</small>
             </button>
           ))}
         </div>
@@ -220,72 +217,11 @@ export default function Board({ ws, brand }) {
             {batches.map((b) => <option key={b} value={b}>{b}</option>)}
           </select>
         )}
-        <input
-          className="input toolbar__search"
-          placeholder="Search hook, persona, angle, format"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <button type="button" className="btn" title="Reload records" onClick={load}>↻</button>
-      </div>
+      </Bars>
 
       {error && <LoadError what="ads" error={error} onRetry={load} />}
       {!error && data && view.length === 0 && <div className="empty-state">No ads match.</div>}
-      {!error && view.length > 0 && (
-        <div className="board-wrap">
-          <table className="board-table">
-            <colgroup>
-              <col style={{ width: 116 }} /><col style={{ width: 50 }} /><col style={{ width: 110 }} /><col style={{ width: 150 }} /><col style={{ width: 118 }} />
-              <col style={{ width: 130 }} /><col style={{ width: 150 }} /><col style={{ width: 150 }} /><col style={{ width: 88 }} /><col style={{ width: 132 }} /><col style={{ width: 260 }} /><col style={{ width: 260 }} /><col />
-            </colgroup>
-            <thead>
-              <tr>
-                <th className="col-prev eyebrow">Ad</th><th className="eyebrow">ID</th><th className="eyebrow">Status</th><th className="eyebrow">Batch</th><th className="eyebrow">Product</th>
-                <th className="eyebrow">Persona</th><th className="eyebrow">Angle</th><th className="eyebrow">Format</th><th className="eyebrow">Type</th><th className="eyebrow">Refs</th><th className="eyebrow">Copy</th><th className="eyebrow">Design</th><th className="eyebrow">Prompt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {view.map((rec, i) => (
-                <tr key={rec.id}>
-                  <td className="col-prev">
-                    {rec.__rendered ? (
-                      <Render video={isVideo(rec.img)} className="thumb" src={fileUrl(ws, brand, rec.img, rec.__v)} alt={`ad ${rec.id}`} onClick={() => openViewer(i)} />
-                    ) : (
-                      <div className="thumb thumb--empty">{rec.status === 'planned' ? 'planned' : 'not generated'}</div>
-                    )}
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {rec.folder
-                      ? <Link className="cell-id" href={workflowUrl(ws, brand, rec.folder)} title="Workflow">{rec.id}</Link>
-                      : <span className="cell-id">{rec.id}</span>}
-                  </td>
-                  <td style={{ whiteSpace: 'nowrap' }}><Badge status={rec.status} /></td>
-                  <td>{rec.batch ? <span className="pill-mark batch-mark">{rec.batch}</span> : null}</td>
-                  <td className="cell-product">{rec.concept?.product || ''}</td>
-                  <td><PersonaCell rec={rec} /></td>
-                  <td>{rec.concept?.angle || ''}{rec.angleSource ? <div className="angle-src">{rec.angleSource}</div> : null}</td>
-                  <td>{rec.concept?.format || ''}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}><span className="pill-mark type-mark">{imageType(rec)}</span></td>
-                  <td>
-                    {(rec.refs || []).length ? (
-                      <div className="refstrip">
-                        {rec.refs.map((r, k) => (
-                          <a key={k} href={fileUrl(ws, brand, r)} target="_blank" rel="noreferrer" title={r}>
-                            <img loading="lazy" src={fileUrl(ws, brand, r)} alt="" />
-                          </a>
-                        ))}
-                      </div>
-                    ) : <span className="subcopy"><em>—</em></span>}
-                  </td>
-                  <td><CopyCell copy={rec.copy} /></td>
-                  <td><Clamp className="subcopy">{rec.design || ''}</Clamp></td>
-                  <td><PromptCell prompt={rec.prompt} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {!error && view.length > 0 && <Grid ws={ws} brand={brand} view={view} onOpen={openViewer} />}
 
       {viewerIdx >= 0 && (
         <Viewer ws={ws} brand={brand} view={view} index={viewerIdx} onStep={step} onClose={() => setViewerIdx(-1)} />

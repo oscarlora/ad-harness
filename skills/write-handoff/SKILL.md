@@ -1,6 +1,6 @@
 ---
 name: write-handoff
-description: Optional. Write the short, conversational message that goes with a batch of ads (image, video, or both) when you send them to someone else — a client or a teammate. Two paths — a per-ad sample list, or a high-level note for a new batch dropped into a folder they already have. Produces the message only, not the files. Solo users skip it.
+description: Optional. Write the short, conversational message that goes with a batch of ads (image, video, or both) when you send them to someone else — a client or a teammate. Two paths — a per-ad sample list, or a high-level note for a new batch dropped into a folder they already have. Also owns the package for a video handed to an editor instead of edited here. Solo users skip it.
 ---
 
 # Write handoff
@@ -16,7 +16,7 @@ Both are friendly, conversational, and concise. No em dashes.
 
 - **Recipient name** (a `[name]` placeholder if unknown).
 - **Media type** — say "image ads", "video ads", or "image and video ads", never "static image ads". "Ad" if there's only one.
-- **Per ad** (sample list): **format**, **product**, **persona**, **angle** — from the name `<id>_<Variation>_<Concept>_<Format>_<Persona>_<Angle>_<Product>` or the run.
+- **Per ad** (sample list): **format**, **product**, **persona**, **angle** — from the ad's name (**write-prompt**) or the run.
 - **Folder URL** (new batch drop).
 
 ## Path 1 — Sample list (one line per ad)
@@ -54,3 +54,12 @@ Every ad is a different format, across [a sweep of the formats and styles].
 
 If anything needs tweaking, let me know.
 ```
+
+## Editor handoff (video)
+
+When a video goes to an editor instead of being edited here, upload one folder (**upload-ads**) with
+the clips in order, plus whatever the workflow made of frames, sheets, voiceover, script and
+storyboard, and an **edit note**: the opening hook (the exact script line it must match), the clip
+order, captions, zoom-in/zoom-out moments, the end card, music direction (trending,
+copyright-free), and a little added noise and highlight/shadow play to reduce the AI look. Then
+send it with a message above.

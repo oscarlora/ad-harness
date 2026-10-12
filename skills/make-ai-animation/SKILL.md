@@ -12,16 +12,14 @@ A scripted scene, animated, on one of two paths (step 1):
 - **Dialogue:** the characters speak their lines, one clip per shot. **Both** (a narrator too)
   follows this path and adds the narrator from the narrated one.
 
-Every shot is approved as a still before it becomes a clip. Wait for a yes at each step before
-spending on the next. Work in `outputs/<ad>/`: `script.md`, `storyboard.md`, `voice/`, `sheets/`,
+Every shot is approved as a still before it becomes a clip. Work in `outputs/<ad>/`: `script.md`, `storyboard.md`, `voice/`, `sheets/`,
 `frames/`, `prompts/`, `clips/`, `audio/`, `drafts/`, `final/`. Keep replaced takes beside the new
 ones with a letter suffix (`frame-03-a.png`, `clip-01-b.mp4`).
 
 ## 1. Concept
 
-Persona, angle and the 2–4 claims it carries, from the product's research and the brand's
-`inputs/memory.md` (as in **make-ai-podcast** step 1). Locked if the brief or a reference sets
-them; otherwise 3 options each. The product's own lines carry only signed-off claims; bigger
+Load the brand context (AGENTS.md). Persona, angle and the 2–4 claims it carries, signed off as in
+**make-ai-podcast** step 1, unless the brief or a reference sets them. The product's own lines carry only signed-off claims; bigger
 reactions ("she can't be fifty-nine") stay in the characters' mouths, never the narrator's or the
 end card's. Settle the **path** here.
 
@@ -29,7 +27,8 @@ Look for **one visual device that carries the angle** for the whole film, and le
 it: a tired mom juggling plates that keep multiplying sets them all down when the answer arrives.
 Use it only in the beats about it.
 
-Then lock the **style**: offer 3 from this list that suit the persona and tone, unless the user named one.
+Then lock the **style**, unless the user named one, from those on this list that suit the persona
+and tone:
 
 1. **Pixar-like 3D** — warm soft light, rounded faces, big expressive eyes.
 2. **DreamWorks-like 3D** — punchier, cheekier: smirks, raised brows, comic timing.
@@ -53,9 +52,9 @@ write it with **write-copy**, including its pace (Length).
 
 ## 3. Voice
 
-- **Narrated:** generate the voiceover now (**generate-voice**); 3 takes that differ in voice and delivery; the user picks one by ear.
-  Get its word timings (`node tools/transcribe-media.mjs --in <take> --words`) and map each script
-  line to its start and end: those times set the shots.
+- **Narrated:** generate the voiceover now (**generate-voice**), takes differing in voice and
+  delivery. Get the chosen take's word timings (`node tools/transcribe-media.mjs --in <take>
+  --words`) and map each script line to its start and end: those times set the shots.
 - **Dialogue:** the clips make the voices (step 7). Write a voice block per speaking character
   (checklist in **generate-voice**): open with where she grew up and her accent, make each
   clearly different, and paste it word for word into every clip prompt under the same label. Lock
@@ -111,7 +110,7 @@ in a single shot is described in that frame's prompt instead.
     node tools/generate-image.mjs --prompt-file <ad>/sheets/<name>.txt [--ref <ad>/sheets/hero.png] \
       --aspect 16:9 --resolution 2K --out <ad>/sheets/<name>-a.png
 
-Generate each sheet once and show it; reroll only what the user rejects.
+Generate each sheet once.
 
 ## 6. Storyboard frames
 
@@ -141,8 +140,6 @@ follow **write-prompt**'s "How a model reads a prompt".
 - Before showing a scene's frames, check them against the blocking and each other (seats, screen
   sides, camera side, eyelines, wardrobe, props, light) and against step 4's one-story rules.
 - No text beyond prop labels and the product.
-
-Show the frames scene by scene; reroll only the ones the user flags.
 
 ## 7. Clips
 
@@ -188,8 +185,8 @@ Dialogue prompts add two sections:
   listeners' side, never turn her.
 - **VOICES:** the step 3 blocks, word for word, for whoever speaks.
 
-**Show each clip as it lands**, with a preview mixing its own sound, the voiceover span and the
-music under it. When one shot misses, fix its prompt (**write-prompt**) and regenerate **that shot
+Preview each clip mixing its own sound, the voiceover span and the music under it. When one shot
+misses, fix its prompt (**write-prompt**) and regenerate **that shot
 alone** from its frame (`--first-frame`, at least the model's minimum length; fix the frame first
 when the frame set it up), then splice it in at the clip's real cut. Clips stay 480p drafts
 (AGENTS.md, Video).
@@ -199,7 +196,7 @@ when the frame set it up), then splice it in at the clip's real cut. Clips stay 
 Ask whether to edit here or hand off.
 
 **Here:** with **edit-video**: one edit document, 9:16, 1080p, 30 fps. Tracks: Hook, Captions,
-Video, Voice, Music (**add-music**; about −18 dB, a 2 s fade out), SFX.
+Video, Voice, Music (**add-music**), SFX.
 
 - **Narrated: place every shot on its line.** Plan each clip's shot starts in voiceover seconds, then
 
@@ -212,21 +209,15 @@ Video, Voice, Music (**add-music**; about −18 dB, a 2 s fade out), SFX.
 - **Dialogue: sound design** treats the film as one place heard from different spots. First audit
   every clip's audio (Gemini, as in **catalog-media**): clips often bake in music and chatter despite
   the prompt, and invent lines in silent shots. Then build four stems lined up to the timeline:
-  dialogue (voice-isolated where anything is baked in: ElevenLabs `POST /v1/audio-isolation` with
-  `<WS>_ELEVENLABS_API_KEY`; invented lines muted; every shot leveled to one loudness), ambience (one
+  dialogue (voice-isolated where anything is baked in, **generate-voice**; invented lines muted; every shot leveled to one loudness), ambience (one
   bed per location from the same recording, filtered for distance, crossfading at location changes;
   conversations sit "far" so the lines carry), music (one diegetic track, muffled by distance,
   ducked gently under dialogue: `duck --speaker`) and SFX for transitions only (**generate-sfx**).
   Each stem gets its own track, the clips muted.
 - **Hook and captions:** **caption-video**.
-- **Versions:** copy the document to `edit-v2.json` and change one thing, usually the hook.
-- Export into `final/` as `<id>_V<n>_…mp4` only when the user asks.
+- Versions and export (only when the user asks): **edit-video**.
 
-**Hand off:** one folder with the clips in order, the frames, sheets, voiceover, script, storyboard
-and a short edit note (order, end card, music, captions); upload it (**upload-ads**) and
-send it with a short note (**write-handoff**).
+**Hand off:** **write-handoff** (Editor handoff).
 
-Then record the ad (`tools/record-ad.mjs`, as in **make-ai-podcast** step 10) and follow the brand's
-handoff template if it has one (e.g. `inputs/brief-templates.md`). Naming: **write-prompt**, format
-`Animation`. To rename an ad, rename its folder and files, update the paths in its edit documents
+Naming: **write-prompt**, format `Animation`. To rename an ad, rename its folder and files, update the paths in its edit documents
 and, with R2, remove the old folder there.

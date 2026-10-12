@@ -21,8 +21,8 @@ Turn the locked concept into one structured, easy-to-read prompt, then generate.
 - **A single pre-composited reference needs an exact width-and-height pair**, never a width-only target or a zone. Compute both from the reference's ratio (3.63:1 in a 1002px slot = 1002×276px) and state them as fixed: *"renders at exactly 1002px wide by 276px tall — not a suggestion or an upper bound. There will be visible empty background around it since this is smaller than the zone — that is correct and expected, do not enlarge it to fill more."* Drop any "hero / prominent" framing on the product; it nudges oversizing.
 - **Each generation is stateless.** Describe the final image, never an edit of a previous attempt (no "don't do X" caveats about a prior output). Hard requirements (element counts, "natural undistorted proportions", single image) go in **Constraints**. To fix an ad, rebuild the whole prompt fresh; never add product-appearance or dimension language to force a fix.
 - **Revisions regenerate — never edit a previous render.** For any revision (ad, frame, clip), fold the change into the prompt that made it (an ad's is in its record) and generate fresh with the original refs. No image-to-image edit pass on a prior render, and don't ask edit-vs-regenerate (image edits stay fine for preparing base photos, or when the user asks). When recasting real footage, the base is always **the original source frame**, with a short prompt naming only the change. To keep a person across shots, add a **face-only crop** (head and hair) from her approved frame and say "use image 2 only for her face and hair, nothing else". Never feed a whole generated frame back as a reference: each pass gets crisper until it reads fake.
-- For portrait feed compositions, position elements with **design-ad**'s five horizontal bands, not percentages. For other layouts, use clear anchor points.
-- **Defaults for image ads:** 1 generation, GPT Image 2.5 Flare (its fast variant), 4:5, 1K tier, medium quality. Use the model's native output; never resize or upscale it.
+- Position elements with **ideate-image-format**'s five horizontal bands (portrait) or clear anchor points, never percentages.
+- **Defaults for image ads:** 1 generation, GPT Image 2.5 Flare (its fast variant), 4:5, 1K tier, medium quality. Switch models only when the user asks, even when one mangles something (flag it). Never change aspect, lower quality, resize or upscale on your own.
 - **References:** the tool hosts local files itself (signed R2 URLs, or kie's file hosting without R2); there is nothing to upload or delete. Pass an existing HTTPS URL directly when the reference isn't a cataloged brand asset.
 
 ## How a model reads a prompt (every generator: image, video, voice)
@@ -90,7 +90,8 @@ Every ad gets its own folder in `outputs/`. A render lands in `drafts/`; on appr
   name with the variation added. `File name:` is this.
 
 - **ID** — next integer. **If the brand reviews on a Notion Ads Board, the board is the ID
-  authority**: peek `next-id` at the start of a batch (**upload-ads**) and number from there.
+  authority**: at the start of a batch, peek with `node tools/upload-to-notion.mjs next-id <WS>
+  "<Brand>"` and number from there.
   Otherwise scan the brand's `outputs/` for the highest leading number and add 1.
 - **Variation** — `V1`, `V2`, … Files only, never folders. Every ad made in one working session
   shares one ID, even across concepts: each new concept continues the variation count (V6, V7, …),
@@ -118,28 +119,23 @@ Delegation and long renders: AGENTS.md (operating principles).
    node tools/generate-image.mjs --prompt-file /tmp/<id>_prompt.txt --timeout 600 \
      --ref "workspaces/<WS>/Acme/inputs/media/00042_bottle.png" \
      --ref "workspaces/<WS>/Acme/inputs/media/brand/type_sheet.png" \
-     --out "workspaces/<WS>/Acme/outputs/3_Calm-Mornings_Static_Sarah_Stress-Relief_Acme/3_V1_Calm-Mornings_Static_Sarah_Stress-Relief_Acme.png"
+     --out "workspaces/<WS>/Acme/outputs/3_Calm-Mornings_Static_Sarah_Stress-Relief_Acme/drafts/3_V1_Calm-Mornings_Static_Sarah_Stress-Relief_Acme.png"
    ```
 3. **When it lands**, set `generation.output` to the printed `Saved:` path (it must match the
    prompt's `File name:` line) and remove the temp prompt file. Index refresh and R2 push: AGENTS.md.
 
 To **re-generate** from an existing record, `generate-image.mjs --record <record.json>` reads the
-prompt, refs and params and stamps the result back.
-
-Options: `--provider auto|segmind|kie|gateway` (default `auto`), `--model gpt-image-2.5` (default; `gpt-image-2` and `nano-banana-pro` secondary), `--aspect`, `--resolution`, `--quality`, `--num`, `--format`; all flags in `--help`.
-
-Always **GPT Image 2.5**; switch models only when the user explicitly asks, even when it mangles
-something (flag it). Provider failover is automatic (AGENTS.md); a provider that can't take the
-request is skipped (kie's GPT Image 2.5 has no 4:5 or 5:4). If every provider fails, stop and ask.
-Never change aspect, lower quality, resize or upscale on your own.
+prompt, refs and params and stamps the result back. All flags: `--help`. A provider that can't take
+the request is skipped (kie's GPT Image 2.5 has no 4:5 or 5:4); if every provider fails, stop and ask.
 
 ## Video models
 
 `tools/generate-video.mjs` (limits per model in its `--help`), on the same auto routing:
 
-- **MiniMax H3 Max** (the default): 5–15 s clips, 480p drafts and a 768p master, with sound;
-  `--no-audio` asks for silence. With `--image` references only Segmind runs H3 Max. kie carries only base MiniMax H3 (Hailuo 03), which renders
-  768p whatever you ask; the tool warns when it falls back there. The Gateway takes no references
+- **MiniMax H3 Max** (the default): 5–15 s clips, 480p drafts and a 768p master, with sound. It
+  has no audio control (`--no-audio` changes nothing): to get silence, say so in the prompt. With
+  `--image` references only Segmind runs H3 Max. kie carries only base MiniMax H3 (Hailuo 03), which
+  renders 768p whatever you ask; the tool warns when it falls back there. The Gateway takes no references
   (first and last frame only).
 - **Seedance 2.5:** up to 30 s and 30 reference images; generates voices and sound
   (`--generate-audio`). Masters reach 720p, or 1080p on the Gateway. **Seedance 2** and **2 Mini** cap

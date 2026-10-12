@@ -5,10 +5,10 @@ description: Assemble and revise a video ad in the harness's own editor — an e
 
 # Edit video
 
-An ad's edit is one JSON document, `outputs/<ad>/edit.json` (a version the user keeps, such as a
-second hook, is `edit-v2.json`, `edit-v3.json`…). Studio's Workflow page shows it live in the ad's
-**Edit** step: preview, timeline, review notes and an Export button. Change the document and the
-preview follows within a second. Schema, flags and every subcommand: `node tools/edit-video.mjs --help`.
+An ad's edit is one JSON document, `outputs/<ad>/edit.json`. A version is a copy that changes one
+thing, usually the hook: `edit-v2.json`, `edit-v3.json`… Studio's Workflow page shows it live in
+the ad's **Edit** step: preview, timeline, review notes and an Export button. Change the document
+and the preview follows within a second. Schema, flags and every subcommand: `node tools/edit-video.mjs --help`.
 
 ## Build
 
@@ -54,7 +54,7 @@ Notes are one file each in `outputs/<ad>/comments/`, in the language the user wr
   `transform` for punch-ins across cuts (1.06–1.10 on the key words, a handful per 30 s).
 - **Color** — `match` grades every clip toward the median look (`--ref` toward one clip); `grade`
   takes exposure, contrast, saturation, temperature, grain, vignette, each keyframable.
-- **Sound** — music about −18 dB under speech; `duck` dips a track under speech (`--speaker` for one
+- **Sound** — music levels: **add-music**; `duck` dips a track under speech (`--speaker` for one
   voice in a transcript); `moves` lists where the picture moves, for sound effects on actions.
 - **Text** — hook and end card as `text` / `rect` / `image` clips with `enter`/`exit` animations.
   Every graphic sits in clear space, never over a face or the caption band.
@@ -66,8 +66,9 @@ Notes are one file each in `outputs/<ad>/comments/`, in the language the user wr
 ## Export
 
 `node tools/edit-video.mjs export outputs/<ad>/edit.json` (or the user's Export button): H.264 + AAC at
-−14 LUFS into `final/<id>_V<n>_…mp4`, about 20 s for 80 s of 1080p. `--scale 0.5` makes a quick
-draft, `--from`/`--to` a section. Never grade your own render; hand over the path.
+−14 LUFS into `final/<id>_V<n>_…mp4`, about 20 s for 80 s of 1080p; `--out` names it per the brand's
+handoff template if it has one (`inputs/brief-templates.md`). `--scale 0.5` makes a quick draft,
+`--from`/`--to` a section. Never grade your own render; hand over the path.
 
 With R2, final cuts are heavy files a plain push skips: push with
 `node tools/sync-brand.mjs --push workspaces/<WS>/<Brand> --originals`.

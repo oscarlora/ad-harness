@@ -1,13 +1,5 @@
 #!/usr/bin/env node
 // sync-brand.mjs — mirror a brand's context to/from its workspace's R2 bucket, and presign originals.
-//
-// Usage (path = the brand dir or any path under it):
-//   node tools/sync-brand.mjs --brands <workspace>                        list the brands in the bucket (Acme or workspaces/Acme)
-//   node tools/sync-brand.mjs --pull <brand dir> [--originals]            download changes (heavy files too with --originals)
-//   node tools/sync-brand.mjs --push <brand dir> [--originals] [--force]  upload changes; stops on someone's newer work unless --force
-//   node tools/sync-brand.mjs --presign <brand dir> <id|relpath> [--expires 3600]   presigned GET URL for an original
-//   node tools/sync-brand.mjs --status <brand dir>                        local vs cloud, one-line report
-//
 // Bucket keys mirror the brand tree: <Brand>/inputs/..., <Brand>/outputs/...
 // Light (default): everything except heavy = media originals (inputs/media/<id>_*) and rendered ads.
 // workspaces/<WS>/_custom (private skills/tools) ↔ prefix _custom/<WS>/ (workspaces can share a
@@ -17,12 +9,18 @@
 // Creds in .env: <WS>_R2_ACCOUNT_ID <WS>_R2_ACCESS_KEY_ID <WS>_R2_SECRET_ACCESS_KEY <WS>_R2_BUCKET
 // A public workspace (PUBLIC_BUCKETS in lib/r2.mjs, e.g. Shared) pulls without creds: each push
 // writes <Brand>/.manifest.json for that. It never syncs _custom, which would be public.
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, createReadStream } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { loadEnv, inferWorkspace, inferBrand, brandDirFrom, catalogPaths, mimeOf, parseArgs, isMedia } from './lib/catalog.mjs';
+import { loadEnv, inferWorkspace, inferBrand, brandDirFrom, catalogPaths, readRecord, mimeOf, parseArgs, isMedia, hashFile, usage } from './lib/catalog.mjs';
 import { r2FromEnv, r2Public, PUBLIC_BUCKETS, MANIFEST } from './lib/r2.mjs';
+
+const HELP = `sync-brand.mjs — mirror a brand to/from its workspace's R2 bucket (path = the brand dir or any path under it)
+
+  node tools/sync-brand.mjs --brands <workspace>                        list the brands in the bucket (Acme or workspaces/Acme)
+  node tools/sync-brand.mjs --pull <brand dir> [--originals]            download changes (heavy files too with --originals)
+  node tools/sync-brand.mjs --push <brand dir> [--originals] [--force]  upload changes; stops on someone's newer work unless --force
+  node tools/sync-brand.mjs --presign <brand dir> <id|relpath> [--expires 3600]   presigned GET URL for an original
+  node tools/sync-brand.mjs --status <brand dir>                        local vs cloud, one-line report`;
 
 const CUSTOM = '_custom';
 
@@ -54,7 +52,7 @@ function r2ForWorkspace(workspace, readOnly = false) {
 }
 
 // A scope is one local dir mirrored under one bucket prefix: a brand path gives [brand, _custom].
-export function scopesFor(path) {
+function scopesFor(path) {
   const workspace = inferWorkspace(path);
   const name = inferBrand(path);
   if (!workspace || !name || (name.startsWith('_') && name !== CUSTOM)) return null;
@@ -89,13 +87,8 @@ const selected = (scope, withOriginals) => walk(scope.dir).filter((f) => {
   return isSyncable(rel) && (withOriginals || !scope.heavy(rel));
 });
 
-async function md5File(p) { // streamed: originals can be huge
-  const h = createHash('md5');
-  for await (const chunk of createReadStream(p, { highWaterMark: 1 << 22 })) h.update(chunk);
-  return h.digest('hex');
-}
 const comparable = (etag) => !!etag && !etag.includes('-');
-const sameContent = async (abs, o) => comparable(o.etag) && statSync(abs).size === o.size && (await md5File(abs)) === o.etag;
+const sameContent = async (abs, o) => comparable(o.etag) && statSync(abs).size === o.size && (await hashFile(abs, 'md5')) === o.etag;
 
 const statePath = (dir) => join(dir, '.sync-state.json');
 function readState(dir) {
@@ -159,7 +152,7 @@ async function push(path, withOriginals, force) {
     }
     const etags = {};
     for (const [rel, o] of remote) etags[rel] = o.etag;
-    for (const t of toSend) etags[t.rel] = await md5File(t.f);
+    for (const t of toSend) etags[t.rel] = await hashFile(t.f, 'md5');
     writeState(scope.dir, etags);
     if (isPublic) {
       const listing = (await r2.listWithMeta(scope.prefix + '/')).filter((o) => isSyncable(keyRel(scope, o.key)));
@@ -200,9 +193,9 @@ async function presign(path, ref, expires) {
   // ref: a 5-digit id, a brand-relative path, or a bare filename under inputs/media/.
   let rel = ref;
   if (/^\d{5}$/.test(ref)) {
-    const recPath = join(catalogPaths(brand.dir).json, `${ref}.json`);
-    if (!existsSync(recPath)) { console.error(`no record ${ref}`); process.exit(1); }
-    rel = `inputs/media/${JSON.parse(readFileSync(recPath, 'utf8')).file?.name || ref}`;
+    const rec = readRecord(catalogPaths(brand.dir), ref);
+    if (!rec) { console.error(`no record ${ref}`); process.exit(1); }
+    rel = `inputs/media/${rec.file?.name || ref}`;
   } else if (!/^(inputs|outputs)\//.test(ref)) {
     rel = `inputs/media/${ref}`;
   }
@@ -224,7 +217,7 @@ async function statusLine(r2, scope) {
     const before = seen[rel];
     if (before && comparable(o.etag)) {
       if (o.etag === before) newerHere++;                  // cloud unchanged since last sync → the edit is ours
-      else if ((await md5File(f)) === before) newerCloud++; // we're unchanged since last sync → the edit is theirs
+      else if ((await hashFile(f, 'md5')) === before) newerCloud++; // we're unchanged since last sync → the edit is theirs
       else bothChanged++;
     } else {
       // no last-seen state: fall back to timestamps
@@ -276,20 +269,18 @@ async function listBrands(workspace) {
   console.log(`Pull one with: node tools/sync-brand.mjs --pull "workspaces/${workspace}/<Brand>"`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const a = parseArgs(process.argv.slice(2));
-  if (a.brands) {
-    const ws = workspaceFrom(a.brands === true ? a._[0] || '' : a.brands);
-    if (!ws) { console.error('Usage: --brands <workspace>   (a name like Acme, or a path like workspaces/Acme)'); process.exit(1); }
-    await listBrands(ws);
-    process.exit(0);
-  }
-  const dir = a.push || a.pull || a.presign || a.status;
-  const path = dir && dir !== true ? dir : a._[0] || null;
-  if (!path) { console.error('Usage: --pull|--push|--presign|--status <brand dir> [--originals] [--force] [<id|relpath>] [--expires N] | --brands <workspace>'); process.exit(1); }
-  if (a.pull) await pull(path, !!a.originals);
-  else if (a.push) await push(path, !!a.originals, !!a.force);
-  else if (a.presign) await presign(path, a._[0] || (a.presign !== true ? a.presign : null), a.expires ? +a.expires : 3600);
-  else if (a.status) await status(path);
-  else { console.error('Pick one: --pull | --push | --presign | --status | --brands'); process.exit(1); }
+const a = parseArgs(process.argv.slice(2), { flags: ['originals', 'force'], help: HELP });
+if (a.brands) {
+  const ws = workspaceFrom(a.brands === true ? a._[0] || '' : a.brands);
+  if (!ws) usage(HELP);
+  await listBrands(ws);
+  process.exit(0);
 }
+const dir = a.push || a.pull || a.presign || a.status;
+const path = dir && dir !== true ? dir : a._[0] || null;
+if (!path) usage(HELP);
+if (a.pull) await pull(path, !!a.originals);
+else if (a.push) await push(path, !!a.originals, !!a.force);
+else if (a.presign) await presign(path, a._[0] || (a.presign !== true ? a.presign : null), a.expires ? +a.expires : 3600);
+else if (a.status) await status(path);
+else usage(HELP);

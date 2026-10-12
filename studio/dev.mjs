@@ -14,6 +14,7 @@ const devMode = process.argv.includes('--dev');
 // Loopback only by default: the studio opens files and edits records. Writes still refuse non-local hosts.
 const host = process.env.STUDIO_HOST || '127.0.0.1';
 const shownHost = host === '127.0.0.1' ? 'localhost' : host;
+const probeHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host; // where to reach it from here
 
 // Two launches on one port can knock each other's server down, so walk up to a free port.
 function isPortFree(p) {
@@ -30,7 +31,6 @@ async function findFreePort(start, tries = 20) {
   throw new Error(`No free port found in ${start}-${start + tries - 1}. Set PORT to something else.`);
 }
 // One Studio covers every workspace and brand: if it's already running, point there instead of starting another.
-const probeHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 const running = await fetch(`http://${probeHost}:${requestedPort}/`, { signal: AbortSignal.timeout(3000) })
   .then(async (r) => (await r.text()).includes('Ad Harness')).catch(() => false);
 if (running) {
@@ -46,7 +46,7 @@ if (port !== '4179') env.NEXT_DIST_DIR = `.next-dev-${port}`;
 
 // Remove stale per-port dirs: nothing listening and untouched for 10 minutes (an instance may still be building).
 const answers = (p) => new Promise((res) => {
-  const s = net.connect(Number(p), host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host);
+  const s = net.connect(Number(p), probeHost);
   s.once('connect', () => { s.destroy(); res(true); }).once('error', () => res(false));
 });
 for (const name of readdirSync(here).filter((n) => /^\.next-dev-\d+$/.test(n) && n !== `.next-dev-${port}`)) {
@@ -92,11 +92,22 @@ const run = (args, label) => {
   }
 };
 
+// Exit with the server; on a stop signal, give it 3 s to finish, then end it. Next otherwise waits on any open
+// connection (a live page, a playing video) and an old server lingers on after Studio restarts.
+function stopWith(child) {
+  child.on('exit', (code) => process.exit(code ?? 0));
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    process.on(sig, () => {
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 3000).unref();
+    });
+  }
+}
+
 if (devMode) {
   console.log(`Studio starting in dev mode on http://${shownHost}:${port} (hot reload on).`);
   console.log('If an API route ever answers 404 while the page still loads, restart: dev rebuilds its route table and it can drift.');
-  spawn(process.execPath, [next, 'dev', '-H', host, '-p', port], { stdio: 'inherit', cwd: here, env })
-    .on('exit', (code) => process.exit(code ?? 0));
+  stopWith(spawn(process.execPath, [next, 'dev', '-H', host, '-p', port], { stdio: 'inherit', cwd: here, env }));
 } else {
   const stamp = sourceStamp();
   let prior = null;
@@ -111,6 +122,5 @@ if (devMode) {
   }
 
   console.log(`\nStudio on http://${shownHost}:${port}\n`);
-  spawn(process.execPath, [next, 'start', '-H', host, '-p', port], { stdio: 'inherit', cwd: here, env })
-    .on('exit', (code) => process.exit(code ?? 0));
+  stopWith(spawn(process.execPath, [next, 'start', '-H', host, '-p', port], { stdio: 'inherit', cwd: here, env }));
 }

@@ -7,13 +7,13 @@ description: Make an AI slides video ad — a narrated explainer where each voic
 
 One narrator, one 16:9 slide per line, each thing on the slide highlighted on its word. Work in
 `outputs/<ad>/` (format `Slides` in the **write-prompt** name): `script.md`, `voice/`,
-`storyboard.md`, `sheets/`, `frames/`, `prompts/`, `clips/`, `music/`. Show every output as it lands;
-wait for a yes before paying for the next step.
+`storyboard.md`, `sheets/`, `frames/`, `prompts/`, `clips/`, `music/`.
 
 ## 1. Concept
 
-Persona, angle and claims, from the research and brand memory, as in **make-ai-podcast** step 1. Then offer 3 slide styles unless one is
-named (a 1950s school textbook, a flat cartoon explainer, an old anatomy plate…).
+Load the brand context (AGENTS.md). Persona, angle and claims as in **make-ai-podcast** step 1.
+Then the slide style, unless one is named (a 1950s school textbook, a flat cartoon explainer, an
+old anatomy plate…).
 
 ## 2. Script
 
@@ -23,10 +23,7 @@ user's yes on the exact text before voicing it.
 
 ## 3. Voiceover and timestamps
 
-Generate 3 takes with **generate-voice**; the user picks. To keep a reference's exact delivery
-with a new voice, use ElevenLabs with the workspace's `<WS>_ELEVENLABS_API_KEY`:
-`POST /v1/audio-isolation` (strips the music), then `POST /v1/speech-to-speech/<voice_id>`
-(`model_id=eleven_multilingual_sts_v2`).
+Generate takes with **generate-voice** (which also re-voices a reference with its exact delivery).
 
 Then take the chosen take's word timestamps (`node tools/transcribe-media.mjs --in <take>.mp3 --words`).
 All later timing comes from them.
@@ -59,7 +56,7 @@ wherever the line allows; the examples above aren't defaults.
 
 ## 5. Frames
 
-Frame 1 first, in 3 takes of the style; the chosen one locks the look. Make a sheet for any recurring
+Frame 1 first; the chosen take locks the look. Make a sheet for any recurring
 character (**make-ai-animation** step 5), then generate the rest in parallel, each with frame 1 as
 reference 1, plus the sheet or the real product (`sheets/product.png`, per **write-prompt**'s product
 rules):
@@ -78,7 +75,7 @@ approves it (each extension is paid), extend it to 9:16, art pixel-identical:
 `node tools/extend-to-story.mjs --in <frame>-4x5.png --out <frame>.png --above "<background>" --below
 "<what runs off the bottom>" --paste`.
 
-Check all frames side by side (an ffmpeg `xstack` contact sheet) against step 4, then show them.
+Check all frames side by side (an ffmpeg `xstack` contact sheet) against step 4.
 
 ## 6. Clips
 
@@ -88,21 +85,21 @@ AGENTS.md):
 
     node tools/generate-video.mjs --model minimax-h3-max --prompt-file <ad>/prompts/chunk-01.txt \
       --image <ad>/frames/frame-01.png --image <ad>/frames/frame-02.png --image <ad>/frames/frame-03.png \
-      --aspect 16:9 --duration <chunk seconds, rounded up> --no-audio --out <ad>/clips/chunk-01.mp4 --timeout 1500
+      --aspect 16:9 --duration <chunk seconds, rounded up> --out <ad>/clips/chunk-01.mp4 --timeout 1500
 
 The prompt says:
 
 - Images 1…N are the slides, reproduced exactly, each filling the 16:9 frame edge to edge (no bars),
   shown in order with hard cuts at the given seconds; the last runs to the end.
 - Camera locked; text stays exactly as printed; never write any words on screen.
-- Sound, said outright, since kie's base H3 adds audio even with `--no-audio`. When the sound effects
+- Sound, said outright (MiniMax has no audio control: **write-prompt**, Video models). When the sound effects
   go on in the edit (**generate-sfx**): "Silent video: no sound, music or voice at all." When the
   clip carries them: each beat's **What we hear** sound at its time, next to its motion.
 - Lively: something always moving (blinks, breathing, bobbing icons).
 - Per slide, a timeline in chunk seconds of its **What moves** beats, each at its word's time. Seconds
   only; quoted narration gets written onto the slide.
 
-Make chunk 1 first and show it with the voiceover muxed under it
+Make chunk 1 first and preview it with the voiceover muxed under it
 (`ffmpeg -i chunk-01.mp4 -i <take>.mp3 -map 0:v -map 1:a -c:v copy -shortest`). A one-shot clip, such as
 a hook variant, uses `--first-frame` instead of `--image`.
 
@@ -112,15 +109,11 @@ With **edit-video**: one edit document, 9:16, 1080p, 30 fps, black `background`.
 
 1. Tracks, top down: the captions and the hook; the chunks in order on the Video track, each trimmed
    to its shots' span and `fit: "contain"` (they fit full width, centered); the voiceover; the
-   sound effects (**generate-sfx**); a music bed (**add-music**) around −18 dB with short fades.
+   sound effects (**generate-sfx**); a music bed (**add-music**).
 2. Retime: the model's cuts drift up to half a second. Find them
    (`ffmpeg -i <chunk> -vf "select='gt(scene,0.06)',showinfo" -f null -`), split each chunk there into
    its own clip, and set each slide's `rate` so it fills its shot's span.
 3. Text, white Montserrat Bold about 60 px: the hook above the slide (`y` ≈ 520) through shot 1, then
    captions below it (`y` ≈ 1350), built with **caption-video** from the word timestamps.
-4. Hook variants: copy the document to `edit-v2.json` and swap only shot 1's clip.
-5. Export only when asked, named per **write-prompt**, or per the brand's handoff template if it
-   has one (e.g. `inputs/brief-templates.md`).
-
-Then record the ad (`tools/record-ad.mjs`), ingest the approved frames and clips (**catalog-media**),
-and push the brand.
+4. Hook variants: versions (**edit-video**) that swap only shot 1's clip.
+5. Export only when asked (**edit-video**).

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // pull-reviews.mjs — detect a store's review platform and pull its public reviews to CSV, from the
-// same public feed the on-page widget uses (no API key). Run with --help for options.
+// same public feed the on-page widget uses (no API key).
 // Okendo, Stamped, Judge.me and Loox work; Yotpo / Reviews.io are detect-only (exit 2).
 //
 // ADDING AN ADAPTER (listed platforms only, never one-off stores). Stop as soon as one request
@@ -14,7 +14,7 @@
 // the on-page count.
 
 import { writeFile } from 'node:fs/promises';
-import { die, parseArgs } from './lib/catalog.mjs';
+import { die, parseArgs, usage } from './lib/catalog.mjs';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 const MAX_PAGES = 100;
@@ -23,6 +23,8 @@ const STAMPED_API = 'https://stamped.io/api';   // public widget feed: getappkey
 const JUDGEME_API = 'https://api.judge.me';     // v3 widget JSON feed: reviews/reviews_for_widget
 
 const HELP = `pull-reviews.mjs — detect a store's review platform and pull reviews to CSV
+
+  node tools/pull-reviews.mjs --store <url> [--out reviews.csv] [--limit n]
 
 Required:
   --store <url>            Store base URL (e.g. https://www.acme.global)
@@ -45,12 +47,12 @@ const log = (...a) => console.error(...a);
 
 // ---------- platform signatures (substring -> platform) ----------
 const SIGNATURES = {
-  okendo:   [/okendo/i, /api\.okendo\.io/i, /data-oke-/i],
-  judgeme:  [/judge\.me/i, /judgeme/i, /jdgm-/i, /cdn\.judge\.me/i],
-  loox:     [/loox\.io/i, /\bloox\b/i],
-  yotpo:    [/yotpo/i, /staticw2\.yotpo\.com/i, /data-yotpo/i],
-  stamped:  [/stamped\.io/i, /\bstamped\b/i],
-  reviewsio: [/reviews\.io/i, /widget\.reviews\.io/i],
+  okendo:   [/okendo/i, /data-oke-/i],
+  judgeme:  [/judge\.me/i, /judgeme/i, /jdgm-/i],
+  loox:     [/\bloox\b/i],
+  yotpo:    [/yotpo/i],
+  stamped:  [/\bstamped\b/i],
+  reviewsio: [/reviews\.io/i],
 };
 
 async function getText(url) {
@@ -101,7 +103,7 @@ function extractMyshopifyDomain(html) {
   return m ? m[1].toLowerCase() : null;
 }
 
-// ---------- CSV ----------
+// ---------- CSV (a column a row lacks is written empty) ----------
 const CSV_COLS = ['review_number', 'date', 'product', 'rating', 'reviewer', 'verified',
   'recommended', 'incentivized', 'title', 'body', 'helpful_count', 'language', 'review_id', 'product_url'];
 
@@ -131,15 +133,15 @@ async function pullOkendo({ subscriber, productId, limit }) {
       date: (r.dateCreated || '').slice(0, 10),
       product: r.productName || '',
       rating: r.rating ?? '',
-      reviewer: rv.displayName || '',
-      verified: rv.isVerified ?? '',
-      recommended: r.isRecommended ?? '',
-      incentivized: r.isIncentivized ?? '',
+      reviewer: rv.displayName,
+      verified: rv.isVerified,
+      recommended: r.isRecommended,
+      incentivized: r.isIncentivized,
       title: (r.title || '').trim(),
       body: (r.body || '').trim(),
-      helpful_count: r.helpfulCount ?? '',
-      language: r.languageCode || '',
-      review_id: r.reviewId || '',
+      helpful_count: r.helpfulCount,
+      language: r.languageCode,
+      review_id: r.reviewId,
       product_url: (r.productUrl || '').replace(/^\/\//, 'https://'),
     };
   });
@@ -168,12 +170,8 @@ function parseStampedWidget(html) {
       reviewer: htmlText((b.match(/class="author">([\s\S]*?)<\/strong>/) || ['', ''])[1]),
       verified: /data-verified="buyer"/.test(b),
       recommended: (b.match(/data-is-recommend="(true|1)"/) || [])[1] ? true : '',
-      incentivized: '',
       title: htmlText((b.match(/stamped-review-header-title">([\s\S]*?)<\/h3>/) || ['', ''])[1]),
       body: htmlText((b.match(/stamped-review-content-body">([\s\S]*?)<\/p>/) || ['', ''])[1]),
-      helpful_count: '',
-      language: '',
-      product_url: '',
     });
   }
   return out;
@@ -218,13 +216,7 @@ function parseLooxWidget(html, tab) {
       rating: (b.match(/Rating icons:\s*(\d)\s*\/\s*5/) || [])[1] || '',
       reviewer: htmlText((b.match(/-title" class="block title">([^<]*)/) || ['', ''])[1]),
       verified: /loox-verified-badge/.test(b),
-      recommended: '',
-      incentivized: '',
-      title: '',
       body: htmlText((b.match(/class="pre-wrap main-text">([\s\S]*?)<\/div>/) || ['', ''])[1]),
-      helpful_count: '',
-      language: '',
-      product_url: '',
     });
   }
   return out;
@@ -260,16 +252,17 @@ async function pullLoox({ storeId, limit }) {
 // JSON feed at api.judge.me/reviews/reviews_for_widget, keyed by the .myshopify.com domain. It
 // serves at most ~1000 rows per ordering (deeper pages silently repeat the last window), so we
 // partition per product x rating (the histogram gives targets), crawl newest- and oldest-first,
-// then a verified_only pass and a common-word `search` ladder; shortfalls are reported.
+// then a verified_only pass and a ladder of words common in any product review (`search`);
+// shortfalls are reported.
 // Sister products share reviews, so every product in /products.json is crawled, covered groups
 // skipped, and rows deduped by uuid. No public incentivized flag: invitation-email reviews get
 // 'store_invitation' in that column.
 const JM_PER_PAGE = 25;          // 40 pages x 25 = 1000, the full window
 const JM_WINDOW_PAGES = 40;
-const JM_SEARCH_LADDER = ['love', 'stretch', 'oil', 'skin', 'use', 'marks', 'smell', 'recommend',
-  'belly', 'dry', 'scent', 'feel', 'cream', 'great', 'amazing', 'soft', 'pregnancy', 'easy',
-  'beautiful', 'absorb', 'itch', 'body', 'product', 'moisturis', 'hydrat', 'apply', 'night',
-  'baby', 'gift', 'best', 'nice', 'good', 'well', 'really', 'daughter', 'friend'];
+const JM_SEARCH_LADDER = ['love', 'great', 'good', 'best', 'recommend', 'amazing', 'quality', 'use',
+  'easy', 'feel', 'nice', 'perfect', 'happy', 'well', 'really', 'works', 'product', 'price', 'buy',
+  'again', 'time', 'day', 'first', 'definitely', 'beautiful', 'gift', 'fast', 'shipping', 'order',
+  'size', 'friend', 'family', 'worth', 'little', 'bit', 'just'];
 
 async function listShopifyProducts(store) {
   const products = [];
@@ -297,17 +290,16 @@ function jmMapReview(r, fallbackTitle) {
     date: (r.created_at || '').slice(0, 10),
     product: htmlText(r.product_title || fallbackTitle || ''),
     rating: r.rating ?? '',
-    reviewer: r.reviewer_name || '',
-    verified: r.verified_buyer ?? '',
-    recommended: '',
+    reviewer: r.reviewer_name,
+    verified: r.verified_buyer,
     incentivized: (r.transparency_badges || []).includes('review_collected_via_store_invitation')
       ? 'store_invitation' : '',
     title: htmlText(r.title || ''),
     body: htmlText(r.body_html || ''),
-    helpful_count: r.thumb_up ?? '',
-    language: r.language || '',
-    review_id: r.uuid || '',
-    product_url: r.product_url || '',
+    helpful_count: r.thumb_up,
+    language: r.language,
+    review_id: r.uuid,
+    product_url: r.product_url,
   };
 }
 
@@ -389,8 +381,9 @@ async function pullJudgeme({ shopDomain, store, productId, limit }) {
 }
 
 // ---------- main ----------
-const args = parseArgs(process.argv.slice(2));
-if (args.help || !args.store) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+const args = parseArgs(process.argv.slice(2), { flags: ['detect-only'], help: HELP });
+if (!args.store) usage(HELP);
+const limit = args.limit ? Number(args.limit) : 0;
 
 const store = String(args.store).replace(/\/+$/, '');
 let platform = args.platform || null;
@@ -453,20 +446,19 @@ let rows;
 if (platform === 'stamped') {
   if (!stamped) die('stamped detected but could not resolve its public key (no .myshopify.com domain on page?)');
   log(`Pulling Stamped reviews (sId ${stamped.sId})...`);
-  rows = await pullStamped({ ...stamped, limit: args.limit ? Number(args.limit) : 0 });
+  rows = await pullStamped({ ...stamped, limit });
 } else if (platform === 'judgeme') {
   if (!judgemeDomain) die('judgeme detected but no .myshopify.com domain found on page; pass --shop-domain');
   log(`Pulling Judge.me reviews (shop ${judgemeDomain})...`);
-  rows = await pullJudgeme({ shopDomain: judgemeDomain, store, productId: args['product-id'],
-    limit: args.limit ? Number(args.limit) : 0 });
+  rows = await pullJudgeme({ shopDomain: judgemeDomain, store, productId: args['product-id'], limit });
 } else if (platform === 'loox') {
   if (!looxStoreId) die('loox detected but no store id found in the loox.js URL; pass --loox-store <id>');
   log(`Pulling Loox reviews (store ${looxStoreId})...`);
-  rows = await pullLoox({ storeId: looxStoreId, limit: args.limit ? Number(args.limit) : 0 });
+  rows = await pullLoox({ storeId: looxStoreId, limit });
 } else {
   if (!subscriber) die('okendo detected but no subscriber id found; pass --subscriber <uuid>');
   log(`Pulling Okendo reviews (subscriber ${subscriber})...`);
-  rows = await pullOkendo({ subscriber, productId: args['product-id'], limit: args.limit ? Number(args.limit) : 0 });
+  rows = await pullOkendo({ subscriber, productId: args['product-id'], limit });
 }
 if (!rows.length) die('no reviews returned');
 

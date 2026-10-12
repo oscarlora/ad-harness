@@ -1,5 +1,5 @@
 // catalog.mjs — shared helpers: .env, arg parsing, binaries, workspace inference, and the media
-// catalog (hashing, 5-digit ids, paths, the record skeleton).
+// catalog (hashing, 5-digit ids, paths, records, the record skeleton).
 //
 // Layout:
 //   workspaces/<WS>/<Brand>/inputs/media/
@@ -8,7 +8,7 @@
 //     <id>_<descriptor>.<ext>     the media, flat
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync, mkdirSync, createReadStream } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdirSync, createReadStream, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, basename, extname, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,10 +56,34 @@ export function runAsync(bin, args, { allowFail = false, cwd } = {}) {
     p.on('close', (status) => (status !== 0 && !allowFail ? rej(new Error(`${bin} ${args.join(' ')} failed: ${stderr}`)) : res({ status, stdout, stderr })));
   });
 }
+// The command that writes a JPEG (PNG when `out` ends in .png) of an image fit within px on its
+// longest edge, never upscaled: [bin, args] for run()/runAsync(). sips on macOS, ffmpeg elsewhere
+// (even dims for its encoder).
+export function imageFitCmd(file, px, out) {
+  if (have('sips')) return ['sips', ['-s', 'format', extOf(out) === 'png' ? 'png' : 'jpeg', '-Z', String(px), file, '--out', out]];
+  const fit = `scale=w='min(iw,${px})':h='min(ih,${px})':force_original_aspect_ratio=decrease:force_divisible_by=2`;
+  return ['ffmpeg', ['-y', '-v', 'error', '-i', file, '-frames:v', '1', '-vf', fit, '-q:v', '3', out]];
+}
+// Note on an ad's record (outputs/json/<id>.json, beside the upload spec) where it was uploaded: sentTo[dest] = url.
+// The id is the leading number of the spec's name (the ad folder), else of its _upload_<id>.json file name.
+export function markSent(specPath, spec, dest, url) {
+  const id = String(spec.name || '').match(/^(\d+)/)?.[1] || basename(specPath).match(/_upload_(\d+)/)?.[1];
+  const file = id && join(dirname(specPath), 'json', `${id}.json`);
+  if (!file || !existsSync(file)) return;
+  const rec = JSON.parse(readFileSync(file, 'utf8'));
+  rec.sentTo = { ...rec.sentTo, [dest]: url };
+  writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
+}
 export function ffprobeJson(file) {
   const r = run('ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', file], { allowFail: true });
   try { return JSON.parse(r.stdout || '{}'); } catch { return {}; }
 }
+// A file's audio as mono 16-bit samples at `rate` Hz, or null.
+export function pcm(file, rate) {
+  const r = run('ffmpeg', ['-v', 'quiet', '-i', file, '-ac', '1', '-ar', String(rate), '-f', 's16le', '-'], { allowFail: true, binary: true });
+  return r.stdout?.length ? new Int16Array(r.stdout.buffer, r.stdout.byteOffset, Math.floor(r.stdout.length / 2)) : null;
+}
+export const round = (n, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
 
 const EXT = {
   image: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'tif', 'tiff', 'bmp', 'avif'],
@@ -81,7 +105,7 @@ const EXT_FOR_MIME = {
 };
 export const extForMime = (ct) => EXT_FOR_MIME[String(ct || '').split(';')[0].trim().toLowerCase()];
 
-export const extOf = (p) => extname(p).slice(1).toLowerCase();
+const extOf = (p) => extname(p).slice(1).toLowerCase();
 export const mimeOf = (p) => MIME[extOf(p)] || 'application/octet-stream';
 export function typeOf(p) {
   const e = extOf(p);
@@ -143,10 +167,17 @@ export function readUploads(p) {
   try { return JSON.parse(readFileSync(f, 'utf8')); } catch (e) { die(`${f}: ${e.message}`); }
 }
 
-// inputs/products.json: [{ name, aliases, look }] or { products }.
-export function readProducts(mediaDir) {
-  try { const d = JSON.parse(readFileSync(join(dirname(mediaDir), 'products.json'), 'utf8')); return Array.isArray(d) ? d : d.products || []; }
-  catch { return []; }
+const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return null; } };
+// What a media dir's brand knows: inputs/products.json ([{ name, aliases, look }] or { products,
+// vocabulary }) and _catalog/people.json ([{ name, description }]).
+export function readRoster(mediaDir) {
+  const d = readJson(join(dirname(mediaDir), 'products.json'));
+  const people = readJson(catalogPaths(mediaDir).people);
+  return {
+    products: Array.isArray(d) ? d : d?.products || [],
+    vocabulary: Array.isArray(d?.vocabulary) ? d.vocabulary : [],
+    people: Array.isArray(people) ? people : [],
+  };
 }
 
 export function mediaDirFrom(p) {
@@ -173,19 +204,56 @@ export function ensureDirs(paths) {
 
 // ---------- hashing + ids ----------
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
-export async function sha256File(p) { // streamed: videos can be huge
-  const h = createHash('sha256');
+export async function hashFile(p, algo = 'sha256') { // streamed: videos can be huge
+  const h = createHash(algo);
   for await (const chunk of createReadStream(p, { highWaterMark: 1 << 22 })) h.update(chunk);
   return h.digest('hex');
 }
 export const padId = (n) => String(n).padStart(5, '0');
 export const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'untitled';
 
+// ---------- records (one JSON file per item in paths.json; record-media.mjs owns the schema) ----------
 export function readRecords(paths) {
   if (!existsSync(paths.json)) return [];
   return readdirSync(paths.json).filter((f) => f.endsWith('.json'))
-    .map((f) => { try { return JSON.parse(readFileSync(join(paths.json, f), 'utf8')); } catch { return null; } })
+    .map((f) => readJson(join(paths.json, f)))
     .filter(Boolean);
+}
+const recordFile = (paths, id) => join(paths.json, `${id}.json`);
+export function readRecord(paths, id) {
+  const p = recordFile(paths, id);
+  return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
+}
+export function writeRecord(paths, rec) {
+  if (!rec.id) throw new Error('record needs an id');
+  ensureDirs(paths);
+  writeFileSync(recordFile(paths, rec.id), JSON.stringify(rec, null, 2) + '\n');
+  return rec;
+}
+// Shallow merge; file/source/sprites/generation one level deep; a transcript is replaced whole; an
+// undefined key is dropped. Stamps status=cataloged once a description or transcript exists.
+export function mergeRecord(paths, patch) {
+  const id = patch.id;
+  if (!id) throw new Error('patch needs an id');
+  const cur = readRecord(paths, id) || { id };
+  const merged = { ...cur, ...patch };
+  for (const k of ['file', 'source', 'sprites', 'generation']) {
+    if (cur[k] && patch[k] && typeof cur[k] === 'object' && !Array.isArray(cur[k])) merged[k] = { ...cur[k], ...patch[k] };
+  }
+  const analyzed = merged.visual_description || merged.audio_description || merged.audio_transcript?.text;
+  if (analyzed && merged.status === 'probed') merged.status = 'cataloged';
+  return writeRecord(paths, merged);
+}
+
+// A generated index.md: title, a "N <noun>s. Generated from <from>" line, and a table of rows.
+export function indexMarkdown({ title, noun, from, cols, rows }) {
+  const cell = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  return [
+    `# ${title}`, '',
+    `${rows.length} ${noun}${rows.length === 1 ? '' : 's'}. Generated from \`${from}\` — do not edit by hand.`, '',
+    `| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`,
+    ...rows.map((r) => `| ${r.map(cell).join(' | ')} |`), '',
+  ].join('\n');
 }
 
 const orientationOf = (w, h) => (!w || !h ? 'unknown' : w > h ? 'landscape' : w < h ? 'portrait' : 'square');
@@ -205,7 +273,7 @@ export function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, widt
     file: { name, type, mime, bytes },
     source: { type: sourceType, name: sourceName },
     products: [], people: [], unknown_people: [], tags: [],
-    visual_description: '', text_in_media: '',
+    visual_description: '',
     status: 'probed',
   };
   if (width) rec.file.width = width;
@@ -216,11 +284,12 @@ export function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, widt
 }
 
 // --key value, repeated keys → arrays, bare --flag → true. `flags` never take a value, so the next
-// word stays a positional (in `_`).
-export function parseArgs(argv, { repeat = [], flags = [] } = {}) {
+// word stays a positional (in `_`). `help`: the tool's usage text, printed on --help or -h (exit 0).
+export function parseArgs(argv, { repeat = [], flags = [], help } = {}) {
   const out = {}; const positionals = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (help && (a === '--help' || a === '-h')) { console.log(help); process.exit(0); }
     if (!a.startsWith('--')) { positionals.push(a); continue; }
     const key = a.slice(2); const next = argv[i + 1];
     if (flags.includes(key) || next === undefined || next.startsWith('--')) { out[key] = true; continue; }
@@ -230,3 +299,5 @@ export function parseArgs(argv, { repeat = [], flags = [] } = {}) {
   out._ = positionals;
   return out;
 }
+// Bad usage: the usage text on stderr, exit 1.
+export function usage(help) { console.error(help); process.exit(1); }

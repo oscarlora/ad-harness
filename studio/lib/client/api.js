@@ -6,9 +6,12 @@ export const workflowUrl = (ws, brand, ad) => `${brandUrl(ws, brand, 'workflow')
 
 export const apiBase = (ws, brand) => `/api/${encodeURIComponent(ws)}/${encodeURIComponent(brand)}`;
 
-// v = cache-buster for overwritten renders.
-export const fileUrl = (ws, brand, p, v) =>
-  `${apiBase(ws, brand)}/file?p=${encodeURIComponent(p)}${v ? `&v=${encodeURIComponent(v)}` : ''}`;
+// v = cache-buster for overwritten renders; w = serve an image fit within w px (a thumbnail).
+export const fileUrl = (ws, brand, p, v, w) =>
+  `${apiBase(ws, brand)}/file?p=${encodeURIComponent(p)}${v ? `&v=${encodeURIComponent(v)}` : ''}${w ? `&w=${w}` : ''}`;
+
+// A media-library file (relative to inputs/media/) as a brand-relative path.
+export const mediaPath = (p) => `inputs/media/${p}`;
 
 // A 404 without a JSON error means the server isn't serving the route (dev route-table drift): say restart.
 const MISSING_ROUTE = 'Studio needs a restart: the server is not serving this part of the app. Stop it and run it again, then try once more.';

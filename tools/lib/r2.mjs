@@ -1,13 +1,10 @@
 // r2.mjs — Cloudflare R2 client with AWS SigV4 signing, zero deps. One bucket per workspace.
-// Self-test against AWS's published SigV4 examples: node tools/lib/r2.mjs --selftest
 import { createHash, createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
 
 const sha256hex = (d) => createHash('sha256').update(d).digest('hex');
 const hmac = (key, d) => createHmac('sha256', key).update(d).digest();
 const hmacHex = (key, d) => createHmac('sha256', key).update(d).digest('hex');
-export const EMPTY_SHA256 = sha256hex('');
 
 // encodeURIComponent leaves !'()* alone; AWS wants them encoded.
 const enc = (s) => encodeURIComponent(s).replace(/[!*'()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
@@ -23,8 +20,8 @@ function signingKey(secret, dateStamp, region, service) {
 
 const amzNow = (d = new Date()) => d.toISOString().replace(/[:-]|\.\d{3}/g, '');
 
-// headers must include host. payloadHash = hex sha256 of the body (or UNSIGNED-PAYLOAD).
-export function signRequest({ method, path, query = '', headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate }) {
+// The Authorization header. headers must include host; payloadHash = hex sha256 of the body.
+function authorization({ method, path, query = '', headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate }) {
   const dateStamp = amzDate.slice(0, 8);
   const lower = {};
   for (const k of Object.keys(headers)) lower[k.toLowerCase()] = String(headers[k]).trim();
@@ -35,12 +32,11 @@ export function signRequest({ method, path, query = '', headers, payloadHash, re
   const scope = `${dateStamp}/${region}/${service}/aws4_request`;
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256hex(canonicalRequest)].join('\n');
   const signature = hmacHex(signingKey(secretAccessKey, dateStamp, region, service), stringToSign);
-  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-  return { authorization, signature, signedHeaders };
+  return `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 }
 
 // A presigned URL anyone can GET until it expires.
-export function presignUrl({ method = 'GET', host, path, expires = 3600, region, service = 's3', accessKeyId, secretAccessKey, amzDate = amzNow() }) {
+function presignUrl({ method = 'GET', host, path, expires = 3600, region, service = 's3', accessKeyId, secretAccessKey, amzDate = amzNow() }) {
   const dateStamp = amzDate.slice(0, 8);
   const scope = `${dateStamp}/${region}/${service}/aws4_request`;
   const q = {
@@ -57,7 +53,7 @@ export function presignUrl({ method = 'GET', host, path, expires = 3600, region,
   return `https://${host}${encPath(path)}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, region = 'auto', service = 's3' }) {
+function createR2({ accountId, accessKeyId, secretAccessKey, bucket, region = 'auto', service = 's3' }) {
   if (!accountId || !accessKeyId || !secretAccessKey || !bucket) throw new Error('createR2: missing accountId/accessKeyId/secretAccessKey/bucket');
   const host = `${accountId}.r2.cloudflarestorage.com`;
   const keyPath = (key) => `/${bucket}/${key.replace(/^\/+/, '')}`;
@@ -69,14 +65,12 @@ export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, regi
     const amzDate = amzNow();
     const headers = { host, 'x-amz-content-sha256': payloadHash, 'x-amz-date': amzDate };
     if (contentType) headers['content-type'] = contentType;
-    const { authorization } = signRequest({ method, path, query, headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate });
+    const auth = authorization({ method, path, query, headers, payloadHash, region, service, accessKeyId, secretAccessKey, amzDate });
     const url = `https://${host}${encPath(path)}${query ? '?' + query : ''}`;
-    const res = await fetch(url, { method, headers: { ...headers, Authorization: authorization }, body: method === 'GET' || method === 'HEAD' ? undefined : buf });
-    return res;
+    return fetch(url, { method, headers: { ...headers, Authorization: auth }, body: method === 'GET' || method === 'HEAD' ? undefined : buf });
   }
 
   return {
-    host, bucket,
     async put(key, body, contentType) {
       // R2 sometimes returns transient 5xx.
       for (let attempt = 1; ; attempt++) {
@@ -99,11 +93,6 @@ export function createR2({ accountId, accessKeyId, secretAccessKey, bucket, regi
     async head(key) {
       const res = await send('HEAD', key);
       return res.ok ? { size: Number(res.headers.get('content-length') || 0) } : null;
-    },
-    async delete(key) {
-      const res = await send('DELETE', key);
-      if (!res.ok && res.status !== 404) throw new Error(`R2 delete ${key} -> HTTP ${res.status}`);
-      return true;
     },
     // [{ key, etag, size, lastModified }]. etag = md5 hex for single-part PUTs; multipart etags contain '-'.
     async listWithMeta(prefix = '') {
@@ -170,25 +159,3 @@ export function r2Public(env, workspace) {
   };
 }
 
-function selftest() {
-  const accessKeyId = 'AKIAIOSFODNN7EXAMPLE';
-  const secretAccessKey = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
-  const host = 'examplebucket.s3.amazonaws.com';
-  // 1) GET Object (header auth) — AWS docs example.
-  const h = signRequest({
-    method: 'GET', path: '/test.txt', query: '',
-    headers: { host, range: 'bytes=0-9', 'x-amz-content-sha256': EMPTY_SHA256, 'x-amz-date': '20130524T000000Z' },
-    payloadHash: EMPTY_SHA256, region: 'us-east-1', service: 's3', accessKeyId, secretAccessKey, amzDate: '20130524T000000Z',
-  });
-  const want1 = 'f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41';
-  // 2) Presigned GET — AWS docs example.
-  const url = presignUrl({ method: 'GET', host, path: '/test.txt', expires: 86400, region: 'us-east-1', service: 's3', accessKeyId, secretAccessKey, amzDate: '20130524T000000Z' });
-  const got2 = new URL(url).searchParams.get('X-Amz-Signature');
-  const want2 = 'aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404';
-  const ok1 = h.signature === want1, ok2 = got2 === want2;
-  console.log(`header-auth signature: ${ok1 ? 'PASS' : 'FAIL'}${ok1 ? '' : `\n  got  ${h.signature}\n  want ${want1}`}`);
-  console.log(`presign signature:     ${ok2 ? 'PASS' : 'FAIL'}${ok2 ? '' : `\n  got  ${got2}\n  want ${want2}`}`);
-  process.exit(ok1 && ok2 ? 0 : 1);
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href && process.argv.includes('--selftest')) selftest();

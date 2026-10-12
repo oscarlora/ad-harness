@@ -1,5 +1,5 @@
 #!/bin/sh
-# pre-commit — block commits that mention a local client workspace or brand name
+# pre-commit — block commits whose files mention a local client workspace or brand name
 # (tools/check-public.mjs). Enabled by tools/setup.sh / setup.ps1 (git config core.hooksPath .githooks).
 PATH="$HOME/.local/node/bin:$PATH"
 if ! command -v node >/dev/null 2>&1; then

@@ -30,16 +30,10 @@ export async function mediaRecord(brandDirAbs, id) {
   return readJson(p, null);
 }
 
-// Known people ledger (_catalog/people.json).
-const readPeopleAt = (file) => readJson(file, []);
-
-export async function readPeople(brandDirAbs) {
-  return readPeopleAt((await mediaPaths(brandDirAbs)).people);
-}
-
+// Adds new names to the known-people ledger (_catalog/people.json).
 export async function addPeople(brandDirAbs, entries) {
   const paths = await mediaPaths(brandDirAbs);
-  const people = readPeopleAt(paths.people);
+  const people = readJson(paths.people, []);
   const have = new Set(people.map((p) => String(p.name || '').toLowerCase()));
   let changed = false;
   for (const e of entries || []) {

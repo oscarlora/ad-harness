@@ -1,6 +1,6 @@
 ---
 name: generate-voice
-description: Design and generate natural voiceovers with Gemini 3.8 Flash TTS or Seed Audio 1.0 through tools/generate-voice.mjs. Use when an ad needs narration, dialogue, a voice take, a pronunciation correction, a pacing change, or a designed speaker voice.
+description: Design and generate natural voiceovers with Gemini 3.8 Flash TTS or Seed Audio 1.0 through tools/generate-voice.mjs. Use when an ad needs narration, dialogue, a voice take, a pronunciation correction, a pacing change, a designed speaker voice, or a voice isolated from music or re-voiced (ElevenLabs).
 ---
 
 # Generate voice
@@ -56,8 +56,6 @@ Regenerate when it comes out wrong.
 
 ## Generate
 
-One or two speakers (Gemini TTS):
-
 ```bash
 node tools/generate-voice.mjs \
   --script-file workspaces/<WS>/<Brand>/outputs/<ad>/voice/vo-script.txt \
@@ -65,15 +63,11 @@ node tools/generate-voice.mjs \
   --out workspaces/<WS>/<Brand>/outputs/<ad>/voice/vo-a.mp3
 ```
 
-A raw scene prompt (Seed Audio):
+Raw Seed Audio prompts (`--prompt-file`, `--target-length`), labeled dialogue (`--voices-file`) and
+every other flag: `--help`. Keep earlier takes with `-a`, `-b`, `-c` suffixes.
 
-```bash
-node tools/generate-voice.mjs \
-  --prompt-file workspaces/<WS>/<Brand>/outputs/<ad>/voice/vo-prompt.txt \
-  --target-length 30 \
-  --out workspaces/<WS>/<Brand>/outputs/<ad>/voice/vo-seed1-a.mp3
-```
+## Isolate or re-voice (ElevenLabs)
 
-For labeled dialogue, use `--script-file` plus `--voices-file` (add `--model seed-audio` for a
-designed or cloned cast); formats in the tool's `--help`. Keep earlier takes with `-a`, `-b`, `-c`
-suffixes. Show every take as it renders; the user picks by ear and calls any re-roll.
+With `<WS>_ELEVENLABS_API_KEY`, call the API directly (no tool): `POST /v1/audio-isolation` strips
+music and noise from a voice; `POST /v1/speech-to-speech/<voice_id>`
+(`model_id=eleven_multilingual_sts_v2`) re-voices a take, keeping its exact delivery.

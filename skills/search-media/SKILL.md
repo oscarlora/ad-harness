@@ -5,10 +5,11 @@ description: Find and use media from a brand's library — by meaning in any lan
 
 # Search media
 
-The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). Assets for every
+The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). Search it first
+for reference photos, footage, music or sounds, instead of hunting raw folders. Assets for every
 brand (music, SFX, references) live in the public **shared library** — pull it if it isn't local
-(`node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`, no keys needed), then
-search it the same way with `--media workspaces/Shared/Library/inputs/media`.
+(AGENTS.md, First-time setup), then search it the same way with
+`--media workspaces/Shared/Library/inputs/media`.
 
 ## Agent search — retrieve, then judge
 
@@ -27,12 +28,3 @@ search it the same way with `--media workspaces/Shared/Library/inputs/media`.
 3. **Use** — pass the original's path (`inputs/media/<name>`) to the generator. If it isn't
    local (a light pull), presign it from R2:
    `node tools/sync-brand.mjs --presign workspaces/<WS>/<Brand> <id>`.
-
-## Human search — the gallery
-
-Studio's Media page (**open-studio**), `/<Workspace>/<Brand>/media`.
-
-## Wiring
-
-Ad workflows search here first for reference photos, footage, music, or sounds, instead of hunting
-raw folders.

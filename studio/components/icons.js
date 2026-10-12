@@ -4,7 +4,6 @@ const base = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinec
 export const IcDl = () => <svg {...base}><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" /></svg>;
 export const IcCopy = () => <svg {...base}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>;
 export const IcFull = () => <svg {...base}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
-export const IcInfo = () => <svg {...base}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>;
 export const IcLink = () => <svg {...base}><path d="M10 14a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1" /></svg>;
 export const IcFolder = () => <svg {...base}><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>;
 export const IcX = () => <svg {...base}><path d="M6 6l12 12M18 6L6 18" /></svg>;
@@ -29,3 +28,10 @@ export const IcImage = () => <svg {...base}><rect x="3" y="3" width="18" height=
 export const IcPlay = () => <svg {...base}><path d="M7 4l13 8-13 8z" fill="currentColor" /></svg>;
 export const IcCheck = () => <svg {...base}><path d="M5 12l5 5L20 7" /></svg>;
 export const IcPause = () => <svg {...base}><path d="M8 5v14M16 5v14" /></svg>;
+export const IcLeft = () => <svg {...base}><path d="M15 5l-7 7 7 7" /></svg>;
+export const IcRight = () => <svg {...base}><path d="M9 5l7 7-7 7" /></svg>;
+export const IcPanelClose = () => <svg {...base}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16M8 10l2 2-2 2" /></svg>;
+export const IcPanelOpen = () => <svg {...base}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16M10 10l-2 2 2 2" /></svg>;
+export const IcMute = () => <svg {...base}><path d="M11 5L6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6" /></svg>;
+export const IcCaptions = () => <svg {...base}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M10.5 10.2a2 2 0 100 3.6M17 10.2a2 2 0 100 3.6" /></svg>;
+export const IcZones = () => <svg {...base}><rect x="6" y="2" width="12" height="20" rx="2" /><rect x="8" y="5.5" width="8" height="8" rx="1" strokeDasharray="2 2" /></svg>;

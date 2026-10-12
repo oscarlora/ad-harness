@@ -18,8 +18,10 @@ node tools/upload-to-<dest>.mjs [--list] [--confirm] [--create] <spec.json>
 
 - `--list` inspects the destination (folders, boards, fields) and writes nothing.
 - A plain run prints the plan and writes nothing; show it to the user.
-- `--confirm` writes. Re-running never duplicates (matched by name).
-- Never creates a folder or board unless `--create` is passed, after the user agrees.
+- `--confirm` writes. Re-running never duplicates (matched by name). It also notes the link on the
+  ad's record (`sentTo`, see `tools/record-ad.mjs`), which Studio shows.
+- Drive only: never creates a folder unless `--create` is passed, after the user agrees. The Notion
+  tool never creates a board.
 
 ## The spec
 
@@ -67,10 +69,7 @@ Files land in `<WS>_DRIVE_FOLDER / <brand folder> / <group> /`, where the group 
 - A new per-ad folder is named `<ID> <descriptor>` (e.g. `41 Static - The Morning Routine Math`),
   never prefixed with `#`.
 - A revision: `--archive` moves same-named files into `Archived` before uploading.
-- Setup: `<WS>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN / _FOLDER` in `.env`. First time
-  on a machine, `node tools/connect-drive.mjs <WS>`: the user signs in with their Google account and
-  it writes the first three. It reads the workspace's Google app from `_custom/drive-client.json`;
-  only the first person ever passes the OAuth client (Desktop) JSON from Google Cloud, which stores it there.
+- Setup: the Drive keys in `.env.example`.
 
 ## Notion
 
@@ -87,9 +86,8 @@ the plan reports any it skips.
   first hit.
 - **Status** as directed (e.g. `Pending Client Review`). **Headline / Primary Text** from
   **write-meta-copy**.
-- **IDs:** the board is the brand's ID authority (**write-prompt**). Peek before naming a batch's
-  files: `node tools/upload-to-notion.mjs next-id <WS> "Acme"`. `"id": "auto"` takes the next
-  number; a duplicate is refused; updates keep the page's ID.
+- **IDs** (the board is the authority: **write-prompt**): `"id": "auto"` takes the next number; a
+  duplicate is refused; updates keep the page's ID.
 
 ## Add a destination
 

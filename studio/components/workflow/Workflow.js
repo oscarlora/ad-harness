@@ -4,21 +4,22 @@ import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { brandUrl, fileUrl, workflowUrl } from '../../lib/client/api.js';
 import { useBrandData } from '../../lib/client/hooks.js';
-import { LoadError, ToolbarStart } from '../BrandPage.js';
+import { Badge, Bars, LoadError, words } from '../BrandPage.js';
 import Editor from '../edit/Editor.js';
+import { IcLeft } from '../icons.js';
+import Player from '../Player.js';
 import ViewerShell from '../ViewerShell.js';
 import { Dot, MdFile, TextDisclosure } from './parts.js';
 import Markdown from './Markdown.js';
 import Storyboard from './Storyboard.js';
 
-const words = (s) => String(s || '').replace(/-/g, ' ');
 const baseName = (n) => n.split('/').pop();
 const STATE = { done: 'Done', current: 'Current', todo: 'Not started' };
 
 function Lightbox({ ws, brand, images, index, onStep, onClose }) {
   const f = images[index];
   return (
-    <ViewerShell onStep={onStep} onClose={onClose} backdrop="stage" nav={images.length > 1} tools={<span className="toolbar__count">{baseName(f.name)}</span>}>
+    <ViewerShell onStep={onStep} onClose={onClose} nav={images.length > 1} title={baseName(f.name)}>
       <img src={fileUrl(ws, brand, f.p, f.v)} alt={f.name} />
     </ViewerShell>
   );
@@ -55,7 +56,7 @@ function Files({ ws, brand, files }) {
         <div className="flow-grid flow-grid--video">
           {videos.map((f) => (
             <figure key={f.p} className="flow-tile">
-              <video src={fileUrl(ws, brand, f.p, f.v)} controls playsInline preload={videos.length > 4 ? 'none' : 'metadata'} />
+              <Player src={fileUrl(ws, brand, f.p, f.v)} preload={videos.length > 4 ? 'none' : 'metadata'} label={baseName(f.name)} />
               {name(f)}
             </figure>
           ))}
@@ -64,7 +65,7 @@ function Files({ ws, brand, files }) {
       {files.filter((f) => f.type === 'audio').map((f) => (
         <figure key={f.p} className="flow-audio">
           {name(f)}
-          <audio src={fileUrl(ws, brand, f.p, f.v)} controls preload="none" />
+          <Player kind="audio" src={fileUrl(ws, brand, f.p, f.v)} preload="none" label={baseName(f.name)} />
         </figure>
       ))}
       {files.filter((f) => f.type === 'txt').map((f) => <TextDisclosure key={f.p} ws={ws} brand={brand} label={baseName(f.name)} file={f} />)}
@@ -113,20 +114,16 @@ function Detail({ ws, brand, ad }) {
 
   return (
     <div>
-      <div className="toolbar">
-        <ToolbarStart ws={ws} brand={brand} current="workflow" count={data ? `Ad ${data.id}` : 'Loading'} updatedAt={updatedAt} />
-        <div className="toolbar__spacer" />
-        <button type="button" className="btn" title="Reload" onClick={load}>↻</button>
-      </div>
+      <Bars ws={ws} brand={brand} current="workflow" count={data ? `Ad ${data.id}` : 'Loading'} updatedAt={updatedAt} />
       {error && <LoadError what="this ad" error={error} onRetry={load} />}
       {!error && data && (
-        <div className="flow-page rise">
+        <div className="flow-page">
           <header className="flow-head">
-            <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')}>‹ All ads</Link>
+            <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')}><IcLeft />All ads</Link>
             <h1>{words(data.concept)}</h1>
             <div className="flow-head__sub">
               {[data.format, data.persona, data.angle, data.product].filter(Boolean).map(words).join(' · ')}
-              {data.status && <span className="badge" data-status={data.status.toLowerCase()}>{data.status}</span>}
+              {data.status && <Badge status={data.status} />}
             </div>
           </header>
           <nav className="flow-steps" aria-label="Steps">
@@ -148,15 +145,14 @@ function List({ ws, brand }) {
   const ads = data?.ads || [];
   return (
     <div>
-      <div className="toolbar">
-        <ToolbarStart ws={ws} brand={brand} current="workflow" count={data ? `${ads.length} ads` : 'Loading'} updatedAt={updatedAt} />
-        <div className="toolbar__spacer" />
-        <button type="button" className="btn" title="Reload" onClick={load}>↻</button>
-      </div>
+      <Bars ws={ws} brand={brand} current="workflow" count={data ? `${ads.length} ads` : 'Loading'} updatedAt={updatedAt} />
       {error && <LoadError what="ads" error={error} onRetry={load} />}
       {!error && data && ads.length === 0 && <div className="empty-state">No ad folders in <code>outputs/</code> yet.</div>}
       {!error && ads.length > 0 && (
-        <ul className="flow-list rise">
+        <ul className="flow-list">
+          <li className="flow-row flow-row--head eyebrow" aria-hidden="true">
+            <span>ID</span><span>Concept</span><span>Format</span><span>Progress</span><span>Now</span>
+          </li>
           {ads.map((a) => (
             <li key={a.folder}>
               <Link className="flow-row" href={workflowUrl(ws, brand, a.folder)}>

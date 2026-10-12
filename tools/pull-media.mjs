@@ -2,17 +2,11 @@
 // pull-media.mjs — fetch media into a local cache for catalog-media. Sources: a local folder/file, a
 // Google Drive link or id (workspace creds, else the public link), an Air.inc board share link, or a
 // URL (yt-dlp if present, else a direct fetch). Dropbox / OneDrive are reported as not wired yet.
-//
-// Usage:
-//   node tools/pull-media.mjs --source "<link|path>" --out <cache dir> [--workspace <WS>] [--brand <dir>] [--dry-run]
-// The workspace comes from --out, --brand, or --workspace. --brand makes a Drive folder pull
-// incremental (drive-sources.json); --dry-run lists what a Drive pull would download.
 import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
-import { inferWorkspace, parseArgs, isMedia, findBin, have, catalogPaths } from './lib/catalog.mjs';
-import { driveToken, driveGet, hasDriveCreds, listTree, downloadFile, downloadDriveFile, readDriveSources, FOLDER_MIME } from './lib/drive.mjs';
+import { inferWorkspace, parseArgs, isMedia, findBin, have, catalogPaths, usage } from './lib/catalog.mjs';
+import { driveToken, driveApi, hasDriveCreds, listTree, downloadFile, downloadDriveFile, readDriveSources, FOLDER_MIME } from './lib/drive.mjs';
 
 function uniqueName(dir, name) {
   let n = name, i = 1; while (existsSync(join(dir, n))) { const dot = name.lastIndexOf('.'); n = dot > 0 ? `${name.slice(0, dot)}_${i}${name.slice(dot)}` : `${name}_${i}`; i++; } return n;
@@ -37,7 +31,7 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
   const id = driveId(source);
   if (!id) { console.error('Could not parse a Drive folder/file id from the source.'); process.exit(1); }
   let token = W && hasDriveCreds(W) ? (await driveToken(W)).token : null;
-  const meta = token ? await driveGet(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,mimeType&supportsAllDrives=true`, token).catch(() => null) : null;
+  const meta = token ? await driveApi(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,mimeType&supportsAllDrives=true`, token).catch(() => null) : null;
   if (token && !meta?.mimeType) { console.log(`${W}'s Drive account can't see ${id}; trying the public link.`); token = null; }
   const isFolder = meta ? meta.mimeType === FOLDER_MIME : !/\/file\/d\//.test(source);
   console.log(`Drive ${isFolder ? 'folder' : 'file'} ${id} via ${token ? 'API' : 'public link (no Drive creds)'}`);
@@ -103,6 +97,13 @@ async function pullAir(source, out, { dryRun } = {}) {
   return n;
 }
 
+const HELP = `pull-media.mjs — fetch media (folder, Drive, Air board, URL) into a local cache for catalog-media
+
+  node tools/pull-media.mjs --source "<link|path>" --out <cache dir> [--workspace <WS>] [--brand <dir>] [--dry-run]
+    --workspace  whose Drive creds to use (default: from --out or --brand)
+    --brand      makes a Drive folder pull incremental (drive-sources.json)
+    --dry-run    list what a Drive or Air pull would download`;
+
 async function pullUrl(source, out) {
   const social = /(youtube\.com|youtu\.be|vimeo\.com|tiktok\.com|instagram\.com|facebook\.com)/i.test(source);
   if (social || !/\.\w{2,4}($|\?)/.test(source)) {
@@ -115,19 +116,17 @@ async function pullUrl(source, out) {
   return 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const a = parseArgs(process.argv.slice(2));
-  const source = a.source || a._[0];
-  const out = a.out;
-  if (!source || !out) { console.error('Usage: node tools/pull-media.mjs --source "<link|path>" --out <cache dir> [--workspace <WS>] [--brand <dir>] [--dry-run]'); process.exit(1); }
-  mkdirSync(resolve(out), { recursive: true });
-  const W = (a.workspace || inferWorkspace(out) || inferWorkspace(source) || (a.brand && inferWorkspace(a.brand)) || '').toUpperCase();
-  let n = 0;
-  if (existsSync(source)) n = pullLocal(source, resolve(out));
-  else if (/drive\.google\.com/.test(source) || driveId(source)) n = await pullDrive(source, resolve(out), W, { brand: a.brand && resolve(a.brand), dryRun: !!a['dry-run'] });
-  else if (/air\.inc\//i.test(source)) n = await pullAir(source, resolve(out), { dryRun: !!a['dry-run'] });
-  else if (/dropbox\.com|1drv\.ms|onedrive|sharepoint/i.test(source)) { console.error('Dropbox / OneDrive connectors are not wired yet. Download the folder and pass it as a local path, or use Drive.'); process.exit(3); }
-  else if (/^https?:\/\//.test(source)) n = await pullUrl(source, resolve(out));
-  else { console.error('Unrecognized source. Use a local path, a Drive link/id, or a URL.'); process.exit(1); }
-  if (!a['dry-run']) console.log(`pulled ${n} file${n === 1 ? '' : 's'} → ${resolve(out)}`);
-}
+const a = parseArgs(process.argv.slice(2), { flags: ['dry-run'], help: HELP });
+const source = a.source || a._[0];
+const out = a.out;
+if (!source || !out) usage(HELP);
+mkdirSync(resolve(out), { recursive: true });
+const W = (a.workspace || inferWorkspace(out) || inferWorkspace(source) || (a.brand && inferWorkspace(a.brand)) || '').toUpperCase();
+let n = 0;
+if (existsSync(source)) n = pullLocal(source, resolve(out));
+else if (/drive\.google\.com/.test(source) || driveId(source)) n = await pullDrive(source, resolve(out), W, { brand: a.brand && resolve(a.brand), dryRun: !!a['dry-run'] });
+else if (/air\.inc\//i.test(source)) n = await pullAir(source, resolve(out), { dryRun: !!a['dry-run'] });
+else if (/dropbox\.com|1drv\.ms|onedrive|sharepoint/i.test(source)) { console.error('Dropbox / OneDrive connectors are not wired yet. Download the folder and pass it as a local path, or use Drive.'); process.exit(3); }
+else if (/^https?:\/\//.test(source)) n = await pullUrl(source, resolve(out));
+else { console.error('Unrecognized source. Use a local path, a Drive link/id, or a URL.'); process.exit(1); }
+if (!a['dry-run']) console.log(`pulled ${n} file${n === 1 ? '' : 's'} → ${resolve(out)}`);

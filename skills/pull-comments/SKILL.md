@@ -37,8 +37,7 @@ Each run prints a summary, so you needn't open the file.
 
 The ad **ID** is the leading number in the Drive filename (`41_V2_...png` → ad `41`, variation `V2`)
 or the Notion page's ID property. Open `outputs/json/<id>.json` — its fields and `generation.prompt`
-are the source of truth (**write-prompt**). For an older ad with no record, fall back to the `.png`
-in `outputs/` and any legacy prompt file.
+are the source of truth (**write-prompt**).
 
 ## 3. Propose the plan
 
@@ -47,7 +46,7 @@ One block per ad **in the chat**:
 - The ad ID + file/page, and each comment verbatim (mark resolved ones).
 - For each comment, the concrete change: which record field moves (copy slot, design, composition)
   and what it becomes — never the rendered pixels.
-- For a **vague** comment ("make it pop"), offer **3 differentiated options** instead of guessing.
+- For a **vague** comment ("make it pop"), offer options instead of guessing.
 
 Then stop. Do not regenerate until the user approves.
 
@@ -55,6 +54,6 @@ Then stop. Do not regenerate until the user approves.
 
 Fixes rewrite the prompt from scratch, never amend (**write-prompt**). Update the record's fields,
 rebuild `generation.prompt` fresh, regenerate (`generate-image.mjs --record`), and re-index
-(`record-ad.mjs --index`). Re-upload only what changed (**upload-ads**).
+(`record-ad.mjs --index <brand outputs/ dir>`). Re-upload only what changed (**upload-ads**).
 
 Hand any **durable lesson** (a rule for future ads) to **save-brand-memory**.

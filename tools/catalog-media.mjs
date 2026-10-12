@@ -1,19 +1,13 @@
 #!/usr/bin/env node
-// catalog-media.mjs — media to searchable library in one command: pull → probe → analyze → embed →
-// index → push to R2. Idempotent: duplicates are skipped with their reason. Without --source it
-// finishes what is pending and pushes. A Drive folder is tracked in drive-sources.json, so re-runs
-// download only new files and remember its --source-type / --source-name. --dry-run lists what would
-// be downloaded and stops. --jobs = videos probed at once.
-//
-// Usage:
-//   node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] \
-//        [--source-type brand|generated|external] [--source-name "Sept shoot"] [--jobs 2] [--no-push] [--dry-run]
+// catalog-media.mjs — media to searchable library in one command. Idempotent: duplicates are skipped
+// with their reason. A Drive folder is tracked in drive-sources.json, so re-runs download only new
+// files and remember its --source-type / --source-name.
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { catalogPaths, parseArgs, inferWorkspace, loadEnv } from './lib/catalog.mjs';
+import { catalogPaths, parseArgs, inferWorkspace, loadEnv, usage } from './lib/catalog.mjs';
 import { planAndProbe } from './lib/media-probe.mjs';
 import { analyzeMany } from './analyze-media.mjs';
 import { embedAll } from './embed-media.mjs';
@@ -25,8 +19,17 @@ import { readDriveSources, writeDriveSources } from './lib/drive.mjs';
 const TOOLS = fileURLToPath(new URL('.', import.meta.url));
 const node = (script, args) => spawnSync(process.execPath, [join(TOOLS, script), ...args], { stdio: 'inherit' });
 
-const a = parseArgs(process.argv.slice(2));
-if (!a.brand) { console.error('Usage: node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"] [--source-type ..] [--source-name ..] [--jobs 2] [--no-push] [--dry-run]'); process.exit(1); }
+const HELP = `catalog-media.mjs — media to searchable library: pull → probe → analyze → embed → index → push
+
+  node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"]
+       [--source-type brand|generated|external] [--source-name "Sept shoot"] [--jobs 2] [--no-push] [--dry-run]
+    --source     what to add; without it, finishes what is pending and pushes
+    --jobs       videos probed at once (default 2)
+    --no-push    keep the library local (default: push to R2 when the workspace has keys)
+    --dry-run    list what a Drive folder pull would download, then stop`;
+
+const a = parseArgs(process.argv.slice(2), { flags: ['no-push', 'dry-run'], help: HELP });
+if (!a.brand) usage(HELP);
 if (a.jobs) process.env.MEDIA_JOBS = String(a.jobs);
 const brand = resolve(a.brand);
 const paths = catalogPaths(brand);

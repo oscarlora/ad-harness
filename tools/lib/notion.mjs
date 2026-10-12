@@ -1,4 +1,4 @@
-// notion.mjs — shared Notion helpers: token, API caller, Ads Board resolution.
+// notion.mjs — shared Notion helpers: token, API caller, paging, Ads Board resolution.
 // Optional per workspace: <WS>_NOTION_TOKEN in .env.
 import { loadEnv, readUploads } from './catalog.mjs';
 
@@ -12,6 +12,22 @@ export function notionClient(workspace) {
   const api = (p, method = 'GET', body) =>
     fetch('https://api.notion.com/v1' + p, { method, headers: { ...headers, 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) }).then((r) => r.json());
   return { headers, api };
+}
+
+// Every result of a paged endpoint: a POST pages through `body`, a GET through the query string.
+// Throws on a Notion error (its `code` kept).
+export async function allPages(api, path, body) {
+  const out = [];
+  let cursor;
+  do {
+    const r = body
+      ? await api(path, 'POST', { ...body, page_size: 100, ...(cursor && { start_cursor: cursor }) })
+      : await api(`${path}${path.includes('?') ? '&' : '?'}page_size=100${cursor ? `&start_cursor=${cursor}` : ''}`);
+    if (r.object === 'error') throw Object.assign(new Error(`${r.code} — ${r.message}`), { code: r.code });
+    out.push(...(r.results || []));
+    cursor = r.has_more ? r.next_cursor : undefined;
+  } while (cursor);
+  return out;
 }
 
 export const plain = (rt) => (rt || []).map((t) => t.plain_text).join('');

@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiBase, getJson } from './api.js';
 
-// Load /api/[ws]/[brand]/<kind>; reload on each `change` from the watch stream (updatedAt bumps then).
+// Load /api/[ws]/[brand]/<kind>; reload on each `change` from the watch stream (updatedAt bumps then),
+// and once when the stream reconnects after a drop (a Studio restart), since changes in between were missed.
 export function useBrandData(ws, brand, kind) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -17,22 +18,36 @@ export function useBrandData(ws, brand, kind) {
   const loadRef = useRef(load);
   loadRef.current = load;
   useEffect(() => {
-    const es = new EventSource(`${apiBase(ws, brand)}/watch`);
-    es.addEventListener('change', () => loadRef.current().then(() => setUpdatedAt(Date.now())));
-    return () => es.close();
+    let es = null, timer = 0, dropped = false, dead = false;
+    // The browser retries a dropped stream itself, but gives up for good on an error reply
+    // (Studio still starting); then reconnect by hand.
+    const connect = () => {
+      es = new EventSource(`${apiBase(ws, brand)}/watch`);
+      es.addEventListener('change', () => loadRef.current().then(() => setUpdatedAt(Date.now())));
+      es.addEventListener('open', () => { if (dropped) { dropped = false; loadRef.current(); } });
+      es.addEventListener('error', () => {
+        dropped = true;
+        if (es.readyState === EventSource.CLOSED && !dead) timer = setTimeout(connect, 2000);
+      });
+    };
+    connect();
+    return () => { dead = true; clearTimeout(timer); es.close(); };
   }, [ws, brand]);
 
   return { data, setData, error, load, updatedAt };
 }
 
-// Viewer keys: Esc closes, arrows step; ignored while typing.
+// A key pressed in a text field or select, which keeps it.
+export const isTyping = (e) => !!e.target?.closest?.('input, textarea, select, [contenteditable]');
+
+// Viewer keys: Esc closes; ← / → and ↑ / ↓ step to the previous / next file (a started video takes ← / →); ignored while typing.
 export function useViewerKeys(onStep, onClose) {
   useEffect(() => {
     const onKey = (e) => {
-      if (e.target && /^(input|textarea|select)$/i.test(e.target.tagName)) return;
+      if (isTyping(e)) return;
       if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft') onStep(-1);
-      if (e.key === 'ArrowRight') onStep(1);
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); onStep(-1); }
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); onStep(1); }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -44,4 +59,29 @@ export function useCopied() {
   const [copied, setCopied] = useState(false);
   const copy = (text) => navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); }).catch(() => {});
   return [copied, copy];
+}
+
+// Masonry columns step down with the screen width: 4 > 3 > 2 > 1.
+const columnsFor = (vw) => (vw < 640 ? 1 : vw < 900 ? 2 : vw < 1200 ? 3 : 4);
+export function useColumns() {
+  const [n, setN] = useState(4);
+  useEffect(() => {
+    const on = () => setN(columnsFor(window.innerWidth));
+    on();
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
+  return n;
+}
+
+// Deal items into n columns, each to the shortest so far, so the order still reads left to right.
+// heightOf: an item's height per unit of width (1 / its ratio); CSS sizes the cards.
+export function masonry(items, n, heightOf) {
+  const cols = Array.from({ length: n }, () => ({ items: [], h: 0 }));
+  for (const item of items) {
+    const col = cols.reduce((a, b) => (b.h < a.h ? b : a));
+    col.items.push(item);
+    col.h += heightOf(item);
+  }
+  return cols.map((c) => c.items);
 }

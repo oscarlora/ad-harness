@@ -11,7 +11,8 @@ style. Time from the rendered audio, not the script.
 ## 1. Transcribe
 
 `node tools/transcribe-media.mjs --in <voiceover or cut> --words` → word timestamps (flags in `--help`).
-A song uses its Suno timing file (`<song>.timing.json`, **make-ai-song**).
+A song uses its Suno timing file (`<out>.timing.json` from `tools/edit-song.py`, e.g.
+`music/song-final.mp3.timing.json`; **make-ai-song**).
 
 - Words run on the **timeline clock**: a voiceover placed at 0 already is; otherwise transcribe an
   export of the cut.
@@ -44,5 +45,5 @@ Then fix by hand:
   nudge it just enough to clear them; check a frame from each of those shots. Captions start only
   after the hook ends; the two never show at once.
 - A workflow may set its own font and placement (song, slides); these rules still apply.
-- **Brand font** only when a licensed font file exists in `inputs/media/brand/`: map it in the
+- **Brand font** (from `inputs/DESIGN.md`) only when a licensed font file exists in `inputs/media/brand/`: map it in the
   document's `fonts`. Never hunt the web for a brand's commercial font.

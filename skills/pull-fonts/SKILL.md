@@ -1,12 +1,12 @@
 ---
 name: pull-fonts
-description: Capture a brand's fonts as one typography reference image so generated ads render the real fonts. Identify the site's fonts (headline/display, H1–H3, body, any additional) and headline case, render them all onto a single type sheet with tools/pull-fonts.py, record it in the product's `-research.md`, and attach it as a --ref on every generation. Runs as part of research; also use when an ad's type looks off-brand.
+description: Capture a brand's fonts as one typography reference image so generated ads render the real fonts. Identify the site's fonts (headline/display, H1–H3, body, any additional) and headline case, render them all onto a single type sheet with tools/pull-fonts.py, record them in the brand's inputs/DESIGN.md, and attach it as a --ref on every generation. Runs as part of research; also use when an ad's type looks off-brand.
 ---
 
 # Pull fonts
 
 Generators follow a font shown in a reference image, so render the brand's fonts onto one type
-sheet and attach it when generating. Build it during research, once the Branding fonts are known.
+sheet and attach it when generating. Build it during research, once the brand's fonts are known.
 
 ## Process
 
@@ -23,11 +23,12 @@ sheet and attach it when generating. Build it during research, once the Branding
      --font "Poppins|500|Body / UI|<a real support line>"
    ```
    One `--font` per font: `Source|weight|role|sample`; write the H1 `sample` in the brand's headline case. Source is a Google family name, a font-file URL, or a local `.ttf`/`.otf`. Defaults render white-on-dark; pass `--bg`/`--fg` hex to match the brand.
-3. **Record in the product's `-research.md`** Branding → Font(s): each font, role, weight, and the sheet path.
+3. **Record in the brand's `inputs/DESIGN.md`**: each font in `typography` (role, family, weight);
+   case and the sheet path under Typography.
 
 ## Use in generation
 
-- Hooks in the **H1** font and the brand's headline case, support copy in the **body** font; name the font in the prompt (see **design-ad**).
+- Hooks in the **H1** font and the brand's headline case, support copy in the **body** font; name the font in the prompt (**ideate-image-format**, Design).
 - Attach `inputs/media/brand/type_sheet.png` as a `--ref` on every ad, marked in the prompt as a **FONT reference only — do not place it in the ad**.
 
 ## Font sources

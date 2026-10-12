@@ -1,25 +1,22 @@
 // pull-comments.mjs — pull the client's review comments on a batch, from Drive or the Notion Ads Board.
-//
-// Usage:
-//   node tools/pull-comments.mjs drive [--folder <id>] [--out <path>] <spec.json>
-//     Comments (replies, resolved status, marked region) on the files in the spec's group folder,
-//     resolved as in upload-to-drive, or in --folder. Writes <spec dir>/comments.json.
-//   node tools/pull-comments.mjs notion <Workspace> "<brand>" [--status "<name>"]... [--board <id>] [--out <path>]
-//     Threaded comments on the board's pages; --status repeats (any match), omit it for every page.
-//     Board = --board, else the brand's inputs/uploads.json pin, else a title search. Needs the
-//     integration's "Read comments" capability. Writes <Brand>/outputs/notion-comments.json.
-//
-// Each harvest lists per file/page its leading ad ID and comments; a summary prints too.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { parseArgs, findBrandDir, die } from './lib/catalog.mjs';
-import { driveGet, driveForSpec, listChildren, resolveGroupFolder, FOLDER_MIME } from './lib/drive.mjs';
-import { notionClient, resolveBoard, boardQuery, titleOf, plain } from './lib/notion.mjs';
+import { parseArgs, findBrandDir, die, usage } from './lib/catalog.mjs';
+import { driveApi, driveForSpec, listChildren, resolveGroupFolder, FOLDER_MIME } from './lib/drive.mjs';
+import { notionClient, resolveBoard, boardQuery, titleOf, plain, allPages } from './lib/notion.mjs';
 
-const USAGE = `Usage:
+const HELP = `pull-comments.mjs — the client's review comments on a batch, from Drive or the Notion Ads Board
+
   node tools/pull-comments.mjs drive [--folder <id>] [--out <path>] <spec.json>
-  node tools/pull-comments.mjs notion <Workspace> "<brand>" [--status "<name>"]... [--board <id>] [--out <path>]`;
-const a = parseArgs(process.argv.slice(2), { repeat: ['status'] });
+    Comments (replies, resolved status, marked region) on the files in the spec's group folder,
+    resolved as in upload-to-drive, or in --folder. Writes <spec dir>/comments.json.
+  node tools/pull-comments.mjs notion <Workspace> "<brand>" [--status "<name>"]... [--board <id>] [--out <path>]
+    Threaded comments on the board's pages; --status repeats (any match), omit it for every page.
+    Board = --board, else the brand's inputs/uploads.json pin, else a title search. Needs the
+    integration's "Read comments" capability. Writes <Brand>/outputs/notion-comments.json.
+
+Each harvest lists per file/page its leading ad ID and comments; a summary prints too.`;
+const a = parseArgs(process.argv.slice(2), { repeat: ['status'], help: HELP });
 const [source, ...rest] = a._;
 const str = (v) => (typeof v === 'string' ? v : null);
 const oneLine = (s) => s.replace(/\n/g, ' ');
@@ -48,7 +45,7 @@ function regionFromAnchor(anchor) {
 
 async function pullDrive() {
   const specPath = rest[0];
-  if (!specPath) { console.error(USAGE); process.exit(1); }
+  if (!specPath) usage(HELP);
   const { spec, workspace, token, parent, brand, exact } = await driveForSpec(specPath);
 
   let folderId = str(a.folder);
@@ -69,7 +66,7 @@ async function pullDrive() {
     do {
       const u = `https://www.googleapis.com/drive/v3/files/${fileId}/comments?fields=${encodeURIComponent(fields)}&pageSize=100&includeDeleted=false${pageToken ? `&pageToken=${pageToken}` : ''}`;
       let r;
-      try { r = await driveGet(u, token); } catch (e) { console.error(`  ! comments for ${fileId}: ${e.message}`); break; }
+      try { r = await driveApi(u, token); } catch (e) { console.error(`  ! comments for ${fileId}: ${e.message}`); break; }
       out.push(...(r.comments || []));
       pageToken = r.nextPageToken;
     } while (pageToken);
@@ -126,7 +123,7 @@ async function pullNotion() {
   const boardArg = str(a.board);
   const [workspace, ...words] = rest;
   const brand = words.join(' ');
-  if (!workspace || (!brand && !boardArg)) { console.error(USAGE); process.exit(1); }
+  if (!workspace || (!brand && !boardArg)) usage(HELP);
   const brandDir = findBrandDir(workspace, brand);
   const outPath = str(a.out) || (brandDir ? join(brandDir, 'outputs', 'notion-comments.json')
     : die(`No brand folder under workspaces/${workspace} matches "${brand}". Pass --out <path>.`));
@@ -153,30 +150,16 @@ async function pullNotion() {
     filter = { or: statuses.map((name) => ({ property: statusProp, [t]: { equals: name } })) };
   }
 
-  const pages = [];
-  let cursor;
-  do {
-    const q = await api(`/databases/${board.id}/query`, 'POST', { page_size: 100, ...(filter ? { filter } : {}), ...(cursor ? { start_cursor: cursor } : {}) });
-    if (q.object === 'error') die(`Query failed: ${q.code} — ${q.message}`);
-    pages.push(...(q.results || []));
-    cursor = q.has_more ? q.next_cursor : undefined;
-  } while (cursor);
+  const pages = await allPages(api, `/databases/${board.id}/query`, filter ? { filter } : {}).catch((e) => die(`Query failed: ${e.message}`));
 
   let capabilityError = false;
   async function listComments(pageId) {
-    const out = [];
-    let cur;
-    do {
-      const c = await api(`/comments?block_id=${pageId}&page_size=100${cur ? `&start_cursor=${cur}` : ''}`);
-      if (c.object === 'error') {
-        if (c.code === 'restricted_resource') capabilityError = true;
-        else console.error(`  ! comments for ${pageId}: ${c.message}`);
-        break;
-      }
-      out.push(...(c.results || []));
-      cur = c.has_more ? c.next_cursor : undefined;
-    } while (cur);
-    return out;
+    try { return await allPages(api, `/comments?block_id=${pageId}`); }
+    catch (e) {
+      if (e.code === 'restricted_resource') capabilityError = true;
+      else console.error(`  ! comments for ${pageId}: ${e.message}`);
+      return [];
+    }
   }
 
   // needs "read user information"; falls back to a short id
@@ -237,4 +220,4 @@ async function pullNotion() {
 
 if (source === 'drive') await pullDrive();
 else if (source === 'notion') await pullNotion();
-else { console.error(USAGE); process.exit(1); }
+else usage(HELP);

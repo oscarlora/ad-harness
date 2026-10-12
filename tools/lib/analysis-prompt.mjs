@@ -23,7 +23,6 @@ const IMAGE_SECTIONS = [
   '  5. "Composition & light" — framing, camera angle, distance/crop, lens feel, depth of field, light quality and direction, and the medium (phone photo, studio photo, 3D render, illustration, designed ad/graphic).',
   '  6. "Palette & mood" — dominant colors (hex when confident), temperature, overall feel.',
   '  7. "Visible text" — every piece of text VERBATIM (or "None"), its typography, color and placement; logos/watermarks.',
-  '  8. "Message" — LAST; what it communicates, to whom, the appeal. The only interpretive layer.',
 ].join('\n');
 
 const VIDEO_SECTIONS = (scenes) => [
@@ -31,8 +30,6 @@ const VIDEO_SECTIONS = (scenes) => [
     ? `scenes — describe EXACTLY these ${scenes.length} scenes (detected cuts), one entry per index with its start/end copied as given, same rigor for every scene:\n${scenes.map((s, i) => `  ${i}: ${s.start}s–${s.end}s`).join('\n')}`
     : 'scenes — split the clip into its scenes yourself (start/end in decimal seconds, scene 1 starts at 0, never beyond the clip\'s end), same rigor for every scene.',
   `  Each scene's description has two parts in full sentences. (a) APPEARANCE — subjects (${PERSON_RULE}), food/product (${PRODUCT_RULE}), props, framing, angle, light, medium, on-screen text VERBATIM. (b) MOTION — the scene as motion over its time range: start state, action, end state, camera movement, speed effects, text animating in/out. A long continuous shot gets the same detail across its whole range: what changes and roughly when.`,
-  'sections — one whole-video section after the scenes:',
-  '  "Message" — what it communicates, to whom, the appeal.',
 ].join('\n');
 
 function rosterBlock(roster) {
@@ -67,7 +64,6 @@ export function buildPrompt(type, { brand, scenes = [], roster = { products: [],
     '- people: exact names of known people present ([] if none).',
     '- unknown_people: anyone not matched, each { ref: "p1", description: a vivid identifying placeholder like "slim woman ~30s, long dark curly hair" }. Never assume two files show the same unknown person.',
     '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms (English and Spanish), shot type, setting, mood, actions, ingredients, uses in an ad.',
-    '- text_in_media: all visible text transcribed verbatim, lines joined with " / " ("" if none).',
     rosterBlock(roster),
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
 }
@@ -129,13 +125,12 @@ export function buildSchema(type) {
   const props = {
     unreadable: BOOL,
     descriptor: STR,
-    sections: arr(obj({ label: STR, text: STR })),
     products: arr(STR), people: arr(STR),
     unknown_people: arr(obj({ ref: STR, description: STR })),
     tags: arr(STR),
-    text_in_media: STR,
   };
   if (type === 'video') props.scenes = arr(obj({ index: { type: 'integer' }, start: NUM, end: NUM, description: STR }));
+  else props.sections = arr(obj({ label: STR, text: STR }));
   return obj(props);
 }
 export function buildAudioSchema({ standalone = false, part = false } = {}) {

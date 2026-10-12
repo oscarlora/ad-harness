@@ -1,21 +1,22 @@
 // extend-to-story.mjs — turn an approved 4:5 static into its 9:16 Story version: the image model
 // fills bars above and below (via generate-image.mjs, 2K).
-//
-// Usage:
-//   node tools/extend-to-story.mjs --in <approved 4:5.png> --out <story.png> \
-//     --above "<what continues above>" --below "<what continues below>" [--timeout 600] [--paste] [--dry]
-//   --paste  put the original back over the middle (60 px feathered seam), so only the bars are new;
-//            without it the model re-renders the middle and small text can drift
-//   --dry    print the prompt and write the padded canvas, no generation
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ffprobeJson, parseArgs, run } from './lib/catalog.mjs';
+import { ffprobeJson, parseArgs, run, usage } from './lib/catalog.mjs';
 
-const args = parseArgs(process.argv.slice(2));
-for (const k of ['in', 'out', 'above', 'below']) if (!args[k] || args[k] === true) { console.error(`Missing --${k}. See the header of this file for usage.`); process.exit(1); }
+const HELP = `extend-to-story.mjs — an approved 4:5 static → its 9:16 Story version
+
+  node tools/extend-to-story.mjs --in <approved 4:5.png> --out <story.png> \\
+    --above "<what continues above>" --below "<what continues below>" [--timeout 600] [--paste] [--dry]
+    --paste  put the original back over the middle (60 px feathered seam), so only the bars are new;
+             without it the model re-renders the middle and small text can drift
+    --dry    print the prompt and write the padded canvas, no generation`;
+
+const args = parseArgs(process.argv.slice(2), { flags: ['paste', 'dry'], help: HELP });
+if (['in', 'out', 'above', 'below'].some((k) => !args[k] || args[k] === true)) usage(HELP);
 
 const tmp = mkdtempSync(join(tmpdir(), 'story-'));
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }));

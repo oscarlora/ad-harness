@@ -3,25 +3,20 @@
 // speech), fill its record, and rename the original to <id>_<descriptor>.<ext>.
 // Image: one picture call. Video: a picture call on a silent proxy and a sound call on its track, in
 // parallel. Audio: one sound call. Reads inputs/products.json and _catalog/people.json.
-//
-// Usage:
-//   node tools/analyze-media.mjs --media <media dir> [--ids 00001,00002 | --all] [--force] [--concurrency 4]
-//   --all = every record not analyzed yet; --force redoes analyzed ones too
-import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, renameSync, rmSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { catalogPaths, readRecords, readProducts, parseArgs, mediaDirFrom, inferBrand, slugify, ffprobeJson } from './lib/catalog.mjs';
+import { catalogPaths, readRecords, readRecord, mergeRecord, readRoster, parseArgs, mediaDirFrom, inferBrand, slugify, ffprobeJson, round, usage } from './lib/catalog.mjs';
 import { videoPass, videoMeta, workDir, heavy } from './lib/media-probe.mjs';
-import { readRecord, mergeRecord } from './record-media.mjs';
 import { requireKey, filePart, generateJSON, spend, ANALYSIS_MODEL } from './lib/gateway.mjs';
 import { buildPrompt, buildSchema } from './lib/analysis-prompt.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary } from './lib/transcribe.mjs';
 
-function loadRoster(media) {
-  let people = [];
-  try { people = JSON.parse(readFileSync(catalogPaths(media).people, 'utf8')); } catch { /* no roster yet */ }
-  return { products: readProducts(media), people: Array.isArray(people) ? people : [] };
-}
+const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MODEL} and fill their records
+
+  node tools/analyze-media.mjs --media <media dir> [--ids 00001,00002 | --all] [--force] [--concurrency 4]
+    --all    every record not analyzed yet
+    --force  redo analyzed ones too`;
 
 // The proxy the probe left in the work dir, else a fresh proxy-only pass.
 async function pictureProxy(src, work) {
@@ -33,11 +28,10 @@ async function pictureProxy(src, work) {
 }
 
 const joinSections = (sections) => sections.map((s) => `${s.label}: ${s.text}`).join('\n\n');
-const t = (n) => Math.round(n * 10) / 10;
 
 // The probe's cuts take the model's descriptions by index; without cuts, the model's own scenes.
 function cleanScenes(scenes, duration) {
-  const cl = (x) => t(Math.min(duration || Infinity, Math.max(0, +x || 0)));
+  const cl = (x) => round(Math.min(duration || Infinity, Math.max(0, +x || 0)), 1);
   return (scenes || []).map((s) => ({ ...s, start: cl(s.start), end: cl(s.end) })).filter((s) => s.end > s.start);
 }
 function mergeScenes(detected, got, duration) {
@@ -83,13 +77,11 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
     if (pic?.unreadable) throw new Error('Gemini could not decode the file');
 
     if (pic) {
-      const sections = pic.sections || [];
       Object.assign(patch, {
         products: pic.products || [], people: pic.people || [], unknown_people: pic.unknown_people || [],
-        text_in_media: pic.text_in_media || '',
         visual_description: type === 'video'
-          ? [joinSections(sections), ...patch.scenes.map((s) => `[${s.start}–${s.end}s] ${s.description}`)].join('\n\n')
-          : joinSections(sections),
+          ? patch.scenes.map((s) => `[${s.start}–${s.end}s] ${s.description}`).join('\n\n')
+          : joinSections(pic.sections || []),
       });
     }
     if (type !== 'image') {
@@ -114,9 +106,9 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
 
 const isAnalyzed = (r) => r.status === 'cataloged' && (r.visual_description || r.audio_description);
 
-export async function analyzeMany({ media, ids, all, force, concurrency = 4, log = console.log }) {
+export async function analyzeMany({ media, ids, all, force, concurrency = 4 }) {
   const key = requireKey(media);
-  const roster = loadRoster(media);
+  const roster = readRoster(media);
   const vocab = vocabulary(media);
   const brand = inferBrand(media);
   const recs = readRecords(catalogPaths(media));
@@ -126,8 +118,8 @@ export async function analyzeMany({ media, ids, all, force, concurrency = 4, log
   const worker = async () => {
     while (i < queue.length) {
       const id = queue[i++];
-      try { const r = await analyzeOne({ media, id, key, roster, brand, vocab }); done.push(r); log(`analyzed ${id} → ${r.name}`); }
-      catch (e) { failed.push({ id, error: e.message }); log(`FAILED ${id}: ${e.message}`); }
+      try { const r = await analyzeOne({ media, id, key, roster, brand, vocab }); done.push(r); console.log(`analyzed ${id} → ${r.name}`); }
+      catch (e) { failed.push({ id, error: e.message }); console.log(`FAILED ${id}: ${e.message}`); }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
@@ -135,8 +127,8 @@ export async function analyzeMany({ media, ids, all, force, concurrency = 4, log
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const a = parseArgs(process.argv.slice(2));
-  if (!a.media || (!a.ids && !a.all)) { console.error('Usage: node tools/analyze-media.mjs --media <media dir> [--ids 00001,00002 | --all] [--force] [--concurrency 4]'); process.exit(1); }
+  const a = parseArgs(process.argv.slice(2), { flags: ['all', 'force'], help: HELP });
+  if (!a.media || (!a.ids && !a.all)) usage(HELP);
   const res = await analyzeMany({ media: mediaDirFrom(a.media), ids: a.ids ? String(a.ids).split(',') : null, all: !!a.all, force: !!a.force, concurrency: a.concurrency ? +a.concurrency : 4 });
   console.log(`${res.done.length}/${res.queued} analyzed${res.failed.length ? `, ${res.failed.length} failed` : ''} · $${res.usd.toFixed(4)}`);
   if (res.failed.length) process.exit(1);

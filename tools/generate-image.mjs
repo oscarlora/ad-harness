@@ -1,31 +1,26 @@
 #!/usr/bin/env node
 // generate-image.mjs — generate image ads via Segmind, kie.ai or the Vercel AI Gateway.
-//
-// Usage:
-//   node tools/generate-image.mjs --record workspaces/<WS>/Acme/outputs/json/3.json
-//   node tools/generate-image.mjs --prompt "<text>" --ref "<img>" --out "<path>.png"
-//
 // Which provider carries which model: tools/lib/providers.mjs (MODELS) — change it there.
 // Saved files are stripped of metadata (C2PA, EXIF, XMP) and get a <stem>.gen.json sidecar.
 // The AI SDK loads only when the Gateway runs.
 
 import { readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { cleanImage } from './lib/clean-image.mjs';
-import { applyEnv, die, findBin, parseArgs } from './lib/catalog.mjs';
+import { applyEnv, die, imageFitCmd, parseArgs, runAsync, usage } from './lib/catalog.mjs';
 import {
   MODELS, PROVIDER_ORDER, errorText, gatewayClient, kieJob, kieUpload, logGatewayWarnings, modelEntry, planRoute, presignRef,
-  preSubmit, runRoute, saveResults, segmindJob, userError, workspaceKeys, writeSidecars,
+  preSubmit, runRoute, saveResults, segmindJob, times, userError, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
 
 applyEnv();
-const exec = promisify(execFile);
 
 const HELP = `generate-image.mjs — image ad generator. Providers in order: ${PROVIDER_ORDER.join(' -> ')}
+
+  node tools/generate-image.mjs --record workspaces/<WS>/Acme/outputs/json/3.json
+  node tools/generate-image.mjs --prompt "<text>" --ref "<img>" --out "<path>.png"
 
 Required (or --record):
   --prompt "<text>"        Inline prompt, OR
@@ -66,34 +61,54 @@ workspace comes from the --out/--record path.`;
 // kie.ai request shapes; a model missing here fails rather than rendering as another model.
 // variants = separate -text-to-image / -image-to-image endpoints.
 const KIE_SHAPE = {
-  'gpt-image-2.5':      { variants: true, imageField: 'input_urls', resolution: true, aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] },
+  'gpt-image-2.5':      { variants: true, imageField: 'input_urls', resolution: true },
   'gpt-image-2':        { variants: true, imageField: 'input_urls', resolution: true },
   'nano-banana-pro':    { imageField: 'image_input', resolution: true, format: true },
   'nano-banana-2-lite': { imageField: 'image_urls' },
 };
-const kieBlocker = (model, aspect) => {
-  const a = KIE_SHAPE[model]?.aspects;
-  return a && !a.includes(aspect) ? `${model} takes ${a.join(', ')} there, not ${aspect}` : null;
-};
 
-// Long edge from the tier, short edge from the aspect, both multiples of 16 (the models require it).
-function sizeForTier(aspect, tier) {
-  const [a, b] = aspect.split(':').map(Number);
-  const long = { '1K': 1280, '2K': 2048, '4K': 3840 }[tier] || 2048;
-  const r16 = (n) => Math.max(16, Math.round(n / 16) * 16);
-  return b >= a ? `${r16(long * a / b)}x${long}` : `${long}x${r16(long * b / a)}`;
-}
-
-// Segmind GPT Image 2's exact size presets per tier and aspect.
-const SEGMIND_GPT_IMAGE_2_SIZES = {
+// Segmind's exact size presets: GPT Image 2 per tier and aspect; Qwen Image 3 ("*", not "x") and
+// Ideogram V4 Fast (no aspect field: the size sets it) per aspect. Add sizes from Segmind's docs, never guessed.
+const GPT_IMAGE_2_SIZES = {
   '1K': { '1:1':'1024x1024', '4:5':'832x1040', '5:4':'1040x832', '3:4':'768x1024', '4:3':'1024x768', '9:16':'720x1280', '16:9':'1280x720' },
   '2K': { '1:1':'1536x1536', '4:5':'1600x2000', '5:4':'2000x1600', '3:4':'1536x2048', '4:3':'2048x1536', '9:16':'1152x2048', '16:9':'2048x1152' },
   '4K': { '1:1':'2880x2880', '4:5':'2560x3200', '5:4':'3200x2560', '3:4':'2480x3312', '4:3':'3312x2480', '9:16':'2160x3840', '16:9':'3840x2160' },
 };
-function segmindImageSize(aspect, tier) {
-  const size = SEGMIND_GPT_IMAGE_2_SIZES[tier]?.[aspect];
-  if (!size) die(`Segmind GPT Image 2 does not support --resolution ${tier} with --aspect ${aspect}`);
-  return size;
+const QWEN_SIZES = {
+  '1:1': { '1K': '1024*1024', '2K': '2048*2048', '4K': '2048*2048' },
+  '3:4': { '1K': '768*1024', '2K': '1080*1440', '4K': '1080*1440' },
+  '4:3': { '1K': '1024*768', '2K': '1440*1080', '4K': '1440*1080' },
+};
+const IDEOGRAM_SIZES = { '1:1': '2048x2048', '4:5': '1792x2240', '5:4': '2240x1792', '9:16': '1440x2560', '16:9': '2560x1440' };
+
+// Per model: the most reference images sent (0 = none taken; needsRef = at least one), and the aspects
+// and tiers it renders — on every provider, or only on `segmind` / `kie`. gpt-image-2 and flux-2-pro
+// ref caps come from OpenAI's and FLUX.2's docs (not on Segmind's pages).
+const IMAGE_MODELS = {
+  'gpt-image-2.5':        { refs: 16, kie: { aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'] } },
+  'gpt-image-2':          { refs: 16, segmind: { aspects: Object.keys(GPT_IMAGE_2_SIZES['1K']) } },
+  'nano-banana-pro':      { refs: 14 },
+  'nano-banana-2':        { refs: 14 },
+  'nano-banana-2-lite':   { refs: 14, tiers: ['1K'] },
+  'seedream-5-pro':       { refs: 10, aspects: ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'], tiers: ['1K', '2K'] },
+  'flux-2-pro':           { refs: 8, needsRef: true },
+  'qwen-image-3':         { refs: 3, aspects: Object.keys(QWEN_SIZES) },
+  'reve-2':               { refs: 8 },
+  'grok-imagine-image-2': { refs: 3, segmind: { tiers: ['1K', '2K'] } },
+  'ideogram-v4-fast':     { refs: 0, aspects: Object.keys(IDEOGRAM_SIZES) },
+};
+const TIERS = ['1K', '2K', '4K'];
+// Why these limits rule out the aspect or tier, or null.
+const offLimits = (model, { aspects, tiers } = {}, aspect, tier) =>
+  aspects && !aspects.includes(aspect) ? `${model} takes --aspect ${aspects.join(', ')}, not ${aspect}`
+  : tiers && !tiers.includes(tier) ? `${model} renders at ${tiers.join('/')} only, not ${tier}` : null;
+
+// Long edge from the tier, short edge from the aspect, both multiples of 16 (the models require it).
+function sizeForTier(aspect, tier) {
+  const [a, b] = aspect.split(':').map(Number);
+  const long = { '1K': 1280, '2K': 2048, '4K': 3840 }[tier];
+  const r16 = (n) => Math.max(16, Math.round(n / 16) * 16);
+  return b >= a ? `${r16(long * a / b)}x${long}` : `${long}x${r16(long * b / a)}`;
 }
 
 // Segmind GPT Image 2.5 Flare: edges /16, at most 8,294,400 pixels.
@@ -104,73 +119,20 @@ function flareSize(aspect, tier) {
   return { width: w, height: h };
 }
 
-// Reference images per model: none | optional | required, and the max sent.
-// gpt-image-2 (OpenAI edits) and flux-2-pro (FLUX.2 docs) caps aren't on Segmind's pages.
-const REF_MODE = {
-  'gpt-image-2.5':        { mode: 'optional', max: 16 },
-  'gpt-image-2':          { mode: 'optional', max: 16 },
-  'nano-banana-pro':      { mode: 'optional', max: 14 },
-  'nano-banana-2':        { mode: 'optional', max: 14 },
-  'nano-banana-2-lite':   { mode: 'optional', max: 14 },
-  'seedream-5-pro':       { mode: 'optional', max: 10 },
-  'flux-2-pro':           { mode: 'required', max: 8 },
-  'qwen-image-3':         { mode: 'optional', max: 3 },
-  'reve-2':               { mode: 'optional', max: 8 },
-  'grok-imagine-image-2': { mode: 'optional', max: 3 },
-  'ideogram-v4-fast':     { mode: 'none' },
-};
-
 // Runs before any upload or spend. Drops are named loudly: the prompt numbers its references.
 function checkRefs(model, refs) {
-  const r = REF_MODE[model];
-  if (r.mode === 'none' && refs.length)
+  const { refs: max, needsRef } = IMAGE_MODELS[model];
+  if (!max && refs.length)
     die(`${model} is text-to-image only (no reference-image input) — remove the reference(s) or pick another model.`);
-  if (r.mode === 'required' && !refs.length)
+  if (needsRef && !refs.length)
     die(`${model} needs at least one reference image (it has no text-to-image mode) — attach a reference or pick another model.`);
-  if (r.max && refs.length > r.max) {
+  if (refs.length > max) {
     const label = (p) => basename(String(p).split('?')[0]);
-    console.error(`WARN: ${model} accepts at most ${r.max} reference images, sending the first ${r.max} of ${refs.length}.`);
-    console.error(`WARN: dropped ${refs.slice(r.max).map(label).join(', ')}. The prompt's "Reference image N" lines past ${r.max} now describe images the model never sees.`);
-    return refs.slice(0, r.max);
+    console.error(`WARN: ${model} accepts at most ${max} reference images, sending the first ${max} of ${refs.length}.`);
+    console.error(`WARN: dropped ${refs.slice(max).map(label).join(', ')}. The prompt's "Reference image N" lines past ${max} now describe images the model never sees.`);
+    return refs.slice(0, max);
   }
   return refs;
-}
-
-const SEEDREAM_ASPECTS = ['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'];
-function seedreamSize(aspect, resolution) {
-  if (!SEEDREAM_ASPECTS.includes(aspect)) die(`Seedream 5 Pro supports aspect ratios ${SEEDREAM_ASPECTS.join(', ')} (got ${aspect}).`);
-  if (resolution === '4K') die('Seedream 5 Pro renders at 1K/2K only (no 4K master) — pick 2K or another model.');
-  return resolution === '2K' ? '2K' : '1K';
-}
-
-function nanoBanana2LiteCheck(resolution) {
-  if (resolution !== '1K') die('Nano Banana 2 Lite renders at 1K only (no 2K/4K master) — pick another model for masters.');
-}
-
-// Qwen Image 3 sizes use "*", not "x".
-const QWEN_SIZES = {
-  '1:1': { '1K': '1024*1024', '2K': '2048*2048', '4K': '2048*2048' },
-  '3:4': { '1K': '768*1024', '2K': '1080*1440', '4K': '1080*1440' },
-  '4:3': { '1K': '1024*768', '2K': '1440*1080', '4K': '1440*1080' },
-};
-function qwenSize(aspect, resolution) {
-  const row = QWEN_SIZES[aspect];
-  if (!row) die(`Qwen Image 3 supports aspect ratios ${Object.keys(QWEN_SIZES).join(', ')} (got ${aspect}).`);
-  return row[resolution] || row['1K'];
-}
-
-function grokResolution(resolution) {
-  if (resolution === '4K') die('Grok Imagine Image 2 renders at 1K/2K only (no 4K master) — pick 2K or another model.');
-  return resolution === '2K' ? '2k' : '1k';
-}
-
-// Ideogram V4 Fast has no aspect field; its resolution enum sets it. Add aspects from Segmind's
-// docs, never guessed.
-const IDEOGRAM_RESOLUTIONS = { '1:1': '2048x2048', '4:5': '1792x2240', '5:4': '2240x1792', '9:16': '1440x2560', '16:9': '2560x1440' };
-function ideogramResolution(aspect) {
-  const r = IDEOGRAM_RESOLUTIONS[aspect];
-  if (!r) die(`Ideogram V4 Fast supports aspect ratios ${Object.keys(IDEOGRAM_RESOLUTIONS).join(', ')} (got ${aspect}).`);
-  return r;
 }
 
 // Segmind request body, in each model's own parameter names. refUrls is already checked.
@@ -186,13 +148,12 @@ function segmindImageInput(model, { prompt, aspect, resolution, format, quality,
     return input;
   }
   if (model === 'nano-banana-2-lite') {
-    nanoBanana2LiteCheck(resolution);
     const input = { prompt, aspect_ratio: aspect, output_resolution: '1K', output_format: format === 'jpg' ? 'jpg' : 'png' };
     if (refUrls.length) input.image_urls = refUrls;
     return input;
   }
   if (model === 'seedream-5-pro') {
-    const input = { prompt, aspect_ratio: aspect, size: seedreamSize(aspect, resolution), output_format: format === 'jpg' ? 'jpeg' : 'png' };
+    const input = { prompt, aspect_ratio: aspect, size: resolution, output_format: format === 'jpg' ? 'jpeg' : 'png' };
     if (refUrls.length) input.image_input = refUrls;
     return input;
   }
@@ -202,7 +163,7 @@ function segmindImageInput(model, { prompt, aspect, resolution, format, quality,
   }
   if (model === 'qwen-image-3') {
     // prompt_extend rewrites the prompt and would mangle the on-image copy.
-    const input = { prompt, size: qwenSize(aspect, resolution), prompt_extend: false };
+    const input = { prompt, size: QWEN_SIZES[aspect][resolution], prompt_extend: false };
     if (negative) input.negative_prompt = negative;
     if (refUrls[0]) input.image = refUrls[0];
     if (refUrls[1]) input.image2 = refUrls[1];
@@ -216,89 +177,81 @@ function segmindImageInput(model, { prompt, aspect, resolution, format, quality,
     return input;
   }
   if (model === 'grok-imagine-image-2') {
-    const input = { prompt, aspect_ratio: aspect, resolution: grokResolution(resolution), output_format: format === 'jpg' ? 'jpeg' : 'png' };
+    const input = { prompt, aspect_ratio: aspect, resolution: resolution.toLowerCase(), output_format: format === 'jpg' ? 'jpeg' : 'png' };
     if (refUrls.length) input.image_urls = refUrls;
     return input;
   }
   if (model === 'ideogram-v4-fast') {
     // rendering_speed is a price tier: DEFAULT unless --quality high/low.
-    const input = { prompt, resolution: ideogramResolution(aspect) };
+    const input = { prompt, resolution: IDEOGRAM_SIZES[aspect] };
     if (quality === 'high') input.rendering_speed = 'QUALITY';
     else if (quality === 'low') input.rendering_speed = 'TURBO';
     return input;
   }
   // gpt-image-2 / gpt-image-2.5: always png.
-  const size = model === 'gpt-image-2.5' ? flareSize(aspect, resolution) : { size: segmindImageSize(aspect, resolution) };
+  const size = model === 'gpt-image-2.5' ? flareSize(aspect, resolution) : { size: GPT_IMAGE_2_SIZES[resolution][aspect] };
   const input = { prompt, ...size, quality: quality || 'medium', output_format: 'png', output_compression: 100 };
   if (refUrls.length) input.image_urls = refUrls;
   return input;
 }
 
-async function viaSegmind({ model, prompt, refsIn, aspect, resolution, format, quality, negative, num, out, timeout }) {
+async function viaSegmind({ model, prompt, refs, aspect, resolution, format, quality, negative, num, out, timeout }) {
   const slug = MODELS[model]?.segmind;
   if (!slug) throw userError(`${model} has no Segmind equivalent — use --provider gateway for this model.`);
-  const capped = checkRefs(model, refsIn);
   const refUrls = [];
   // Sequential: the prompt refers to each reference by its position.
-  for (const r of capped) refUrls.push(await presignRef(r, out));
+  for (const r of refs) refUrls.push(await presignRef(r, out));
   const input = segmindImageInput(model, { prompt, aspect, resolution, format, quality, negative, refUrls });
-  const results = await Promise.all(Array.from({ length: num }, () => segmindJob(slug, input, timeout)));
-  return { results, provider: 'segmind' };
+  return times(num, () => segmindJob(slug, input, timeout));
 }
 
-async function viaKie({ model, prompt, refsIn, aspect, resolution, format, num, timeout }) {
+async function viaKie({ model, prompt, refs, aspect, resolution, format, num, timeout }) {
   const m = KIE_SHAPE[model];
   if (!m || !MODELS[model]?.kie) throw userError(`${model} has no kie.ai equivalent — use --provider segmind for this model.`);
   const refUrls = [];
-  for (const r of checkRefs(model, refsIn)) refUrls.push(await kieUpload(r)); // sequential: order preserved
+  for (const r of refs) refUrls.push(await kieUpload(r)); // sequential: order preserved
   const input = { prompt, aspect_ratio: aspect };
   if (m.resolution) input.resolution = resolution;
   if (m.format) input.output_format = format;
   if (refUrls.length) input[m.imageField] = refUrls;
   const id = m.variants ? `${MODELS[model].kie}-${refUrls.length ? 'image-to-image' : 'text-to-image'}` : MODELS[model].kie;
-  const groups = await Promise.all(Array.from({ length: num }, () => kieJob(id, input, timeout, 2000)));
-  return { results: groups.flat(), provider: 'kie' };
+  return times(num, () => kieJob(id, input, timeout, 2000));
 }
 
-// Local refs are downscaled to <=2048 and sent inline; URLs pass through.
+// Local refs are downscaled to <=2048 and sent inline (the original when that fails); URLs pass through.
 async function inlineRefs(refs) {
-  const images = [];
-  for (const r of refs) {
-    if (/^https?:\/\//i.test(r)) { images.push(r); continue; }
-    const abs = resolve(r);
-    if (!existsSync(abs)) die(`reference not found: ${r}`);
-    const tmp = join(tmpdir(), `gwref_${images.length}_${basename(abs)}.png`);
-    try {
-      if (findBin('sips')) await exec('sips', ['-s', 'format', 'png', '-Z', '2048', abs, '--out', tmp]);
-      else if (findBin('ffmpeg')) await exec(findBin('ffmpeg'), ['-y', '-i', abs, '-vf', "scale=w='min(iw,2048)':h='min(ih,2048)':force_original_aspect_ratio=decrease", tmp]);
-      else throw new Error('no resize tool');
-      images.push(await readFile(tmp));
+  const tmp = mkdtempSync(join(tmpdir(), 'gwref-'));
+  try {
+    const images = [];
+    for (const [i, r] of refs.entries()) {
+      if (/^https?:\/\//i.test(r)) { images.push(r); continue; }
+      const abs = resolve(r), small = join(tmp, `${i}.png`);
+      if (!existsSync(abs)) throw userError(`reference not found: ${r}`);
+      const [bin, args] = imageFitCmd(abs, 2048, small);
+      const ok = (await runAsync(bin, args, { allowFail: true })).status === 0 && existsSync(small);
+      images.push(await readFile(ok ? small : abs));
     }
-    catch { images.push(await readFile(abs)); }
-  }
-  return images;
+    return images;
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
 
 // Gemini "Nano Banana" models are language models on the Gateway: generateText with image output.
 // maxRetries 0: a retry after an ambiguous failure would be a second paid generation.
-async function viaGateway({ model, prompt, refsIn, aspect, resolution, quality, num, timeout }) {
+async function viaGateway({ model, prompt, refs, aspect, resolution, quality, num, timeout }) {
   const { gateway: id, kind } = modelEntry(model, 'image');
   const gateway = { id, kind };
-  const capped = REF_MODE[model] ? checkRefs(model, refsIn) : refsIn;
-  if (model === 'seedream-5-pro') seedreamSize(aspect, resolution);
-  if (model === 'nano-banana-2-lite') nanoBanana2LiteCheck(resolution);
   const { ai, gw } = await gatewayClient(process.env.AI_GATEWAY_API_KEY, timeout);
-  const images = await inlineRefs(capped).catch((e) => { throw preSubmit(e); });
+  const images = await inlineRefs(refs).catch((e) => { throw preSubmit(e); });
   const blobs = []; // { bytes, mediaType }
   if (gateway.kind === 'text-image') {
     console.error(`gateway   ${gateway.id} ${images.length ? 'edit' : 'generate'}  aspect=${aspect}  size=${resolution}  refs=${images.length}`);
     const content = [...images.map((image) => ({ type: 'image', image })), { type: 'text', text: prompt }];
-    const runs = await Promise.all(Array.from({ length: num }, () => ai.generateText({
+    const runs = await times(num, () => ai.generateText({
       model: gw(gateway.id),
       messages: [{ role: 'user', content }],
       providerOptions: { google: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: aspect, imageSize: resolution } } },
       maxRetries: 0,
-    })));
+    }));
     for (const r of runs) {
       logGatewayWarnings(r.warnings);
       const files = r.files.filter((f) => f.mediaType?.startsWith('image/'));
@@ -320,13 +273,13 @@ async function viaGateway({ model, prompt, refsIn, aspect, resolution, quality, 
     logGatewayWarnings(res.warnings);
     for (const im of res.images) blobs.push({ bytes: Buffer.from(im.base64, 'base64'), mediaType: im.mediaType });
   }
-  return { results: blobs, provider: 'gateway' };
+  return blobs;
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2), { repeat: ['ref'] });
+  const args = parseArgs(process.argv.slice(2), { repeat: ['ref'], help: HELP });
   args.ref ||= [];
-  if (args.help || (!args.prompt && !args['prompt-file'] && !args.record)) { console.log(HELP); process.exit(args.help ? 0 : 1); }
+  if (!args.prompt && !args['prompt-file'] && !args.record) usage(HELP);
 
   let record = null, recordPath = null;
   if (args.record) { recordPath = resolve(args.record); record = JSON.parse(await readFile(recordPath, 'utf8')); }
@@ -346,10 +299,11 @@ async function main() {
   const provider = String(args.provider || 'auto').toLowerCase();
   const modelArg = String(args.model || g.model || 'gpt-image-2.5');
   const entry = modelEntry(modelArg, 'image');
-  const model = entry && (REF_MODE[entry.name] || !MODELS[entry.name]) ? entry.name : 'gpt-image-2.5';
+  const model = entry && (IMAGE_MODELS[entry.name] || !MODELS[entry.name]) ? entry.name : 'gpt-image-2.5';
   if (model !== entry?.name) console.error(`WARN: unknown --model "${modelArg}" — using gpt-image-2.5.`);
   const aspect = String(args.aspect || g.aspect || '4:5').replace('x', ':');
   const resolution = String(args.resolution || g.resolution || '1K').toUpperCase();
+  if (!TIERS.includes(resolution)) die(`--resolution must be ${TIERS.join(' | ')} (got "${resolution}")`);
   const format = String(args.format || g.format || 'png').toLowerCase();
   const quality = String(args.quality || g.quality || (['gpt-image-2.5', 'gpt-image-2'].includes(model) ? 'medium' : '')).toLowerCase() || null;
   if (quality && !['low', 'medium', 'high', 'auto'].includes(quality)) die(`--quality must be low|medium|high|auto (got "${quality}")`);
@@ -362,15 +316,20 @@ async function main() {
   const num = Math.max(1, parseInt(args.num || '1', 10));
   const timeout = parseInt(args.timeout || '300', 10);
   const refsIn = args.ref.length ? args.ref : (Array.isArray(g.refs) ? g.refs : []);
+  const limits = IMAGE_MODELS[model] || {}; // a raw Gateway id has none
+  const refs = IMAGE_MODELS[model] ? checkRefs(model, refsIn) : refsIn;
+  const why = offLimits(model, limits, aspect, resolution);
+  if (why) die(`${why} — pick another model.`);
 
-  const opts = { model, prompt, refsIn, aspect, resolution, format, quality, negative, num, out, timeout };
-  const plan = planRoute({ model, provider, keys, ws: W, kind: 'image', blockers: { kie: kieBlocker(model, aspect) } });
+  const opts = { model, prompt, refs, aspect, resolution, format, quality, negative, num, out, timeout };
+  const blockers = { kie: offLimits(model, limits.kie, aspect, resolution), segmind: offLimits(model, limits.segmind, aspect, resolution) };
+  const plan = planRoute({ model, provider, keys, ws: W, kind: 'image', blockers });
   const ran = await runRoute(plan, { gateway: () => viaGateway(opts), segmind: () => viaSegmind(opts), kie: () => viaKie(opts) }, W);
   const saved = await saveResults(ran.results, out, { fallbackExt: 'png', transform: cleanImage });
   await writeSidecars(saved, {
     tool: 'generate-image', model, provider: ran.provider, prompt,
     params: { aspect, resolution, quality: ran.provider === 'kie' ? null : quality, negative: model === 'qwen-image-3' ? negative : null, format: format === 'png' ? null : format },
-    refs: refsIn.slice(0, REF_MODE[model]?.max).map((path) => ({ role: 'ref', path })), // as sent: capped like checkRefs
+    refs: refs.map((path) => ({ role: 'ref', path })),
   });
 
   if (record) {
@@ -379,8 +338,7 @@ async function main() {
       ...(negative ? { negative } : {}),
       prompt, refs: refsIn, output: saved[0], outputs: saved, generatedAt: new Date().toISOString(),
     };
-    delete record.generation.size; // stale field from older records
-    record.status = 'generated';
+    record.status = 'pending-review';
     await writeFile(recordPath, JSON.stringify(record, null, 2) + '\n');
     console.error('record    updated ' + recordPath);
   }

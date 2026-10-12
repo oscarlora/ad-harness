@@ -3,9 +3,11 @@
 // pinned to a moment and a spot on the frame. The agent edits the document; the preview follows the file.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiBase, fileUrl, openFile, postJson } from '../../lib/client/api.js';
-import { IcCheck, IcPause, IcPlay, IcX } from '../media/icons.js';
+import { isTyping } from '../../lib/client/hooks.js';
+import { clock } from '../BrandPage.js';
+import { IcCheck, IcPause, IcPlay, IcX } from '../icons.js';
 import { Dot } from '../workflow/parts.js';
-import Timeline, { clock } from './Timeline.js';
+import Timeline from './Timeline.js';
 
 // A doc path (relative to the ad folder, may climb with ../) as a brand-relative path.
 function brandPath(ad, src) {
@@ -27,7 +29,7 @@ export default function Editor({ ws, brand, ad, edit }) {
   const [error, setError] = useState('');
   const [t, setT] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [draft, setDraft] = useState(null); // a note being written: { t, box, text }
+  const [draft, setDraft] = useState(null); // a note being written: { t, from (drag start), box, text }
   const [focus, setFocus] = useState(null); // note id
   const live = useRef({ t: 0, busy: false, pending: null, stop: null, until: null, starting: false, actx: null, c0: 0, t0: 0, raf: 0 });
 
@@ -149,8 +151,8 @@ export default function Editor({ ws, brand, ad, edit }) {
   // Space plays, arrows step a frame (with Shift, a second).
   useEffect(() => {
     const onKey = (e) => {
-      if (/^(input|textarea|select|button)$/i.test(e.target?.tagName || '') || !doc) return;
-      if (e.key === ' ') { e.preventDefault(); live.current.stop ? pause() : play(); }
+      if (isTyping(e) || !doc) return;
+      if (e.key === ' ' && !e.target.closest?.('button')) { e.preventDefault(); live.current.stop ? pause() : play(); } // a focused button takes Space
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
         seek(live.current.t + (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 1 : 1 / doc.fps));
@@ -161,26 +163,25 @@ export default function Editor({ ws, brand, ad, edit }) {
   }, [doc, play, pause, seek]);
 
   // Drag on the frame to mark a spot (a click marks the moment), then write the note.
+  const at = (e) => {
+    const r = stageRef.current.getBoundingClientRect();
+    return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))];
+  };
   const onPointerDown = (e) => {
     if (!doc || e.button !== 0) return;
     pause();
-    const r = stageRef.current.getBoundingClientRect();
-    const at = (ev) => [Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))];
-    const [x0, y0] = at(e);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const [x, y] = at(e);
     setFocus(null);
-    setDraft({ t: live.current.t, box: [x0, y0, 0, 0], text: '' });
-    const move = (ev) => {
-      const [x1, y1] = at(ev);
-      setDraft((d) => d && { ...d, box: [Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)] });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      requestAnimationFrame(() => composeRef.current?.focus()); // the click itself takes focus off the new field
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+    setDraft({ t: live.current.t, from: [x, y], box: [x, y, 0, 0], text: '' });
   };
+  const onPointerMove = (e) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const [x1, y1] = at(e);
+    setDraft((d) => d && { ...d, box: [Math.min(d.from[0], x1), Math.min(d.from[1], y1), Math.abs(x1 - d.from[0]), Math.abs(y1 - d.from[1])] });
+  };
+  // The click itself takes focus off the new field.
+  const onPointerUp = () => requestAnimationFrame(() => composeRef.current?.focus());
 
   // Esc or a click anywhere else discards the note being written.
   const composeRef = useRef(null);
@@ -220,7 +221,7 @@ export default function Editor({ ws, brand, ad, edit }) {
   return (
     <div className="ed">
       <div className="ed__main">
-        <div className="ed__stage" ref={stageRef} style={{ aspectRatio: `${W} / ${H}` }} onPointerDown={onPointerDown} role="img" aria-label="Preview: click or drag to leave a note">
+        <div className="ed__stage" ref={stageRef} style={{ aspectRatio: `${W} / ${H}` }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} role="img" aria-label="Preview: click or drag to leave a note">
           <canvas ref={canvasRef} />
           {shown.map((n) => (
             <div key={n.id} className="ed__box" data-status={n.status} style={boxStyle(n.box)} />
@@ -230,7 +231,7 @@ export default function Editor({ ws, brand, ad, edit }) {
               {(draft.box[2] > 0.01 || draft.box[3] > 0.01) && <div className="ed__box ed__box--draft" style={boxStyle(draft.box)} />}
               <form className="ed__compose" style={composeStyle(draft.box)} onPointerDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); saveDraft(); }}>
                 <textarea
-                  ref={composeRef} autoFocus rows={2} value={draft.text} placeholder={`Note at ${clock(draft.t)}`}
+                  ref={composeRef} autoFocus rows={2} value={draft.text} placeholder={`Note at ${clock(draft.t, true)}`}
                   onChange={(e) => setDraft({ ...draft, text: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveDraft(); }
@@ -251,7 +252,7 @@ export default function Editor({ ws, brand, ad, edit }) {
               ))}
             </div>
           )}
-          <div className="toolbar__spacer" />
+          <div className="spacer" />
           <Export ws={ws} brand={brand} ad={ad} plan={plan} exp={exp} onError={setError} />
         </div>
         {error && <p className="ed__error">{error}</p>}
@@ -262,7 +263,7 @@ export default function Editor({ ws, brand, ad, edit }) {
           <button type="button" className="ed__play" onClick={() => (playing ? pause() : play())} aria-label={playing ? 'Pause' : 'Play'}>
             {playing ? <IcPause /> : <IcPlay />}
           </button>
-          <span className="ed__clock">{clock(t)}<span> / {clock(doc.duration)}</span></span>
+          <span className="ed__clock">{clock(t, true)}<span> / {clock(doc.duration, true)}</span></span>
         </Timeline>
       )}
     </div>
@@ -312,7 +313,7 @@ function Notes({ notes, focus, onPick, onReview, onAction }) {
           return (
             <li key={n.id} className="ed-note" data-status={n.status} aria-current={n.id === focus || undefined}>
               <button type="button" className="ed-note__main" onClick={() => onPick(n)}>
-                <span className="ed-note__time">{clock(n.t)}</span>
+                <span className="ed-note__time">{clock(n.t, true)}</span>
                 <span className="ed-note__text">{n.text}</span>
               </button>
               <div className="ed-note__acts">

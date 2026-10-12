@@ -6,16 +6,17 @@ description: Make an AI song video ad — a sung song (Suno) is the whole audio,
 # Make AI song
 
 The song carries the whole pitch; the clips act it out. Nobody lip-syncs. Every cut lands where a
-sung line starts. Use the user's swipe file of song ads, if they have one. Wait for a yes at each
-step before spending on the next. Every sheet, storyboard and clip prompt follows **write-prompt**'s
-"How a model reads a prompt".
+sung line starts. Use the user's swipe file of song ads, if they have one. Every sheet, storyboard
+and clip prompt follows **write-prompt**'s "How a model reads a prompt". Work in `outputs/<ad>/`:
+`music/` (lyrics, takes, the final song and its timings), `sheets/`, `storyboards/`, `prompts/`,
+`clips/`, `final/`.
 
 ## 1. Concept
 
-Load the product's research files and the brand's `inputs/memory.md` (**save-brand-memory**). Pick
-the persona and angle first; default to the brand's most emotional persona (grief, identity loss)
-unless told otherwise. Then give 3 concepts, each stealing one move from the swipe file: a specific
-age in the first line, a named villain, a story told backwards, small concrete scenes (a 3am clock).
+Load the brand context (AGENTS.md). Pick the persona and angle first; default to the brand's most
+emotional persona (grief, identity loss) unless told otherwise. Each concept steals one move from
+the swipe file: a specific age in the first line, a named villain, a story told backwards, small
+concrete scenes (a 3am clock).
 
 ## 2. Lyrics
 
@@ -34,7 +35,7 @@ Follow **write-copy** for voice and claims. Song rules:
       --prompt "heartfelt mid-tempo pop ballad, 100 BPM, intimate warm female alto vocal, piano and soft drums, strings lift at the final chorus, vocal on the first beat" \
       --out <ad>/music/song-suno.mp3
 
-Each run gives two takes and Suno's timing for every word; the user picks by ear. Cut it to the sung
+Each run gives two takes and Suno's timing for every word. Cut the chosen one to the sung
 part and write the timings:
 
     python3 tools/edit-song.py timing --take <ad>/music/song-suno.mp3 --lyrics <ad>/music/lyrics.txt --out <ad>/music/song-final.mp3
@@ -44,7 +45,7 @@ Always use Suno's timings: transcribing singing mishears lines.
 ## 4. Look
 
 1. **Hero sheet:** the main character, three angles on one sheet, plus any other age the story needs.
-   Show 3 styles (from **make-ai-animation** step 1's list); the user picks.
+   Styles: **make-ai-animation** step 1's list.
 2. **Cast sheet:** everyone else on one sheet, with the hero sheet as the style reference.
 3. **Product:** never generated; crop it into `sheets/product.png` (**write-prompt**'s product rules).
 
@@ -52,7 +53,7 @@ Always use Suno's timings: transcribing singing mishears lines.
 
 Group the lines into clips no longer than MiniMax allows (**write-prompt**, Video models), cutting
 only where a line starts. Split any line longer than about 6 s into two shots. One storyboard sheet
-per clip, its shots as vertical 9:16 panels: three in a 16:9 row, four as a 2×2 grid in 9:16, two
+per clip in `storyboards/`, its shots as vertical 9:16 panels: three in a 16:9 row, four as a 2×2 grid in 9:16, two
 side by side in 1:1. No text in the pictures.
 
 ## 6. Clips
@@ -66,8 +67,8 @@ references (**write-prompt**, Video models).
 
 The prompt lists the shots with rough timings ("Shot 2 (5.1–9.9s): …") and ends with the rules:
 match each panel, hard cuts, never show the sheet or its gutters, no text, nobody speaks or sings.
-Show each clip as it lands; the user approves them before the edit. To fix one bad shot, make a new still for it and animate it alone
-(`--first-frame <still> --duration 6`), not the whole clip.
+To fix one bad shot, make a new still for it and animate it alone (`--first-frame <still>
+--duration 6`), not the whole clip.
 
 ## 7. Edit
 
@@ -87,12 +88,6 @@ sound.
    Never across two sung lines. The look: Permanent Marker, white with a black outline, centered,
    the sung word yellow and bigger (`active`: `#FFE100`, scale 1.25).
 
-## 8. Versions
+## 8. Versions and export
 
-Copy the document to `edit-v2.json` and change one thing, usually the hook.
-
-## 9. Deliver
-
-Export 1080p H.264 into the ad's folder as `<id>_V<n>_…mp4`, format `Song` (naming: **write-prompt**).
-Follow the brand's handoff template if it has one (e.g. `inputs/brief-templates.md`) and update the
-ad's record. Clips stay 480p drafts (AGENTS.md, Video).
+With **edit-video** (versions, Export), format `Song`. Clips stay 480p drafts (AGENTS.md, Video).
