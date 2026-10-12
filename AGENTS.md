@@ -11,8 +11,8 @@ Every file here — skills, docs, code, comments — is as short and plain as it
   `AGENTS.md` and `README.md`, and update everything that points to it in the same change:
   - a workflow's steps → Studio's Workflow page (`studio/lib/server/workflow.js`), the **open-studio**
     skill's step list, and any skill that cites its step numbers
-  - an added, removed or renamed skill or ad type → this file's skill list and README's "What it
-    makes" and "How it works"
+  - an added, removed or renamed skill or ad type → this file's skill list and README's "What you can do
+    with it" and "How it works"
   - a tool's flags → its `--help` and the skills that call it; a new key → `.env.example`
 - Say each thing once, in the file that owns it; elsewhere, point to it.
 - Cut what doesn't change what the agent or user does: background, history, reasons, extra

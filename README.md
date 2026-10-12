@@ -7,20 +7,15 @@ owners use it on their own or as a team.
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
 7+ years, 2,000 ads and $20M+ in ad spend.
 
-## What it makes
+## What you can do with it
 
-- **Image ads:** a single static post: a product photo or graphic with a headline in the brand's
-  fonts, sized for feed and stories.
-- **Scripts:** a script for a video someone films: the hook, what to say, what to show, and the
-  call to action.
-- **Podcast video ads:** what looks like a clip from a real podcast: two hosts at their mics in a
-  studio, talking about the product, with captions.
-- **Song video ads:** a short, catchy song about the product, its lyrics as captions over scenes
-  that match each line.
-- **Animated video ads:** a short animated scene (Pixar-like, claymation, anime…), with either a
-  narrator over characters acting it out or characters speaking their own lines.
-- **Slides video ads:** a narrated explainer: one simple illustrated slide per line, each thing
-  lighting up as it's said, with the hook on top and captions below.
+- **Image ads:** static ads with high product fidelity.
+- **Scripts:** for creators to film, or for any video.
+- **Podcast video ads:** clips of AI characters that feel taken from a long-form podcast.
+- **Song video ads:** animated characters singing a relatable story while selling your product.
+- **Animated video ads:** animated characters speaking or acting out your script, in Pixar,
+  claymation or any animation style.
+- **Slides video ads:** a narrated explainer, one illustrated slide per line.
 
 ## How it works
 
