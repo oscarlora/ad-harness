@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { brandUrl } from '../lib/client/api.js';
 import { tabOr } from './BrandPage.js';
 
-export const LAST_KEY = 'ad-harness-studio:last';
+export const LAST_KEY = 'ad-production-kit-studio:last';
 
 // [{ workspace, brand }] → Map(workspace → [brand names])
 export function groupByWorkspace(brands) {

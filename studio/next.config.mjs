@@ -1,4 +1,4 @@
-// Brand data is reached at runtime (lib/server/harness.js), so bundling and tracing stay scoped to studio/.
+// Brand data is reached at runtime (lib/server/tools.js), so bundling and tracing stay scoped to studio/.
 const appDir = import.meta.dirname;
 
 /** @type {import('next').NextConfig} */

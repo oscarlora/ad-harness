@@ -1,5 +1,5 @@
 {
-  "name": "ad-harness-tools",
+  "name": "ad-production-kit-tools",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +8,7 @@
   "scripts": {
     "studio": "npm run dev --prefix studio"
   },
-  "description": "Shared generation + sync tooling for Ad Harness. The AI SDK deps (ai, @ai-sdk/gateway, undici) run the Vercel AI Gateway — the media library and the third generation provider after Segmind and kie.ai, whose paths stay dependency-free.",
+  "description": "Shared generation + sync tooling for Ad Production Kit. The AI SDK deps (ai, @ai-sdk/gateway, undici) run the Vercel AI Gateway — the media library and the third generation provider after Segmind and kie.ai, whose paths stay dependency-free.",
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.110",

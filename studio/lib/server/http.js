@@ -2,7 +2,7 @@
 import { createReadStream, statSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { brandCtx } from './brands.js';
-import { catalogLib } from './harness.js';
+import { catalogLib } from './tools.js';
 
 export const jsonRes = (obj, status = 200) =>
   new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });

@@ -1,6 +1,6 @@
 ---
 name: edit-video
-description: Assemble and revise a video ad in the harness's own editor — an edit document (outputs/<ad>/edit.json) that Studio previews live and tools/edit-video.mjs exports to MP4 with the same engine. Use when cutting rendered clips into a finished video, adding the hook, captions, music, sound effects, transitions, zooms, color or an end card, applying the user's review notes from Studio, or exporting ("tighten the pacing", "fade between these", "grade them to match", "duck the music", "export it").
+description: Assemble and revise a video ad in the kit's own editor — an edit document (outputs/<ad>/edit.json) that Studio previews live and tools/edit-video.mjs exports to MP4 with the same engine. Use when cutting rendered clips into a finished video, adding the hook, captions, music, sound effects, transitions, zooms, color or an end card, applying the user's review notes from Studio, or exporting ("tighten the pacing", "fade between these", "grade them to match", "duck the music", "export it").
 ---
 
 # Edit video

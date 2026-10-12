@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJson } from './brands.js';
-import { catalogLib } from './harness.js';
+import { catalogLib } from './tools.js';
 import { repoRoot } from './root.js';
 
 const mediaDirOf = (brandDirAbs) => join(brandDirAbs, 'inputs', 'media');

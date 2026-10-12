@@ -6,8 +6,8 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 
 export const metadata = {
-  title: 'Ad Harness',
-  description: 'Ad Harness Studio: the ads board, media library and workflow for every brand.',
+  title: 'Ad Production Kit',
+  description: 'Ad Production Kit Studio: the ads board, media library and workflow for every brand.',
 };
 
 export default function RootLayout({ children }) {

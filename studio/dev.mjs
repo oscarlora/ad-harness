@@ -32,7 +32,7 @@ async function findFreePort(start, tries = 20) {
 }
 // One Studio covers every workspace and brand: if it's already running, point there instead of starting another.
 const running = await fetch(`http://${probeHost}:${requestedPort}/`, { signal: AbortSignal.timeout(3000) })
-  .then(async (r) => (await r.text()).includes('Ad Harness')).catch(() => false);
+  .then(async (r) => (await r.text()).includes('Ad Production Kit')).catch(() => false);
 if (running) {
   console.log(`Studio is already running on http://${shownHost}:${requestedPort}`);
   process.exit(0);

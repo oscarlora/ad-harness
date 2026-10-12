@@ -1,9 +1,9 @@
-# Ad Harness
+# Ad Production Kit
 
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
-## Changing the harness
+## Changing the kit
 
 Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
 
@@ -27,9 +27,9 @@ Every file here — skills, docs, code, comments — is as short and plain as it
 - Before finishing, reread the change and cut anything not needed. Check that every `tools/` path
   and flag you mention exists, run `node tools/check-public.mjs --all`, and if you touched Studio,
   restart the instance the user has open (it rebuilds) and check the page; never start a second one.
-- Learnings go into the harness (a skill, a tool or this file), or for one brand into its memory
+- Learnings go into the kit (a skill, a tool or this file), or for one brand into its memory
   (**save-brand-memory**), never an agent's private memory.
-  Off the maintainer's machine, propose harness changes as a PR (`gh pr create`).
+  Off the maintainer's machine, propose kit changes as a PR (`gh pr create`).
 
 ## How you reply
 
@@ -49,7 +49,7 @@ Brand work lives in `workspaces/`, which the repo never carries. It stays local,
 workspace's R2 bucket when it has one (see Operating principles).
 
     workspaces/<WS>/
-      _custom/           # the workspace's own skills and tools (extensions or changes to the harness)
+      _custom/           # the workspace's own skills and tools (extensions or changes to the kit)
       <Brand>/
         inputs/          # DESIGN.md, <product>-research.md (+ -personas, -angles), memory.md, uploads.json, reviews.csv, products.json
           media/         # the searchable media library (catalog-media)
@@ -93,9 +93,9 @@ Steps (each owns its procedure and rules):
 
 ## First-time setup
 
-When the user asks to set up the harness from its GitHub link:
+When the user asks to set up the kit from its GitHub link:
 
-1. Clone it into a folder they pick (default `~/ad-harness`). If git is missing: on macOS run
+1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
    `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
 2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows) and fix what its health
    check flags.
@@ -104,7 +104,7 @@ When the user asks to set up the harness from its GitHub link:
    a team needs R2; solo can skip it, but then
    needs a kie key, which hosts reference images for generation.
 4. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`.
-5. Ask them to reopen the agent in the `ad-harness` folder, so it loads these rules.
+5. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
 
 ## Operating principles
 
@@ -125,7 +125,7 @@ When the user asks to set up the harness from its GitHub link:
   is last-write-wins, so pull before you edit. Without R2 keys, everything stays local.
 - **Private brand data never goes in tracked files.** Examples use the placeholder brand Acme. A
   brand's rules go in its `memory.md` (**save-brand-memory**). A workspace's own skills and tools
-  (extensions or changes to the harness) live in `workspaces/<WS>/_custom/` (synced with its R2);
+  (extensions or changes to the kit) live in `workspaces/<WS>/_custom/` (synced with its R2);
   load them when working that workspace. Commit hooks (`tools/check-public.mjs`) block local workspace
   and brand names and the terms in `_custom/private-terms.txt`, in files and commit messages.
 - **Approved generations go into the media library** (**catalog-media**, `--source-type

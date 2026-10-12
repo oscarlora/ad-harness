@@ -1,17 +1,11 @@
-# Ad Harness
+# The All-in-One Ad Production Kit
 
-Skills and tools to make Meta ads end to end with AI agents like Claude and Codex.
+Everything you need to make Meta ads with Claude, Codex or any AI agent: skills and tools to go from
+idea to ready-to-launch ad. Creative strategists, copywriters, video editors, designers and business
+owners use it on their own or as a team.
 
-## Who it's for
-
-People who make ads on their own or as a team: business owners, agencies, brands, creative
-strategists, copywriters, video editors, designers.
-
-Even if you've never made ads with AI, or never made ads at all, everything you need to go from idea
-to final file is here.
-
-Built by [@oscarlorak](https://x.com/oscarlorak). It's how I make ads myself, every day. Easy, fast,
-and cheap.
+Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
+7+ years, 2,000 ads and $20M+ in ad spend.
 
 ## What it makes
 
@@ -54,16 +48,16 @@ when you finish to back it up.
 
 Teams share brands through cloud storage:
 
-- At the start of every session: *"Update Ad Harness and pull Acme"* — the latest harness and the
+- At the start of every session: *"Update the kit and pull Acme"* — the latest kit and the
   latest brand files. Updating never touches your brand work or `.env`.
 - At the end of your work: *"Push Acme"*. The sync warns before overwriting someone's newer work.
-- Share each workspace's `.env` block through a password vault, and propose harness changes as a
+- Share each workspace's `.env` block through a password vault, and propose kit changes as a
   pull request.
 
 ## How to set it up
 
 1. Install an AI agent (Claude Code, Codex, Cursor…).
-2. Tell it: *"Set up Ad Harness from https://github.com/oscarlora/ad-harness"*
+2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*
 
 The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
 keys ([.env.example](.env.example)):
@@ -75,7 +69,7 @@ keys ([.env.example](.env.example)):
   agents pull from and push to.
 - **Uploads (optional):** Google Drive, Notion.
 
-Videos are edited in the harness's own editor and exported through Chrome, Edge, or a Chromium that
+Videos are edited in the kit's own editor and exported through Chrome, Edge, or a Chromium that
 setup installs. It runs on macOS, Windows and Linux.
 
 ## How it's organized

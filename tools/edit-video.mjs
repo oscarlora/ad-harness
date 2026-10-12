@@ -212,7 +212,7 @@ function reframeCmd(p) {
 
 // ---------- headless engine ----------
 function engineBundle() {
-  const out = join(tmpdir(), 'ad-harness-edit', 'headless.js');
+  const out = join(tmpdir(), 'ad-production-kit-edit', 'headless.js');
   mkdirSync(dirname(out), { recursive: true });
   let esbuild;
   try { esbuild = import.meta.resolve('esbuild'); } catch { die('esbuild missing — run: bash tools/setup.sh'); }
@@ -319,14 +319,14 @@ async function exportCmd(p) {
 
 async function framesCmd(p) {
   if (!args.at) die('--at <seconds,seconds,…> is required');
-  const out = args.out ? resolve(args.out) : join(tmpdir(), 'ad-harness-edit', `frames-${Date.now()}.png`);
+  const out = args.out ? resolve(args.out) : join(tmpdir(), 'ad-production-kit-edit', `frames-${Date.now()}.png`);
   mkdirSync(dirname(out), { recursive: true });
   await runPage(p, { mode: 'frames', at: args.at, scale: args.scale || 0.5 }, out);
   console.log('Saved: ' + out);
 }
 
 // ---------- captions ----------
-// Words from a harness transcript ({words:[{word,start,end}]}) or a song timing file ({lines:[{words}]}).
+// Words from a kit transcript ({words:[{word,start,end}]}) or a song timing file ({lines:[{words}]}).
 function readWords(file) {
   const d = readDoc(file);
   // A song's lyric lines end a caption line too.
@@ -499,7 +499,7 @@ async function commentsCmd(dir) {
   for (const plan of plans) {
     const doc = readDoc(join(ad, plan)), mine = open.filter((c) => (c.plan || 'edit.json') === plan);
     for (const c of mine) c.showing = onScreen(doc, c.t);
-    const sheet = join(tmpdir(), 'ad-harness-edit', `notes-${basename(ad).split('_')[0]}-${plan.replace('.json', '')}.png`);
+    const sheet = join(tmpdir(), 'ad-production-kit-edit', `notes-${basename(ad).split('_')[0]}-${plan.replace('.json', '')}.png`);
     mkdirSync(dirname(sheet), { recursive: true });
     await runPage(join(ad, plan), { mode: 'frames', at: mine.map((c) => c.t).join(','), boxes: JSON.stringify(mine.map((c) => c.box || null)), scale: 0.4 }, sheet);
     for (const c of mine) c.sheet = sheet;

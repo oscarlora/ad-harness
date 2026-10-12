@@ -69,7 +69,7 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { res.writeHead(500); res.end('error: ' + e.message); console.error(e); setTimeout(() => process.exit(1), 100); }
 });
 server.listen(PORT, () => {
-  const authFile = join(tmpdir(), 'ad-harness_authurl.txt');
+  const authFile = join(tmpdir(), 'ad-production-kit_authurl.txt');
   fs.writeFileSync(authFile, authUrl + '\n');
   console.log('AUTHURL ' + authUrl);
   console.log('(also saved to ' + authFile + ')');

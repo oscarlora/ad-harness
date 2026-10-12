@@ -13,7 +13,7 @@ export function repoRoot() {
       return dir;
     }
     const up = dirname(dir);
-    if (up === dir) throw new Error(`ad-harness-studio: repo root not found above ${process.cwd()} (looked for tools/lib/catalog.mjs)`);
+    if (up === dir) throw new Error(`ad-production-kit-studio: repo root not found above ${process.cwd()} (looked for tools/lib/catalog.mjs)`);
     dir = up;
   }
 }

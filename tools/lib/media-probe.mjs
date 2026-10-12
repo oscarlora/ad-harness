@@ -137,7 +137,7 @@ export async function videoPass(file, meta, { scenes = false, sprite = null, wor
   }
 }
 // Where the probe leaves a video's analysis inputs for analyze-media (keyed by content).
-export const workDir = (sha) => join(tmpdir(), 'ad-harness-work', String(sha).slice(0, 16));
+export const workDir = (sha) => join(tmpdir(), 'ad-production-kit-work', String(sha).slice(0, 16));
 
 // Scene boundaries (s) from the pass's cuts, or PySceneDetect's when installed. Cuts within MIN_SCENE
 // of the previous boundary or the end are dropped (no flash-frame scenes).

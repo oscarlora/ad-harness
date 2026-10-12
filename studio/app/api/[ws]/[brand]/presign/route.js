@@ -3,7 +3,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { r2For } from '../../../../../lib/server/harness.js';
+import { r2For } from '../../../../../lib/server/tools.js';
 import { defaultApp } from '../../../../../lib/server/openers.js';
 import { brandRoute, jsonRes } from '../../../../../lib/server/http.js';
 import { isMediaId, mediaRecord } from '../../../../../lib/server/media.js';

@@ -1,6 +1,6 @@
 ---
 name: open-studio
-description: Launch Ad Harness Studio, the local web app for every human-facing view: the ads Board (review grid), the Media library, and the Workflow page (each ad's progress, its storyboard, and the video edit's live preview, notes and export). One app for all workspaces and brands. Use when the human wants to review ads or a video edit, browse media or track an ad's progress, or asks to "open the studio / board / gallery / batch UI".
+description: Launch Ad Production Kit Studio, the local web app for every human-facing view: the ads Board (review grid), the Media library, and the Workflow page (each ad's progress, its storyboard, and the video edit's live preview, notes and export). One app for all workspaces and brands. Use when the human wants to review ads or a video edit, browse media or track an ad's progress, or asks to "open the studio / board / gallery / batch UI".
 ---
 
 # Open studio

@@ -1,9 +1,9 @@
 {
-  "name": "ad-harness-studio",
+  "name": "ad-production-kit-studio",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Ad Harness Studio — one local UI for every brand: ads board, media library and workflow, live-refreshing.",
+  "description": "Ad Production Kit Studio — one local UI for every brand: ads board, media library and workflow, live-refreshing.",
   "license": "MIT",
   "scripts": {
     "dev": "node dev.mjs",

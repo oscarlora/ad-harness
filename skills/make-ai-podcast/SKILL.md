@@ -193,7 +193,7 @@ node tools/generate-video.mjs \
 
 The clips carry no music and no on-screen product; both go in during the edit. Two routes:
 
-- **Self-edit in the harness.** Load **edit-video** and build the cut as an edit document: the clips
+- **Self-edit in the kit.** Load **edit-video** and build the cut as an edit document: the clips
   in order, the product graphic at the beat that fits (**search-media**), captions and music as
   wanted (**caption-video**, **add-music**).
 - **Hand off to an editor:** **write-handoff** (Editor handoff).

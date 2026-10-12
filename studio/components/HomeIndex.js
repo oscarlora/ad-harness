@@ -29,7 +29,7 @@ export default function HomeIndex({ brands, error }) {
 
   return (
     <div className="home">
-      <h1>Ad Harness</h1>
+      <h1>Ad Production Kit</h1>
       <p className="home__lede">Every brand in this project — its ads board, media library and workflow, live.</p>
       {error && <div className="empty-state">{error}</div>}
       {!error && brands.length === 0 && (

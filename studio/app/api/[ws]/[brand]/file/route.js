@@ -6,12 +6,12 @@ import { existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { within } from '../../../../../lib/server/brands.js';
-import { catalogLib, r2For } from '../../../../../lib/server/harness.js';
+import { catalogLib, r2For } from '../../../../../lib/server/tools.js';
 import { brandRoute, fileResponse, jsonRes } from '../../../../../lib/server/http.js';
 
 export const dynamic = 'force-dynamic';
 
-const THUMBS = join(tmpdir(), 'ad-harness-thumbs');
+const THUMBS = join(tmpdir(), 'ad-production-kit-thumbs');
 
 // The fitted copy's path, or the original when it isn't an image or can't be resized.
 async function fitted(abs, w) {

@@ -21,7 +21,7 @@ const providerOrder = (ws) => {
   return own.length ? [...new Set(own)] : PROVIDER_ORDER;
 };
 
-// Harness model name -> the id each provider carries it under (missing = not carried). generate-*.mjs
+// Kit model name -> the id each provider carries it under (missing = not carried). generate-*.mjs
 // never hardcode another id. `kind` picks the Gateway call: image = generateImage, text-image =
 // generateText with image output (Gemini image models), video = experimental_generateVideo, speech =
 // generateSpeech. Tools add endpoint suffixes (e.g. kie gpt-image-* -> -text-to-image | -image-to-image).
@@ -254,7 +254,7 @@ export async function kieUpload(refPath) {
   if (!existsSync(abs)) throw userError(`reference not found: ${refPath}`);
   const fd = new FormData();
   fd.append('file', new Blob([await readFile(abs)], { type: mimeOf(abs) }), basename(abs));
-  fd.append('uploadPath', `${{ image: 'images', video: 'videos' }[typeOf(abs)] || 'audio'}/ad-harness`);
+  fd.append('uploadPath', `${{ image: 'images', video: 'videos' }[typeOf(abs)] || 'audio'}/ad-production-kit`);
   const json = await kie('/api/file-stream-upload', { method: 'POST', body: fd, base: 'https://kieai.redpandaai.co' });
   const url = json?.data?.downloadUrl;
   if (!url) throw new Error(`upload failed for ${refPath}: ${JSON.stringify(json)}`);

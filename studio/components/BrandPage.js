@@ -60,7 +60,7 @@ export function Bars({ ws, brand, current, count, updatedAt, search, children })
     <>
       <header className="navbar">
         <div className="navbar__path">
-          <Link className="navbar__home" href="/?all=1" title="All brands">Ad Harness</Link>
+          <Link className="navbar__home" href="/?all=1" title="All brands">Ad Production Kit</Link>
           <Switcher ws={ws} brand={brand} />
         </div>
         <nav className="tabs" aria-label="Sections">

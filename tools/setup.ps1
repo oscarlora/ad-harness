@@ -11,7 +11,7 @@ function Warn($msg) { Write-Host '  ' -NoNewline; Write-Host ([char]0x2022) -For
 function Bad($msg)  { Write-Host '  ' -NoNewline; Write-Host ([char]0x2717) -ForegroundColor Red    -NoNewline; Write-Host " $msg" }
 function Has($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
-Write-Host 'Ad Harness setup'
+Write-Host 'Ad Production Kit setup'
 
 # ── Node (>= 22.15; installs the LTS via winget when missing or older) ───────
 $nodeDir = Join-Path $env:ProgramFiles 'nodejs'

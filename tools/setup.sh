@@ -19,7 +19,7 @@ ensure_path_line() {
   return 1
 }
 
-echo "Ad Harness setup"
+echo "Ad Production Kit setup"
 
 # ── Node (>= 22.15; installs latest v24 LTS locally when missing or older) ───
 export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"   # pick up previous local installs
@@ -40,11 +40,11 @@ if [ "$NEED_NODE" = 1 ]; then
     bad "Could not resolve the Node download (no internet?). Install Node 22.15+ from https://nodejs.org and re-run."
     exit 1
   fi
-  curl -fL --progress-bar "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o /tmp/ad-harness-node.tar.gz || {
+  curl -fL --progress-bar "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o /tmp/ad-production-kit-node.tar.gz || {
     bad "Node download failed. Install Node 22.15+ from https://nodejs.org and re-run."; exit 1; }
   rm -rf "$HOME/.local/node" && mkdir -p "$HOME/.local/node"
-  tar -xzf /tmp/ad-harness-node.tar.gz -C "$HOME/.local/node" --strip-components 1
-  rm -f /tmp/ad-harness-node.tar.gz
+  tar -xzf /tmp/ad-production-kit-node.tar.gz -C "$HOME/.local/node" --strip-components 1
+  rm -f /tmp/ad-production-kit-node.tar.gz
   ensure_path_line && NOTE=" (PATH set in ~/.zprofile)" || NOTE=""
   ok "Installed Node $(node -v)$NOTE"
 fi
