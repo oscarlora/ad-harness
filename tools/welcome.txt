@@ -7,5 +7,5 @@ An ad gets made in three steps:
   3. Make: it writes and generates the ad in the studio, where you watch each step land and leave notes.
 
 To start, open your AI agent in {folder} and say: "Make an image ad for <your brand's website>".
-The agent opens the studio for you. To open it yourself: cd {folder} && npm run studio
+The agent opens the studio for you. To open it yourself: cd {folder}; npm run studio
 No API keys needed yet: the agent asks for one when your first ad needs it.

@@ -29,7 +29,7 @@ function Test-NodeOk {
 }
 
 if (Test-NodeOk) {
-  Ok "Node $(& node -v) present"
+  Ok "Node $(& node -v) ready"
 } else {
   if (-not (Has 'winget')) {
     Bad 'winget is not available on this machine: install Node 22.15+ from https://nodejs.org'
@@ -60,4 +60,5 @@ foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio
 if (Has 'git') { git config core.hooksPath .githooks 2>&1 | Out-Null }
 
 Write-Host ''
-Write-Host ((Get-Content 'tools\welcome.txt' -Raw -Encoding UTF8).Replace('{folder}', (Get-Location).Path))
+$folder = (Get-Location).Path; if ($folder -match ' ') { $folder = "`"$folder`"" }
+Write-Host ((Get-Content 'tools\welcome.txt' -Raw -Encoding UTF8).Replace('{folder}', $folder))
