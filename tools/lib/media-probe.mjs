@@ -16,13 +16,12 @@
 import { statSync, writeFileSync, existsSync, copyFileSync, readdirSync, readFileSync, mkdirSync, mkdtempSync, rmSync, renameSync, constants } from 'node:fs';
 import { join, basename, extname, relative, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, RESERVED } from './catalog.mjs';
+import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, RESERVED, FFMPEG_FIX } from './catalog.mjs';
 import { readDriveSources } from './drive.mjs';
 import { INLINE_MAX } from './gateway.mjs';
 
 const HAS_FFMPEG = have('ffmpeg') && have('ffprobe');
 const HAS_SIPS = have('sips');
-const INSTALL_FFMPEG = 'install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)';
 
 // ---------- heavy-work pool + hardware decoding ----------
 const jobLimit = () => Math.max(1, parseInt(process.env.MEDIA_JOBS, 10) || 2);
@@ -92,7 +91,7 @@ const TURN = { 90: ',transpose=clock', 180: ',hflip,vflip', 270: ',transpose=ccl
 // Tries VideoToolbox decode + scale, then hardware decode only, then all software.
 // Returns { cuts, proxy, track } (null = not made).
 export async function videoPass(file, meta, { scenes = false, sprite = null, work = null, rung = 0 }) {
-  if (!HAS_FFMPEG) throw new Error(`ffmpeg is required for video — ${INSTALL_FFMPEG}`);
+  if (!HAS_FFMPEG) throw new Error(`ffmpeg is required for video. To get it, ${FFMPEG_FIX}`);
   const tmp = mkdtempSync(join(tmpdir(), 'pass-'));
   try {
     const rungs = work ? RUNGS.slice(rung, rung + (meta.exact > 90 ? 2 : 1)) : [];
@@ -318,13 +317,13 @@ async function probe({ file, media, id, sha256, phash, sourceType, sourceName })
 
   if (type === 'image') {
     if (!HAS_SIPS && !HAS_FFMPEG) {
-      warnings.push(`no image tool found — dimensions and thumbnails skipped (record still created, derivatives pending). To enable them, ${INSTALL_FFMPEG}.`);
+      warnings.push(`no image tool found — dimensions and thumbnails skipped (record still created, derivatives pending). To enable them, ${FFMPEG_FIX}.`);
     } else {
       dims = imageDims(file);
       if (!imageDerivatives(file, paths, id)) warnings.push(`could not make derivatives for ${basename(file)} (format not supported by the installed tool) — analyze the original file instead.`);
     }
   } else if (!HAS_FFMPEG) {
-    warnings.push('ffmpeg not found — video/audio derivatives skipped (install ffmpeg to enable scenes, sprites, waveform, transcription).');
+    warnings.push(`ffmpeg not found — video/audio derivatives skipped (to enable scenes, sprites, waveform and transcription, ${FFMPEG_FIX}).`);
   } else if (type === 'video') {
     const meta = videoMeta(file);
     dims = { width: meta.width, height: meta.height, duration: meta.duration };

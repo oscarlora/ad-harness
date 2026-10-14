@@ -5,7 +5,7 @@
 
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { applyEnv, die, ffprobeJson, findBin, parseArgs, run, sleep, usage } from './lib/catalog.mjs';
+import { applyEnv, die, FFMPEG_FIX, ffprobeJson, findBin, parseArgs, run, sleep, usage } from './lib/catalog.mjs';
 import { downloadTo, errorText, kie, retryTransient, runSeedAudio, suffixed, times, userError, workspaceKeys, writeSidecars } from './lib/providers.mjs';
 
 applyEnv();
@@ -119,7 +119,7 @@ async function saveWords(track, saved) {
 
 // Trim to the first N seconds in place (stream copy).
 async function trimTo(file, seconds) {
-  if (!findBin('ffmpeg')) die('--duration needs ffmpeg (macOS: static build in ~/.local/bin — bash tools/setup.sh installs it)');
+  if (!findBin('ffmpeg')) die(`--duration needs ffmpeg. To get it, ${FFMPEG_FIX}`);
   const tmp = file.replace(/(\.[^./]+)$/, '.trim$1');
   const r = run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-t', String(seconds), '-c', 'copy', tmp], { allowFail: true });
   if (r.status !== 0) { await unlink(tmp).catch(() => {}); die(`ffmpeg trim failed: ${r.stderr || r.error}`); }

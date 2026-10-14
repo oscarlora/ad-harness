@@ -12,8 +12,12 @@
 # Source: a Google Fonts family name, a font file URL, or a local font path.
 # --bg / --fg: background and text hex colors (default 0a0a0a / ffffff).
 
-import argparse, hashlib, os, re, tempfile, urllib.parse, urllib.request
-from PIL import Image, ImageDraw, ImageFont
+import argparse, hashlib, os, re, sys, tempfile, urllib.parse, urllib.request
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    sys.exit("pull-fonts needs Pillow. Install it: python3 -m pip install --user pillow "
+             "(Ubuntu, Debian: sudo apt install python3-pil)")
 
 LEGACY_UA = "Mozilla/5.0 (Windows NT 5.1)"  # no woff2 -> Google serves TTF, which Pillow reads
 UA = "Mozilla/5.0"

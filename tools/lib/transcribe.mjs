@@ -10,7 +10,7 @@
 import { mkdtempSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { have, run, ffprobeJson, readRoster, inferBrand, pcm, round } from './catalog.mjs';
+import { have, run, ffprobeJson, readRoster, inferBrand, pcm, round, FFMPEG_FIX } from './catalog.mjs';
 import { generateJSON, filePart, transcribeWords, ANALYSIS_MODEL, INLINE_MAX, WORDS_MODEL } from './gateway.mjs';
 import { buildAudioPrompt, buildAudioSchema, buildMergePrompt, buildMergeSchema } from './analysis-prompt.mjs';
 
@@ -20,7 +20,7 @@ const SILENT_DB = -50; // a track whose loudest peak is below this is silence (d
 // Mono 16 kHz mp3 in a temp dir: { path, dir, silent, duration }, or null without audio. `made` = an
 // mp3 the probe already extracted. Caller removes `dir`.
 export function audioTrack(src, made = null) {
-  if (!have('ffmpeg')) throw new Error('ffmpeg is required for audio (macOS: bash tools/setup.sh · Windows: winget install Gyan.FFmpeg)');
+  if (!have('ffmpeg')) throw new Error(`ffmpeg is required for audio. To get it, ${FFMPEG_FIX}`);
   const p = ffprobeJson(src);
   if (!(p.streams || []).some((s) => s.codec_type === 'audio')) return null;
   const dir = made && existsSync(made) ? dirname(made) : mkdtempSync(join(tmpdir(), 'track-'));
