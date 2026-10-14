@@ -3,33 +3,26 @@
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
-## Changing the kit
+## First-time setup
 
-Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
+When the user asks to set up the kit (e.g. from its GitHub link), run the README's one command; it
+needs no keys and no admin password:
 
-- Before editing, read the whole file, then grep its name across `skills/`, `tools/`, `studio/`,
-  `AGENTS.md` and `README.md`, and update everything that points to it in the same change:
-  - a workflow's steps → Studio's Workflow page (`studio/lib/server/workflow.js`), the **open-studio**
-    skill's step list, and any skill that cites its step numbers
-  - an added, removed or renamed skill or ad type → this file's skill list and README's "What you can do
-    with it" and "How it works"
-  - a tool's flags → its `--help` and the skills that call it; a new key → `.env.example`
-- Say each thing once, in the file that owns it; elsewhere, point to it.
-- Cut what doesn't change what the agent or user does: background, history, reasons, extra
-  examples, restated rules, and what isn't needed or won't happen (unless the reader would
-  otherwise get it wrong).
-- Edit before adding: fold into existing lines and delete what the change makes redundant. No new
-  file or rule when an edit will do.
-- Code: reuse `tools/lib`, no dead code, comment only what isn't obvious. Studio's look follows
-  `studio/DESIGN.md`.
-- Names: two or three words, action then object (`pull-media`, `make-image-ad`). A skill and its tool share
-  the name whenever possible (`skills/pull-media/` ↔ `tools/pull-media.mjs`).
-- Before finishing, reread the change and cut anything not needed. Check that every `tools/` path
-  and flag you mention exists, run `node tools/check-public.mjs --all`, and if you touched Studio,
-  restart the instance the user has open (it rebuilds) and check the page; never start a second one.
-- Learnings go into the kit (a skill, a tool or this file), or for one brand into its memory
-  (**save-brand-memory**), never an agent's private memory.
-  Off the maintainer's machine, propose kit changes as a PR (`gh pr create`).
+    curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
+
+It installs into `~/ad-production-kit` (`… | bash -s -- <folder>` for a folder they pick); in an
+existing checkout run `bash tools/setup.sh`. On Windows, clone the repo (`winget install Git.Git` if
+git is missing) and run `powershell -ExecutionPolicy Bypass -File tools\setup.ps1`.
+
+- If it stops, it says why and how to fix it: apply the fix (the user does what only they can, such
+  as clicking Install or a `sudo` command) and run it again.
+- When it finishes, show the user its welcome word for word, then, unless you already run in the
+  kit's folder, ask them to reopen the agent there so it loads these rules.
+- Nothing else up front. When a step first needs a key the workspace lacks, copy `.env.example` to
+  `.env` if missing, open it for them, and say which key to add and where to get it; they paste keys
+  into the file, never into chat. Ask whether they work solo or as a team: a team needs R2; solo can
+  skip it, but then needs a kie key, which hosts reference images for generation. ffmpeg 8, Pillow,
+  yt-dlp and the export browser work the same way: the tool that needs one says how to get it.
 
 ## How you reply
 
@@ -91,21 +84,6 @@ Steps (each owns its procedure and rules):
   generate-voice, add-music, generate-sfx, caption-video, edit-video
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
 
-## First-time setup
-
-When the user asks to set up the kit from its GitHub link:
-
-1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
-   `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
-2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows) and fix what its health
-   check flags.
-3. Copy `.env.example` to `.env`, open it for them, and say which keys to add and where to get
-   them. They paste keys into the file, never into chat. Ask whether they work solo or as a team:
-   a team needs R2; solo can skip it, but then
-   needs a kie key, which hosts reference images for generation.
-4. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`.
-5. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
-
 ## Operating principles
 
 - **Providers:** `--provider auto` tries Segmind, then kie, then the Vercel AI Gateway — each that
@@ -141,3 +119,31 @@ When the user asks to set up the kit from its GitHub link:
   `.env` are untracked, so it's safe). Never `git pull`; never `git clean` (it deletes brand work
   and `.env`). If `node` or `node_modules/` is missing, run `bash tools/setup.sh`. Tell users
   plainly — "there's a newer version; updating won't touch your brand work" — without git jargon.
+
+## Changing the kit
+
+Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
+
+- Before editing, read the whole file, then grep its name across `skills/`, `tools/`, `studio/`,
+  `AGENTS.md` and `README.md`, and update everything that points to it in the same change:
+  - a workflow's steps → Studio's Workflow page (`studio/lib/server/workflow.js`), the **open-studio**
+    skill's step list, and any skill that cites its step numbers
+  - an added, removed or renamed skill or ad type → this file's skill list and README's "What you can do
+    with it" and "How it works"
+  - a tool's flags → its `--help` and the skills that call it; a new key → `.env.example`
+- Say each thing once, in the file that owns it; elsewhere, point to it.
+- Cut what doesn't change what the agent or user does: background, history, reasons, extra
+  examples, restated rules, and what isn't needed or won't happen (unless the reader would
+  otherwise get it wrong).
+- Edit before adding: fold into existing lines and delete what the change makes redundant. No new
+  file or rule when an edit will do.
+- Code: reuse `tools/lib`, no dead code, comment only what isn't obvious. Studio's look follows
+  `studio/DESIGN.md`.
+- Names: two or three words, action then object (`pull-media`, `make-image-ad`). A skill and its tool share
+  the name whenever possible (`skills/pull-media/` ↔ `tools/pull-media.mjs`).
+- Before finishing, reread the change and cut anything not needed. Check that every `tools/` path
+  and flag you mention exists, run `node tools/check-public.mjs --all`, and if you touched Studio,
+  restart the instance the user has open (it rebuilds) and check the page; never start a second one.
+- Learnings go into the kit (a skill, a tool or this file), or for one brand into its memory
+  (**save-brand-memory**), never an agent's private memory.
+  Off the maintainer's machine, propose kit changes as a PR (`gh pr create`).
