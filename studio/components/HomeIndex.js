@@ -34,8 +34,8 @@ export default function HomeIndex({ brands, error }) {
       {error && <div className="empty-state">{error}</div>}
       {!error && brands.length === 0 && (
         <div className="empty-state">
-          No brands found under <code>workspaces/</code>. Pull one first:{' '}
-          <code>node tools/sync-brand.mjs --pull workspaces/&lt;WS&gt;/&lt;Brand&gt;</code>
+          No brands yet. Ask your agent &ldquo;Make an image ad for &lt;your brand&apos;s website&gt;&rdquo; and the
+          brand shows up here. On a team, ask it to pull your team&apos;s brand.
         </div>
       )}
       {[...groupByWorkspace(brands)].map(([w, names]) => (
