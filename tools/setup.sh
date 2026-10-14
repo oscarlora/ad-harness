@@ -1,8 +1,8 @@
 #!/bin/bash
 # setup.sh — install and first-run setup on macOS and Linux: idempotent, no admin password, no keys.
-# Downloads the kit when run outside it, installs Node (and on macOS ffmpeg 8) under ~/.local when
-# missing, the npm deps, the shared library and the git hooks, then prints the welcome (tools/welcome.txt). Any failure
-# stops it with a plain-language fix.
+# Downloads the kit when run outside it (or fast-forwards an untouched one), installs Node (and on
+# macOS ffmpeg 8) under ~/.local when missing, the npm deps, the shared library and the git hooks,
+# then prints the welcome (tools/welcome.txt). Any failure stops it with a plain-language fix.
 #
 # Usage: curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
 #        … | bash -s -- <folder>     to install somewhere other than ~/ad-production-kit
@@ -14,6 +14,7 @@ REPO_URL=https://github.com/oscarlora/ad-production-kit
 INSTALL_CMD="curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash"
 SELF=${BASH_SOURCE[0]:-}
 LOG=$(mktemp "${TMPDIR:-/tmp}/ad-production-kit-setup.XXXXXX")
+trap 'rm -f "$LOG"' EXIT
 PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
 NEW_PATH=0
 
@@ -59,7 +60,9 @@ get_kit() {
   fi
   local dir=${1:-$HOME/ad-production-kit}
   if is_kit "$dir"; then
-    ok "The kit is already in $(pretty "$dir")"
+    [ "$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null)" = main ] && git -C "$dir" diff --quiet HEAD 2>/dev/null \
+      && git -C "$dir" fetch -q origin main </dev/null 2>/dev/null && git -C "$dir" merge -q --ff-only FETCH_HEAD >/dev/null 2>&1
+    ok "The kit is in $(pretty "$dir")"
   elif [ -e "$dir" ]; then
     fail "$(pretty "$dir") already exists and isn't the kit." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
   else
@@ -191,7 +194,6 @@ main() {
     || warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry."
   # Blocks commits that mention a client workspace or brand (the repo is public).
   git config core.hooksPath .githooks 2>/dev/null
-  rm -f "$LOG"
   echo
   sed "s|{folder}|$(pretty "$PWD")|g" tools/welcome.txt
   [ "$NEW_PATH" = 1 ] && printf "\nOpen a new terminal window first, so it finds the tools setup just installed.\n"
