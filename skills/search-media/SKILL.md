@@ -8,8 +8,8 @@ description: Find and use media from a brand's library — by meaning in any lan
 The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). Search it first
 for reference photos, footage, music or sounds, instead of hunting raw folders. Assets for every
 brand (music, SFX, references) live in the public **shared library**, which setup pulls (if it
-isn't local, `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`); search it the same way with
-`--media workspaces/Shared/Library/inputs/media`.
+isn't local: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`). Search it
+the same way with `--media workspaces/Shared/Library/inputs/media`.
 
 ## Agent search — retrieve, then judge
 
