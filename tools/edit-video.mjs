@@ -318,7 +318,7 @@ async function exportCmd(p) {
     const meta = ffprobeJson(out);
     const rel = relative(dirname(p), out).split(sep).join('/');
     setStatus(p, { state: 'done', out: rel, seconds: round((Date.now() - t0) / 1000) });
-    console.error(`done      ${round(+meta.format.duration)}s in ${round((Date.now() - t0) / 1000)}s`);
+    console.error(`done      ${meta.format ? `${round(+meta.format.duration)}s ` : ''}in ${round((Date.now() - t0) / 1000)}s`);
     console.log('Saved: ' + out);
   } catch (e) {
     setStatus(p, { state: 'failed', error: String(e.message || e) });
