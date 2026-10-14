@@ -120,7 +120,7 @@ add_to_path() {
     if mkdir -p "$(dirname "$HOME/$f")" && echo "$line" >>"$HOME/$f"; then added="$added ~/$f"
     else warn "Couldn't update ~/$f: add this line to it yourself: $line"; fi
   done
-  [ -n "$added" ] && { NEW_PATH=1; ok "Added the kit's tools to your PATH ($added )"; }
+  [ -n "$added" ] && { NEW_PATH=1; ok "Added the kit's tools to your PATH (${added# })"; }
   return 0
 }
 

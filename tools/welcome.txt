@@ -2,7 +2,7 @@ Welcome to the Ad Production Kit (ADPK). You're all set.
 
 ADPK turns your AI agent (Claude Code, Codex, Cursor…) into an ad team for Meta ads, image and video.
 An ad gets made in three steps:
-  1. Research: the agent reads your brand's website and reviews: what you sell, who buys it, and why.
+  1. Research: the agent reads your brand's website and reviews to learn what you sell, who buys it, and why.
   2. Interview: it asks a few short questions and offers 3 ad ideas. You pick one.
   3. Make: it writes and generates the ad in the studio, where you watch each step land and leave notes.
 
