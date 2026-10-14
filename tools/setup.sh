@@ -131,7 +131,7 @@ add_to_path() {
 npm_deps() {  # <folder> <what it installs> <name>
   if ! [ "$1/node_modules/.package-lock.json" -nt "$1/package.json" ]; then
     echo "  Installing $2…"
-    npm install --prefix "$1" --no-fund --no-audit </dev/null >"$LOG" 2>&1 \
+    npm ci --prefix "$1" --no-fund --no-audit </dev/null >"$LOG" 2>&1 \
       || fail -l "Couldn't install $2." "$offline"
   fi
   ok "$3 ready"
