@@ -1,6 +1,7 @@
 #!/bin/bash
 # setup.sh — machine setup, idempotent, no admin password or Homebrew. Installs Node and ffmpeg 8
-# under ~/.local when missing, npm deps and the git hooks, then prints a health check.
+# under ~/.local when missing, npm deps and the git hooks, then a health check and a welcome.
+# No API keys needed — those come later, when you generate your first ad.
 #
 # Usage: bash tools/setup.sh
 set -u
@@ -10,12 +11,20 @@ ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "  \033[33m•\033[0m %s\n" "$1"; }
 bad()  { printf "  \033[31m✗\033[0m %s\n" "$1"; }
 
-# One PATH line in ~/.zprofile makes new terminals see the local installs (Node + ~/.local/bin).
+# One PATH line in the shell startup files makes new terminals see the local installs (Node + ~/.local/bin).
 PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
-ensure_path_line() {
-  grep -qsF "$PATH_LINE" "$HOME/.zprofile" 2>/dev/null && return 0
-  { echo "$PATH_LINE" >> "$HOME/.zprofile"; } 2>/dev/null && return 0
-  warn "couldn't update ~/.zprofile — add this line to ~/.zprofile yourself: $PATH_LINE"
+ensure_path_line() {  # $1 = file; appends PATH_LINE unless already there
+  grep -qsF "$PATH_LINE" "$1" 2>/dev/null && return 0
+  { echo "$PATH_LINE" >> "$1"; } 2>/dev/null && return 0
+  return 1
+}
+ensure_path() {  # zsh (the macOS default), bash, and POSIX login shells each read a different file
+  local n=0 f
+  for f in "$HOME/.zprofile" "$HOME/.bashrc" "$HOME/.profile"; do
+    ensure_path_line "$f" && n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] && return 0
+  warn "couldn't update your shell startup files — add this line to ~/.profile yourself: $PATH_LINE"
   return 1
 }
 
@@ -29,13 +38,19 @@ if command -v node >/dev/null 2>&1; then
   [ "$NODE_OK" = 1 ] && { ok "Node $(node -v) present"; NEED_NODE=0; }
 fi
 if [ "$NEED_NODE" = 1 ]; then
-  ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=x64
-  if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x64" ]; then
-    bad "Unsupported architecture: $ARCH"; exit 1
-  fi
+  case "$(uname -s)" in
+    Darwin) NODE_OS=darwin ;;
+    Linux)  NODE_OS=linux ;;
+    *) bad "Setup doesn't know this system ($(uname -s)). Install Node 22.15+ from https://nodejs.org and re-run."; exit 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64) NODE_ARCH=x64 ;;
+    arm64|aarch64) NODE_ARCH=arm64 ;;
+    *) bad "Setup doesn't know this processor ($(uname -m)). Install Node 22.15+ from https://nodejs.org and re-run."; exit 1 ;;
+  esac
   echo "  Installing Node LTS to ~/.local/node (no admin password needed)…"
   TARBALL=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt 2>/dev/null \
-    | grep -oE "node-v24\.[0-9]+\.[0-9]+-darwin-${ARCH}\.tar\.gz" | head -1)
+    | grep -oE "node-v24\.[0-9]+\.[0-9]+-${NODE_OS}-${NODE_ARCH}\.tar\.gz" | head -1)
   if [ -z "${TARBALL:-}" ]; then
     bad "Could not resolve the Node download (no internet?). Install Node 22.15+ from https://nodejs.org and re-run."
     exit 1
@@ -43,10 +58,17 @@ if [ "$NEED_NODE" = 1 ]; then
   curl -fL --progress-bar "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o /tmp/ad-production-kit-node.tar.gz || {
     bad "Node download failed. Install Node 22.15+ from https://nodejs.org and re-run."; exit 1; }
   rm -rf "$HOME/.local/node" && mkdir -p "$HOME/.local/node"
-  tar -xzf /tmp/ad-production-kit-node.tar.gz -C "$HOME/.local/node" --strip-components 1
+  tar -xzf /tmp/ad-production-kit-node.tar.gz -C "$HOME/.local/node" --strip-components 1 || {
+    rm -rf "$HOME/.local/node"; bad "The Node download didn't unpack. Check your internet and re-run."; exit 1; }
   rm -f /tmp/ad-production-kit-node.tar.gz
-  ensure_path_line && NOTE=" (PATH set in ~/.zprofile)" || NOTE=""
-  ok "Installed Node $(node -v)$NOTE"
+  if ! "$HOME/.local/node/bin/node" -v >/dev/null 2>&1; then
+    rm -rf "$HOME/.local/node"
+    bad "The installed Node won't run on this machine. Install Node 22.15+ from https://nodejs.org and re-run."
+    exit 1
+  fi
+  hash -r
+  ensure_path && NOTE=" (new terminals will find it)" || NOTE=""
+  ok "Installed Node $("$HOME/.local/node/bin/node" -v)$NOTE"
 fi
 
 # ── npm deps (Vercel AI Gateway, the video export) — again whenever package.json changed ──
@@ -55,7 +77,7 @@ if [ -d node_modules ] && [ node_modules/.package-lock.json -nt package.json ]; 
 else
   npm install --no-fund --no-audit >/dev/null 2>&1 \
     && ok "npm deps installed" \
-    || warn "npm install failed — the media library and the Vercel AI Gateway provider won't work until it succeeds"
+    || warn "couldn't install the helper libraries — check your internet and re-run setup (the media library needs them)"
 fi
 
 # ── git hooks ────────────────────────────────────────────────────────────────
@@ -67,7 +89,7 @@ fi
 if [ -f studio/package.json ] && ! [ studio/node_modules/.package-lock.json -nt studio/package.json ]; then
   npm install --prefix studio --no-fund --no-audit >/dev/null 2>&1 \
     && ok "studio app deps installed" \
-    || warn "npm install for studio failed — the studio app won't run until it succeeds"
+    || warn "couldn't install the Studio's libraries — check your internet and re-run setup (the Studio won't open until it succeeds)"
 fi
 
 # ── video export browser: an installed Chrome or Edge, else Playwright's Chromium ──
@@ -111,36 +133,38 @@ if [ "$(uname)" = "Darwin" ] && [ "${FF_MAJ:-0}" -lt 8 ]; then
   done
   rm -rf "$FF_TMP"; hash -r
   if [ "$FF_OK" = 1 ]; then
-    ensure_path_line
+    ensure_path >/dev/null 2>&1 || true
     ok "Installed ffmpeg $("$HOME/.local/bin/ffmpeg" -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1) to ~/.local/bin"
   else
     warn "ffmpeg install didn't finish — video/audio tools need it; re-run setup to retry, or brew install ffmpeg"
   fi
 fi
 
-# ── Health check ─────────────────────────────────────────────────────────────
+# ── Health check (nothing here blocks you — keys and extras come later) ──────
 echo "Health check"
 if [ -f .env ]; then
   ok ".env present"
 else
-  bad ".env missing — copy .env.example to .env and add your keys"
+  warn "no .env yet — that's fine. Your agent will walk you through keys when you generate your first ad"
 fi
 FF_V=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
 if [ -z "$FF_V" ]; then
-  warn "ffmpeg missing (video/audio work): on Linux install it with your package manager, or drop a static build into ~/.local/bin (media tools already look there)"
+  warn "ffmpeg isn't installed yet (you'll need it to make videos; your agent will help when the time comes)"
 elif [ "${FF_V%%.*}" -ge 8 ]; then
   ok "ffmpeg $FF_V present"
 else
-  warn "ffmpeg $FF_V is older than 8 — video tools may misbehave; on macOS re-run this setup, on Linux update it with your package manager"
+  warn "ffmpeg $FF_V works for now — version 8 is recommended when you start making videos"
 fi
-command -v yt-dlp  >/dev/null 2>&1 && ok "yt-dlp present"  || warn "yt-dlp missing (optional — URL/social pulls): brew install yt-dlp, or drop a static build into ~/.local/bin (media tools already look there)"
+command -v yt-dlp  >/dev/null 2>&1 && ok "yt-dlp present"  || warn "yt-dlp isn't installed (optional — only for pulling videos from links)"
 # Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
 if PYV=$(python3 --version 2>&1) && [[ "$PYV" == "Python 3"* ]]; then
   ok "$PYV present"
   python3 -c 'import PIL' >/dev/null 2>&1 && ok "Pillow present" \
-    || warn "Pillow missing (needed for pull-fonts.py): python3 -m pip install --user pillow"
+    || warn "Pillow isn't installed (only needed for font work — your agent will install it if you need it)"
 else
-  warn "Python 3 missing (needed for pull-fonts.py and edit-song.py): install it from https://www.python.org, then: python3 -m pip install --user pillow"
+  warn "Python 3 isn't installed (only needed for font and song work — your agent will help if you need it)"
 fi
 
 echo "Done."
+echo ""
+cat tools/welcome.txt

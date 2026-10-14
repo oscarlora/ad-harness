@@ -1,0 +1,21 @@
+Welcome to the Ad Production Kit — you're set up, and no API keys are needed yet.
+
+What it is: everything you need to make Meta ads for your brand by talking to
+your AI agent in plain words. You say what you want; the agent does the work and
+shows you each step for approval.
+
+How making an ad goes:
+  1. Research — the agent reads your site and reviews: the product, who buys it, why.
+  2. Concept — it offers 3 different ideas; you pick one.
+  3. Write — hooks, script, on-screen copy.
+  4. Make — images, voices, music, clips; you approve each step.
+  5. Edit — cut together with captions; you click the video to leave notes.
+  6. Review — finished ads land in the Studio for your yes.
+
+The Studio is the kit's web app on your own computer: the Board (review ads),
+Media (search your footage and images), and Workflow (each ad's progress and edit).
+Your agent opens it for you — you just watch and click.
+
+Keys come later: when you're ready to generate images or video, your agent walks
+you through adding them then. For now, just tell it your brand and what you want
+to make.

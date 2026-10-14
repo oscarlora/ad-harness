@@ -7,6 +7,15 @@ owners use it on their own or as a team.
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
 7+ years, 2,000 ads and $20M+ in ad spend.
 
+## Quick start (2 minutes, no keys needed)
+
+1. Install an AI agent (Claude Code, Codex, Cursor…).
+2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*
+
+Or do it yourself: `git clone https://github.com/oscarlora/ad-production-kit && cd ad-production-kit && bash tools/setup.sh` (Windows: `tools\setup.ps1`).
+
+Setup installs what's missing and ends with a welcome message explaining how it all works. Keys come later, when you generate your first ad.
+
 ## What you can do with it
 
 - **Image ads:** static ads with high product fidelity.
@@ -51,11 +60,9 @@ Teams share brands through cloud storage:
 
 ## How to set it up
 
-1. Install an AI agent (Claude Code, Codex, Cursor…).
-2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*
+See Quick start above — the agent or the script does it all, no keys needed.
 
-The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
-keys ([.env.example](.env.example)):
+When you generate your first ad, the agent walks you through your keys ([.env.example](.env.example)):
 
 - **Generation:** at least one of [Segmind](https://www.segmind.com), [kie.ai](https://kie.ai) or
   the [Vercel AI Gateway](https://vercel.com/ai-gateway); the Gateway also runs the media library.
@@ -65,7 +72,8 @@ keys ([.env.example](.env.example)):
 - **Uploads (optional):** Google Drive, Notion.
 
 Videos are edited in the kit's own editor and exported through Chrome, Edge, or a Chromium that
-setup installs. It runs on macOS, Windows and Linux.
+setup installs. It runs on macOS, Windows and Linux. If you install the tools yourself instead of
+running setup: Node 22.15+, ffmpeg 8.
 
 ## How it's organized
 

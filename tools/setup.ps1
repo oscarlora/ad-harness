@@ -1,5 +1,6 @@
 ﻿# setup.ps1 — Windows twin of setup.sh, idempotent: Node LTS via winget when missing, npm deps and
-# the git hooks, then a health check. Works in Windows PowerShell 5.1 and PowerShell 7.
+# the git hooks, then a health check and a welcome. No API keys needed — those come later.
+# Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
 
@@ -78,17 +79,17 @@ else {
   else { Warn 'Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium' }
 }
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health check (nothing here blocks you — keys and extras come later) ─────
 Write-Host 'Health check'
 if (Test-Path '.env') {
   Ok '.env present'
 } else {
-  Bad '.env missing — copy .env.example to .env and add your keys'
+  Warn "no .env yet — that's fine. Your agent will walk you through keys when you generate your first ad"
 }
 
 # Required on Windows: images catalog through ffmpeg too (no sips).
-if (Has 'ffmpeg')   { Ok 'ffmpeg present' }   else { Bad 'ffmpeg missing (needed for media cataloging): winget install Gyan.FFmpeg' }
-if (Has 'yt-dlp')   { Ok 'yt-dlp present' }   else { Warn 'yt-dlp missing (optional — URL/social pulls): winget install yt-dlp.yt-dlp' }
+if (Has 'ffmpeg')   { Ok 'ffmpeg present' }   else { Warn "ffmpeg isn't installed yet (you'll need it to make videos; your agent will help when the time comes)" }
+if (Has 'yt-dlp')   { Ok 'yt-dlp present' }   else { Warn "yt-dlp isn't installed (optional — only for pulling videos from links)" }
 
 # Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
 # The bare "python" on Windows can be the Microsoft Store stub, so check that it actually runs.
@@ -98,9 +99,11 @@ if ($LASTEXITCODE -eq 0 -and $pyv -match '^Python 3') {
   Ok "$pyv present"
   python -c 'import PIL' 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Ok 'Pillow present' }
-  else { Warn 'Pillow missing (needed for pull-fonts.py): pip install pillow' }
+  else { Warn "Pillow isn't installed (only needed for font work — your agent will install it if you need it)" }
 } else {
-  Warn 'Python missing (needed for pull-fonts.py and edit-song.py): winget install Python.Python.3.12   (then: pip install pillow)'
+  Warn "Python isn't installed (only needed for font and song work — your agent will help if you need it)"
 }
 
 Write-Host 'Done.'
+Write-Host ''
+Get-Content (Join-Path $PSScriptRoot 'welcome.txt')

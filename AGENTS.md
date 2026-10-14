@@ -3,6 +3,19 @@
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
+## First-time setup
+
+When the user asks to set up the kit from its GitHub link:
+
+1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
+   `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
+2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows). It installs what's missing
+   and ends with the welcome message (`tools/welcome.txt`). Only a failed Node install blocks;
+   everything else can wait. Never ask for keys during setup — they come later, when the user
+   generates their first ad.
+3. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals` (no keys needed).
+4. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
+
 ## Changing the kit
 
 Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
@@ -90,21 +103,6 @@ Steps (each owns its procedure and rules):
 - **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, write-prompt,
   generate-voice, add-music, generate-sfx, caption-video, edit-video
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
-
-## First-time setup
-
-When the user asks to set up the kit from its GitHub link:
-
-1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
-   `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
-2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows) and fix what its health
-   check flags.
-3. Copy `.env.example` to `.env`, open it for them, and say which keys to add and where to get
-   them. They paste keys into the file, never into chat. Ask whether they work solo or as a team:
-   a team needs R2; solo can skip it, but then
-   needs a kie key, which hosts reference images for generation.
-4. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`.
-5. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
 
 ## Operating principles
 
