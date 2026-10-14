@@ -1,5 +1,5 @@
-﻿# setup.ps1 — Windows twin of setup.sh, idempotent, no keys: Node LTS via winget when missing, npm deps
-# and the git hooks, then the welcome (tools\welcome.txt). Works in Windows PowerShell 5.1 and PowerShell 7.
+﻿# setup.ps1 — Windows twin of setup.sh, idempotent, no keys: Node LTS via winget when missing, npm deps,
+# the shared library and the git hooks, then the welcome (tools\welcome.txt). Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
 
@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Continue'
 Set-Location (Split-Path -Parent $PSScriptRoot)   # repo root (this script lives in tools\)
 
 function Ok($msg)   { Write-Host '  ' -NoNewline; Write-Host ([char]0x2713) -ForegroundColor Green  -NoNewline; Write-Host " $msg" }
+function Warn($msg) { Write-Host '  ' -NoNewline; Write-Host ([char]0x2022) -ForegroundColor Yellow -NoNewline; Write-Host " $msg" }
 # Bad <problem> [details]: print, then stop.
 function Bad($msg, $details = @()) {
   Write-Host '  ' -NoNewline; Write-Host ([char]0x2717) -ForegroundColor Red -NoNewline; Write-Host " $msg"
@@ -55,6 +56,10 @@ foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio
   }
   Ok "$($d[2]) ready"
 }
+
+node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) { Ok 'Shared library ready (music, sound effects, references)' }
+else { Warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry." }
 
 # ── git hooks: block commits that mention a client workspace or brand (the repo is public) ──
 if (Has 'git') { git config core.hooksPath .githooks 2>&1 | Out-Null }

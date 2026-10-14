@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup.sh — install and first-run setup on macOS and Linux: idempotent, no admin password, no keys.
 # Downloads the kit when run outside it, installs Node (and on macOS ffmpeg 8) under ~/.local when
-# missing, the npm deps and the git hooks, then prints the welcome (tools/welcome.txt). Any failure
+# missing, the npm deps, the shared library and the git hooks, then prints the welcome (tools/welcome.txt). Any failure
 # stops it with a plain-language fix.
 #
 # Usage: curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
@@ -186,6 +186,9 @@ main() {
   case "$(command -v node) $(command -v ffmpeg)" in *"$HOME/.local/"*) add_to_path ;; esac
   npm_deps . "the kit's tools" "Kit tools"
   npm_deps studio "the studio app" "Studio app"
+  node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals </dev/null >"$LOG" 2>&1 \
+    && ok "Shared library ready (music, sound effects, references)" \
+    || warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry."
   # Blocks commits that mention a client workspace or brand (the repo is public).
   git config core.hooksPath .githooks 2>/dev/null
   rm -f "$LOG"
