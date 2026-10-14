@@ -19,15 +19,15 @@ NEW_PATH=0
 
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "  \033[33m•\033[0m %s\n" "$1"; }
-# fail <problem> [fix lines…]: print, then stop.
+# fail [-l] <problem> [fix lines…]: print (-l: and the tail of $LOG), then stop.
 fail() {
+  local log=0; [ "$1" = -l ] && { log=1; shift; }
   printf "  \033[31m✗\033[0m %s\n" "$1"; shift
   for line in "$@"; do printf "    %s\n" "$line"; done
+  [ "$log" = 1 ] && [ -s "$LOG" ] && { echo "    What went wrong:"; tail -n 8 "$LOG" | sed 's/^/      /'; }
   printf "\nSetup stopped. Once that's fixed, run the same command again: it picks up where it left off.\n"
   exit 1
 }
-# The tail of $LOG, indented, for a failed step.
-details() { [ -s "$LOG" ] && { echo "    What went wrong:"; tail -n 8 "$LOG" | sed 's/^/      /'; }; }
 pretty() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
 is_kit() { grep -qs '"name": "ad-production-kit-tools"' "$1/package.json"; }
 sha256() { { command -v sha256sum >/dev/null && sha256sum "$1" || shasum -a 256 "$1"; } | cut -d' ' -f1; }
@@ -64,7 +64,7 @@ get_kit() {
     fail "$(pretty "$dir") already exists and isn't the kit." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
   else
     need_git
-    git clone -q "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || { details; fail "Couldn't download the kit." "$offline"; }
+    git clone -q "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download the kit." "$offline"
     ok "Downloaded the kit to $(pretty "$dir")"
   fi
   cd "$dir" || fail "Couldn't open $(pretty "$dir")."
@@ -92,14 +92,14 @@ install_node() {
     && fail "This Linux (musl, e.g. Alpine) can't run Node's ready-made build." "$manual"
   echo "  Installing Node to ~/.local/node (no admin password needed)…"
   line=$(curl -fsSL "$base/SHASUMS256.txt" 2>>"$LOG" | grep -E "  node-v24\.[0-9]+\.[0-9]+-$os-$arch\.tar\.gz$" | head -1)
-  [ -n "$line" ] || { details; fail "Couldn't reach nodejs.org to download Node." "$offline"; }
+  [ -n "$line" ] || fail -l "Couldn't reach nodejs.org to download Node." "$offline"
   name=${line##* }
   tmp=$(mktemp -d)
-  curl -fL "$(progress)" "$base/$name" -o "$tmp/$name" 2>>"$LOG" || { details; fail "The Node download failed." "$offline"; }
+  curl -fL "$(progress)" "$base/$name" -o "$tmp/$name" 2>>"$LOG" || fail -l "The Node download failed." "$offline"
   [ "$(sha256 "$tmp/$name")" = "${line%% *}" ] || fail "The Node download arrived damaged." "$offline"
-  tar -xzf "$tmp/$name" -C "$tmp" 2>>"$LOG" || { details; fail "Couldn't unpack Node." "$manual"; }
+  tar -xzf "$tmp/$name" -C "$tmp" 2>>"$LOG" || fail -l "Couldn't unpack Node." "$manual"
   "$tmp/${name%.tar.gz}/bin/node" -v >"$LOG" 2>&1 \
-    || { details; fail "Node's $os-$arch build doesn't run on this computer." "$manual"; }
+    || fail -l "Node's $os-$arch build doesn't run on this computer." "$manual"
   rm -rf "$HOME/.local/node" && mkdir -p "$HOME/.local" && mv "$tmp/${name%.tar.gz}" "$HOME/.local/node"
   rm -rf "$tmp"; hash -r
   node_ok || fail "Node installed but doesn't run." "$manual"
@@ -129,7 +129,7 @@ npm_deps() {  # <folder> <what it installs> <name>
   if ! [ "$1/node_modules/.package-lock.json" -nt "$1/package.json" ]; then
     echo "  Installing $2…"
     npm install --prefix "$1" --no-fund --no-audit </dev/null >"$LOG" 2>&1 \
-      || { details; fail "Couldn't install $2." "$offline"; }
+      || fail -l "Couldn't install $2." "$offline"
   fi
   ok "$3 ready"
 }
