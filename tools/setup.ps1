@@ -51,7 +51,7 @@ $fresh = { param($dir) (Test-Path "$dir\node_modules\.package-lock.json") -and (
 foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio app', 'Studio app'))) {
   if (-not (& $fresh $d[0])) {
     Write-Host "  Installing $($d[1])..."
-    $log = npm install --prefix $d[0] --no-fund --no-audit 2>&1
+    $log = npm ci --prefix $d[0] --no-fund --no-audit 2>&1
     if ($LASTEXITCODE -ne 0) { Bad "Couldn't install $($d[1]): check your internet connection." ($log | Select-Object -Last 8) }
   }
   Ok "$($d[2]) ready"
