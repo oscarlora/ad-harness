@@ -143,5 +143,7 @@ When the user asks to set up ADPK from its GitHub link:
   `origin/main`; if behind, offer `git fetch origin && git reset --hard origin/main` (brand work and
   `.env` are untracked, so it's safe), with what's new: the commit subjects
   (`git log --format=%s HEAD..origin/main`) as a few plain bullets of what the user can now do. Never `git pull`; never `git clean` (it deletes brand work
-  and `.env`). If `node` or `node_modules/` is missing, run `bash tools/setup.sh`. Tell users
+  and `.env`). After updating, run `npm install`, then list the `.env` keys that `.env.example` no
+  longer mentions (names only, never values) and offer to delete those lines. If `node` or
+  `node_modules/` is missing, run `bash tools/setup.sh`. Tell users
   plainly — "there's a newer version; updating won't touch your brand work" — without git jargon.
