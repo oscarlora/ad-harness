@@ -5,6 +5,7 @@ import { normalize, settle } from './doc.js';
 import { drawFrame, needs } from './draw.js';
 import { Grader } from './grade.js';
 import { Media, loadFonts } from './media.js';
+import { motionKit } from './motion.js';
 
 // canvas: where frames are drawn (its width sets the scale). url(src): fetchable URL of a doc path.
 // load(doc, fxUrl): fxUrl is the URL of the doc's fx module (custom layers, transitions, animations), if any.
@@ -22,8 +23,9 @@ export async function createEngine({ canvas, url }) {
     const fx = fxUrl ? await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ fxUrl).catch((e) => { media.errors.push(`fx: ${e.message}`); return null; }) : null;
     grader ??= new Grader();
     doc = d;
-    env = { W: d.W, H: d.H, fps: d.fps, k: canvas.width / d.W, cw: canvas.width, ch: canvas.height, grader, fx, scratch: {} };
-    const key = JSON.stringify([d.loudness, d.tracks.map((tr) => [tr.mute, tr.volume, tr.clips.map((c) => [c.type, c.src, c.at, c.end, c.in, c.rate, c.mute, c.volume, c.fadeIn, c.fadeOut, c.loop])])]);
+    env?.motion.dispose();
+    env = { W: d.W, H: d.H, fps: d.fps, k: canvas.width / d.W, cw: canvas.width, ch: canvas.height, grader, fx, scratch: {}, motion: motionKit() };
+    const key = JSON.stringify([d.loudness, d.tracks.map((tr) => [tr.mute, tr.volume, tr.clips.map((c) => [c.type, c.src && url(c.src), c.at, c.end, c.in, c.rate, c.mute, c.volume, c.fadeIn, c.fadeOut, c.loop])])]);
     if (key !== audioKey) { sounds = null; audioKey = key; audio(new OfflineAudioContext(2, 1, 48000)).catch(() => {}); } // decode ahead of play
     return d;
   }
@@ -76,7 +78,7 @@ export async function createEngine({ canvas, url }) {
     get doc() { return doc; },
     errors: media.errors,
     async mix() { await audio(new OfflineAudioContext(2, 1, 48000)); return limit(await mixdown(doc, sounds, gain)); },
-    close: () => media.close(),
+    close: () => { env?.motion.dispose(); return media.close(); },
   };
 }
 

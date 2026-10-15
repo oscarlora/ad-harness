@@ -1,4 +1,4 @@
-// Serves a brand file by brand-relative path (?p=…); paths outside the brand dir 403.
+// Serves a brand file by brand-relative path (?p=…); paths outside the brand dir and the shared library 403.
 // A media original missing locally (light sync) redirects to a presigned R2 URL when creds exist.
 // &w=<px> serves an image fit within px instead: made once per file version, cached outside the brand.
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { within } from '../../../../../lib/server/brands.js';
+import { sharedLibraryDir } from '../../../../../lib/server/root.js';
 import { catalogLib, r2For } from '../../../../../lib/server/tools.js';
 import { brandRoute, fileResponse, jsonRes } from '../../../../../lib/server/http.js';
 
@@ -34,7 +35,7 @@ export const GET = brandRoute(async (req, ctx) => {
   const rel = q.get('p') || '';
   if (!rel || rel.includes('\0')) return jsonRes({ error: 'bad path' }, 400);
   const abs = resolve(ctx.dir, rel);
-  if (!within(ctx.dir, abs)) return jsonRes({ error: 'forbidden' }, 403);
+  if (!within(ctx.dir, abs) && !within(sharedLibraryDir(), abs)) return jsonRes({ error: 'forbidden' }, 403);
 
   const relPosix = rel.replace(/\\/g, '/');
   if (!existsSync(abs) && relPosix.startsWith('inputs/media/')) {

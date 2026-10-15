@@ -55,12 +55,13 @@ function UpdatedFlash({ at }) {
 
 // Every brand page's frame: navigation on top; the bottom bar has the count, the page's search (centered)
 // and its other controls (children, on the right).
-export function Bars({ ws, brand, current, count, updatedAt, search, children }) {
+// bottom={false}: no control bar (an ad's page, whose editor keeps its timeline at the bottom).
+export function Bars({ ws, brand, current, count, updatedAt, search, children, bottom = true }) {
   return (
     <>
       <header className="navbar">
         <div className="navbar__path">
-          <Link className="navbar__home" href="/?all=1" title="All brands">Ad Production Kit</Link>
+          <Link className="navbar__home" href="/?all=1" title="All brands">ADPK</Link>
           <Switcher ws={ws} brand={brand} />
         </div>
         <nav className="tabs" aria-label="Sections">
@@ -71,11 +72,13 @@ export function Bars({ ws, brand, current, count, updatedAt, search, children })
           ))}
         </nav>
       </header>
-      <footer className="controlbar">
-        <div className="controlbar__start"><span className="bar__count">{count}</span><UpdatedFlash at={updatedAt} /></div>
-        {search || <span />}
-        <div className="controlbar__end">{children}</div>
-      </footer>
+      {bottom && (
+        <footer className="controlbar">
+          <div className="controlbar__start"><span className="bar__count">{count}</span><UpdatedFlash at={updatedAt} /></div>
+          {search || <span />}
+          <div className="controlbar__end">{children}</div>
+        </footer>
+      )}
     </>
   );
 }

@@ -13,7 +13,7 @@ import { analyzeMany } from './analyze-media.mjs';
 import { embedAll } from './embed-media.mjs';
 import { buildIndex } from './record-media.mjs';
 import { r2FromEnv } from './lib/r2.mjs';
-import { requireKey } from './lib/gateway.mjs';
+import { requireKeys, spendText } from './lib/analyze.mjs';
 import { readDriveSources, writeDriveSources } from './lib/drive.mjs';
 
 const TOOLS = fileURLToPath(new URL('.', import.meta.url));
@@ -26,7 +26,8 @@ const HELP = `catalog-media.mjs — media to searchable library: pull → probe 
     --source     what to add; without it, finishes what is pending and pushes
     --jobs       videos probed at once (default 2)
     --no-push    keep the library local (default: push to R2 when the workspace has keys)
-    --dry-run    list what a Drive folder pull would download, then stop`;
+    --dry-run    list what a Drive folder pull would download, then stop
+Analysis: Gemini on kie.ai (<WS>_KIE_API_KEY). Search vectors are made locally (no key).`;
 
 const a = parseArgs(process.argv.slice(2), { flags: ['no-push', 'dry-run'], help: HELP });
 if (!a.brand) usage(HELP);
@@ -34,7 +35,7 @@ if (a.jobs) process.env.MEDIA_JOBS = String(a.jobs);
 const brand = resolve(a.brand);
 const paths = catalogPaths(brand);
 const media = paths.media;
-if (!a['dry-run']) requireKey(media); // fail before any work
+if (!a['dry-run']) requireKeys(media); // fail before any work
 
 // 1. Pull — local folders are probed in place; links go through pull-media into a temp cache.
 let dir = null, cache = null, drive = null;
@@ -84,7 +85,7 @@ try {
   // 4. Vectors + index.
   await embedAll({ media });
   const n = buildIndex(catalogPaths(media));
-  console.log(`catalog: ${n} assets · analysis $${res.usd.toFixed(4)}${res.failed.length ? ` · ${res.failed.length} failed analysis (re-run to retry)` : ''}`);
+  console.log(`catalog: ${n} assets · analysis ${spendText()}${res.failed.length ? ` · ${res.failed.length} failed analysis (re-run to retry)` : ''}`);
 
   // 5. Push to R2 when the workspace has creds — originals only when some were added or renamed.
   if (!a['no-push']) {

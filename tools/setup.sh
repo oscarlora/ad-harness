@@ -1,6 +1,6 @@
 #!/bin/bash
-# setup.sh — machine setup, idempotent, no admin password or Homebrew. Installs Node and ffmpeg 8
-# under ~/.local when missing, npm deps and the git hooks, then prints a health check.
+# setup.sh — machine setup, idempotent, no admin password or Homebrew. Installs Node, ffmpeg 8 and
+# whisper.cpp under ~/.local when missing, npm deps and the git hooks, then prints a health check.
 #
 # Usage: bash tools/setup.sh
 set -u
@@ -49,13 +49,13 @@ if [ "$NEED_NODE" = 1 ]; then
   ok "Installed Node $(node -v)$NOTE"
 fi
 
-# ── npm deps (Vercel AI Gateway, the video export) — again whenever package.json changed ──
+# ── npm deps (media search embeddings, Vercel AI Gateway, the video export) — again whenever package.json changed ──
 if [ -d node_modules ] && [ node_modules/.package-lock.json -nt package.json ]; then
   ok "npm deps present"
 else
   npm install --no-fund --no-audit >/dev/null 2>&1 \
     && ok "npm deps installed" \
-    || warn "npm install failed — the media library and the Vercel AI Gateway provider won't work until it succeeds"
+    || warn "npm install failed — semantic media search, the video export and the Vercel AI Gateway won't work until it succeeds"
 fi
 
 # ── git hooks ────────────────────────────────────────────────────────────────
@@ -118,6 +118,29 @@ if [ "$(uname)" = "Darwin" ] && [ "${FF_MAJ:-0}" -lt 8 ]; then
   fi
 fi
 
+# ── whisper.cpp (word timings for captions): Homebrew's when present, else built from source into
+# ~/.local/bin with a throwaway CMake (Xcode Command Line Tools compile it). Its model downloads on first use.
+if [ "$(uname)" = "Darwin" ] && ! command -v whisper-cli >/dev/null 2>&1; then
+  if command -v brew >/dev/null 2>&1; then
+    brew install whisper-cpp >/dev/null 2>&1
+  else
+    echo "  Building whisper.cpp into ~/.local/bin (about a minute)…"
+    W_TMP=$(mktemp -d)
+    CM_URL=$(curl -fsSL https://api.github.com/repos/Kitware/CMake/releases/latest | grep -oE 'https://[^"]+-macos-universal\.tar\.gz' | head -1)
+    W_TAG=$(curl -fsSL https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest | grep -oE '"tag_name": *"v[0-9.]+"' | grep -oE 'v[0-9.]+')
+    if [ -n "$CM_URL" ] && [ -n "$W_TAG" ] \
+      && curl -fsSL "$CM_URL" | tar -xz -C "$W_TMP" \
+      && curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/$W_TAG.tar.gz" | tar -xz -C "$W_TMP"; then
+      CM=$(echo "$W_TMP"/cmake-*/CMake.app/Contents/bin/cmake)
+      "$CM" -S "$(echo "$W_TMP"/whisper.cpp-*)" -B "$W_TMP/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+          -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF >/dev/null 2>&1 \
+        && "$CM" --build "$W_TMP/build" -j --config Release --target whisper-cli >/dev/null 2>&1 \
+        && mkdir -p "$HOME/.local/bin" && mv "$W_TMP/build/bin/whisper-cli" "$HOME/.local/bin/" && ensure_path_line
+    fi
+    rm -rf "$W_TMP"
+  fi
+fi
+
 # ── Health check ─────────────────────────────────────────────────────────────
 echo "Health check"
 if [ -f .env ]; then
@@ -133,6 +156,7 @@ elif [ "${FF_V%%.*}" -ge 8 ]; then
 else
   warn "ffmpeg $FF_V is older than 8 — video tools may misbehave; on macOS re-run this setup, on Linux update it with your package manager"
 fi
+command -v whisper-cli >/dev/null 2>&1 && ok "whisper-cli present" || warn "whisper-cli missing (word timings for captions): on macOS re-run this setup (it needs the Xcode Command Line Tools: xcode-select --install), on Linux build whisper.cpp from github.com/ggml-org/whisper.cpp into ~/.local/bin"
 command -v yt-dlp  >/dev/null 2>&1 && ok "yt-dlp present"  || warn "yt-dlp missing (optional — URL/social pulls): brew install yt-dlp, or drop a static build into ~/.local/bin (media tools already look there)"
 # Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
 if PYV=$(python3 --version 2>&1) && [[ "$PYV" == "Python 3"* ]]; then

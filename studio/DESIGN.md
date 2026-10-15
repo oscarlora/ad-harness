@@ -13,7 +13,7 @@ calm, built for scanning many ads fast.
 ## Colors
 
 - Surfaces: `--bg` content · `--bg-subtle` viewer stage and empty frames · `--fill` segmented-control
-  tracks and hover · `--fill-strong` pressed and timeline clips · `--media-bg` behind media ·
+  tracks and hover · `--fill-soft` the editor timeline's track bands · `--fill-strong` pressed and timeline clips · `--media-bg` behind media ·
   `--glass` the translucent white of bars and controls floating over content or media
 - Text: `--fg` primary (`--fg-hover` on the primary button) · `--muted-emphasis` body in tables and
   panels · `--muted` labels and meta · `--faint` placeholders, to-do steps, hollow dots, waveforms ·
@@ -38,7 +38,10 @@ calm, built for scanning many ads fast.
 - Pages pad by `--page-pad` (20px). Every brand page has two translucent bars (`--bar-h`): the
   navigation bar on top (home / workspace / brand on the left, page tabs on the right) and the control bar fixed at
   the bottom (the page's count on the left, its search centered, its filters and actions on the right). Navigation
-  never goes in the bottom bar, page controls never in the top one.
+  never goes in the bottom bar, page controls never in the top one. An ad's page has no control bar: one row
+  under the navigation holds back, ID and name, and the step tabs; its editor keeps the timeline fixed at the
+  bottom, with the preview and notes filling the space above (preview and notes on `--bg-subtle`, the
+  timeline on `--fill`).
 - The Board and the media library are masonry grids: 4 columns from 1200px, 3 from 900, 2 from
   640, else 1; each item keeps its own shape. The Workflow list caps at 64rem, centered; prose caps
   at 46rem.
@@ -68,6 +71,12 @@ and nav buttons. A dashed border means empty or a draft.
 - **Segmented control** `.tabs` / `.chips`: a `--fill` track; the selected segment is white and
   raised. Used for page tabs, status filters, clip takes and plan versions.
 - **Step bar** `.flow-steps`: underlined tabs with a progress dot and count.
+- **Markdown editor** `.mde`: rendered markdown; a block or table cell turns into its raw text on click, framed
+  by a hairline (a cell by a 1.5px `--fg` inset). Grips (`--faint`) sit in a margin outside the content and show on hover: left of a block; for a table, the
+  hovered column's in a strip above the header, the hovered row's in a left gutter.
+  A 2px `--fg` line marks where a drag drops. A clicked grip selects its block, row or column (`--fill`) and opens a
+  floating menu (`--shadow-float`), Delete last under a hairline. "New row" shows under a hovered table. Selected text gets a floating Comment button; notes on the text list
+  beside it like the editor's, their quotes marked with `--fill-strong` and an underline.
 - **Input / select** `.input` `.select` `.field`: 32px, 1px `--line` border that darkens on hover.
   `.select--ghost` drops the border (navigation bar switcher).
 - **Badge** `.badge`: status dot and word. **Pill mark** `.pill-mark`: a `--fill` tag.
@@ -86,8 +95,11 @@ and nav buttons. A dashed border means empty or a draft.
   otherwise they and ↑ / ↓ move between files. Library videos mark scene cuts on the progress bar
   (hover shows that moment's frame, time and scene) and show their transcript as captions (toggle);
   library audio shows its waveform and transcript (the word being said lit) above the controls.
-  The guide button cycles overlays on any video or image: the 4:5 and 1:1 feed crops it can be cut
-  to, then (9:16 only) Meta's Reels safe zone, then off.
+  The guide button cycles overlays on any video or image, and on the editor's preview: the 4:5 and 1:1
+  feed crops it can be cut to, then (9:16 only) Meta's Reels safe zone, then off.
+- **Trim panel** `.trim`: a floating panel above the editor's timeline: the clip's picture, its whole source as two
+  strips (frames, waveform), and the part it plays as a dark-edged selection over both to drag (edges, or the middle
+  to slide); letting go plays the new cut.
 - **Toast** `.toast`: near-black, bottom center, slides up 6px.
 - **Focus**: always visible, `--focus-ring`.
 

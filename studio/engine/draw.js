@@ -130,14 +130,14 @@ function glyphs(ctx, s, x, y, st, color, sc, px) {
 function rows(tokens, maxWidth, space) {
   const out = [];
   let row = [], width = 0;
+  const gap = (tk) => (row.length && !tk.glue ? space : 0);
   for (const tk of tokens) {
-    const add = (row.length ? space : 0) + tk.w;
-    if (row.length && (width + add > maxWidth || tk.br)) { out.push({ row, width }); row = []; width = 0; }
-    width += (row.length ? space : 0) + tk.w;
+    if (row.length && (tk.br || (!tk.glue && width + gap(tk) + tk.w > maxWidth))) { out.push({ row, width }); row = []; width = 0; }
+    width += gap(tk) + tk.w;
     row.push(tk);
   }
   if (row.length) out.push({ row, width });
-  for (const r of out) { let x = -r.width / 2; for (const tk of r.row) { tk.x = x; x += tk.w + space; } }
+  for (const r of out) { let x = -r.width / 2; r.row.forEach((tk, i) => { if (i && !tk.glue) x += space; tk.x = x; x += tk.w; }); }
   return out;
 }
 
@@ -147,14 +147,16 @@ const DEFAULT_TEXT = { size: 64, color: '#FFFFFF', lineHeight: 1.15 };
 function parseText(text, accent) {
   const out = [];
   String(text ?? '').split('\n').forEach((line, li) => {
-    let inside = false, first = true;
+    let inside = false, first = true, open = false; // open: the last part ended mid-word ("{belly fat}:" glues the ":")
     for (const part of line.split(/([{}])/)) {
       if (part === '{' || part === '}') { inside = part === '{'; continue; }
       const [words, color] = inside ? part.split('|') : [part];
-      for (const word of words.split(/\s+/).filter(Boolean)) {
-        out.push({ s: word, br: li > 0 && first, ...(inside && { color: color?.trim() || accent }) });
+      words.split(/\s+/).forEach((word, i) => {
+        if (!word) return;
+        out.push({ s: word, br: li > 0 && first, glue: i === 0 && open, ...(inside && { color: color?.trim() || accent }) });
         first = false;
-      }
+      });
+      if (words) open = !/\s$/.test(words);
     }
   });
   return out;
@@ -310,6 +312,7 @@ const oppo = (d) => ({ left: 'right', right: 'left', up: 'down', down: 'up' }[d]
 // ---- one frame ----
 // An ad's fx.js (doc.fx) may export layers { name(ctx, clip, t, env) }, transitions
 // { name(ctx, paintA, paintB, p, env, params) } and animations { name(p) -> { o, s, dx, dy, b } }.
+// A layer animates with env.motion (GSAP timelines, Three.js scenes; see motion.js).
 // frames: clip id -> its decoded frame or image. Tracks draw bottom-up: the first track is on top.
 export function drawFrame(ctx, doc, t, frames, env) {
   ctx.setTransform(env.k, 0, 0, env.k, 0, 0);

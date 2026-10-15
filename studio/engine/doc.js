@@ -82,3 +82,80 @@ export const live = (c, t) => t >= c.at - tin(c) / 2 && t < c.end + tout(c) / 2;
 
 // Source time of a media clip at timeline time t.
 export const srcTime = (c, t) => c.in + (t - c.at) * c.rate;
+
+export const r3 = (x) => Math.round(x * 1000) / 1000;
+export const endOf = (c) => c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : null);
+
+// Every keyframed value in o and its nested objects (not in clips, caption lines or transitions): fn(holder, key, keys, path).
+function eachKeyed(o, fn, path = []) {
+  for (const [k, v] of Object.entries(o || {})) {
+    if (keyed(v)) fn(o, k, v, path);
+    else if (v && typeof v === 'object' && !Array.isArray(v) && k !== 'transition') eachKeyed(v, fn, [...path, k]);
+  }
+}
+
+// Every timeline time in a raw document (clip spans, caption lines and words, keyframes) through f; clips in skip stay.
+export function mapTimes(doc, f, skip = new Set()) {
+  const keys = (o) => eachKeyed(o, (h, k, v) => { h[k] = v.map(([t, ...rest]) => [f(t), ...rest]); });
+  for (const tr of doc.tracks || []) {
+    keys(tr);
+    for (const c of tr.clips || []) {
+      if (skip.has(c)) continue;
+      const e = endOf(c);
+      c.at = f(c.at ?? 0);
+      if (e != null) { c.end = f(e); delete c.dur; }
+      keys(c);
+      if (c.lines) c.lines = c.lines.map((l) => ({ ...l, at: f(l.at), end: f(l.end), ...(l.words && { words: l.words.map(([w, s, e2, ...x]) => [w, f(s), f(e2), ...x]) }) }));
+    }
+  }
+}
+
+// A version that only changes the hook: { base: "edit.json", from: "Body1", tracks: [its hook's clips, on tracks named
+// like the base's] } plays its own clips, then the base from where the base's first clip named `from` starts, so body
+// edits happen once, in the base. Track keyframes: its own before the body, the base's after. Its other fields
+// override the base's; the base's output is dropped. Each clip carries ORIGIN: [own?, track, clip] (indices in the file it comes from).
+export const ORIGIN = Symbol('origin');
+export function compose(raw, base) {
+  if (base.base) throw new Error(`${raw.base} has a base itself`);
+  const doc = structuredClone(base);
+  const starts = (doc.tracks || []).flatMap((tr) => (tr.clips || []).filter((c) => c.name === raw.from).map((c) => c.at ?? 0));
+  if (!starts.length) throw new Error(`${raw.base} has no clip named "${raw.from}" (the version's "from")`);
+  const start = Math.min(...starts), own = structuredClone(raw.tracks || []);
+  const head = Math.max(0, ...own.flatMap((tr) => (tr.clips || []).map((c) => endOf(c) ?? 0)));
+  // The base before `from` goes: keyframes hold the value they had there, clips crossing it start there.
+  const cutKeys = (h, k, v) => {
+    const i = v.findLastIndex(([t]) => t <= start);
+    if (i >= 0) h[k] = [[start, val(v, start), v[i][2]], ...v.slice(i + 1)];
+  };
+  (doc.tracks ||= []).forEach((tr, ti) => {
+    eachKeyed(tr, cutKeys);
+    tr.clips = (tr.clips || []).flatMap((c, ci) => {
+      c[ORIGIN] = [false, ti, ci];
+      const e = endOf(c), at = c.at ?? 0;
+      if (e != null && e <= start + 1e-3) return [];
+      if (at < start) {
+        if (c.src) c.in = r3((c.in ?? 0) + (start - at) * (c.rate ?? 1));
+        if (c.lines) c.lines = c.lines.filter((l) => l.end > start);
+        c.at = start;
+        eachKeyed(c, cutKeys);
+      }
+      return [c];
+    });
+  });
+  mapTimes(doc, (t) => r3(t - start + head));
+  own.forEach((otr, oi) => {
+    (otr.clips ||= []).forEach((c, ci) => { c[ORIGIN] = [true, oi, ci]; });
+    let tr = doc.tracks.find((x) => x.name === otr.name);
+    if (!tr) doc.tracks.unshift(tr = { ...otr, clips: [] });
+    else eachKeyed(otr, (h, k, v, path) => {
+      let o = tr;
+      for (const p of path) o = o[p] ||= {};
+      o[k] = [...v.filter(([t]) => t < head), ...(keyed(o[k]) ? o[k] : o[k] != null ? [[head, o[k]]] : [])];
+    });
+    tr.clips = [...otr.clips, ...tr.clips];
+  });
+  const { base: _b, from: _f, tracks: _t, ...rest } = raw;
+  delete doc.output;
+  if (doc.duration != null) doc.duration = r3(doc.duration - start + head);
+  return Object.assign(doc, rest);
+}

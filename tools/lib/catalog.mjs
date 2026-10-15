@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync, mkdirSync, createReadStream, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join, resolve, basename, extname, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,6 +130,23 @@ export function loadEnv(root = REPO_ROOT) {
 // loadEnv() into process.env, never overriding what the shell already set.
 export function applyEnv() {
   for (const [k, v] of Object.entries(loadEnv())) if (!(k in process.env)) process.env[k] = v;
+}
+
+// ---------- editing lock ----------
+// <ad folder>/.editing.json { session, at }: the ad is being edited and not pushed yet. sync-brand's pull leaves the
+// folder alone, push releases it (and leaves out a folder another session holds), and its review notes go to that
+// session. Studio's own edits mark it "studio", which any session may take.
+export const EDITING = '.editing.json';
+export const sessionId = () => process.env.CLAUDE_CODE_SESSION_ID || process.env.ADPK_SESSION || hostname();
+export function readEditing(adDir) {
+  try { return JSON.parse(readFileSync(join(adDir, EDITING), 'utf8')); } catch { return null; }
+}
+// Marks the ad as edited by `session` (null: Studio) and returns who holds it: the first session keeps it unless take.
+export function markEditing(adDir, session = sessionId(), take = false) {
+  const cur = readEditing(adDir)?.session;
+  const holder = take || !cur || cur === 'studio' ? session || cur || 'studio' : cur;
+  writeFileSync(join(adDir, EDITING), JSON.stringify({ session: holder, at: new Date().toISOString() }) + '\n');
+  return holder;
 }
 
 export function inferWorkspace(p) {

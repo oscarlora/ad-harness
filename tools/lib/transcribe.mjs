@@ -1,17 +1,19 @@
 // transcribe.mjs — speech for the media catalog and for captions.
 //   transcribeAudio (catalog time) — ANALYSIS_MODEL on a mono 16 kHz track → sentence transcript
 //     (speakers S1, S2…) plus a portrait of the sound. Sentence times are ±1 s: fine for search, not captions.
-//   alignWords (caption time only) — WORDS_MODEL word timestamps mapped onto that sentence text, then
-//     each word edge snapped to speech energy (the model's ends run ~0.15 s late at pauses).
+//   alignWords (caption time only) — local Whisper (whisper.cpp) word timestamps mapped onto that
+//     sentence text, then each word edge snapped to speech energy.
 //
 // Shapes:
 //   catalog transcript  { language, text, segments:[{start,end,speaker,text}], model }
 //   + alignWords        words:[{start,end,word,speaker}], words_model; segments re-timed from the words
-import { mkdtempSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir, availableParallelism } from 'node:os';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { have, run, ffprobeJson, readRoster, inferBrand, pcm, round } from './catalog.mjs';
-import { generateJSON, filePart, transcribeWords, ANALYSIS_MODEL, INLINE_MAX, WORDS_MODEL } from './gateway.mjs';
+import { generateJSON, filePart, ANALYSIS_MODEL, INLINE_MAX } from './analyze.mjs';
 import { buildAudioPrompt, buildAudioSchema, buildMergePrompt, buildMergeSchema } from './analysis-prompt.mjs';
 
 const SILENT_DB = -50; // a track whose loudest peak is below this is silence (digital silence reads -91)
@@ -26,7 +28,9 @@ export function audioTrack(src, made = null) {
   const dir = made && existsSync(made) ? dirname(made) : mkdtempSync(join(tmpdir(), 'track-'));
   const path = made && existsSync(made) ? made : join(dir, 'track.mp3');
   for (const ab of path === made ? [] : ['32k', '16k']) {
-    run('ffmpeg', ['-y', '-v', 'error', '-i', src, '-vn', '-ac', '1', '-ar', '16000', '-b:a', ab, path], { allowFail: true });
+    // Pad to the file's own clock: a video's audio can start after its first frame (often ~0.5 s), and
+    // without the lead every time would run that much early against the picture.
+    run('ffmpeg', ['-y', '-v', 'error', '-copyts', '-i', src, '-vn', '-af', 'aresample=async=1:first_pts=0', '-ac', '1', '-ar', '16000', '-b:a', ab, path], { allowFail: true });
     if (existsSync(path) && statSync(path).size <= INLINE_MAX) break;
   }
   if (!existsSync(path) || statSync(path).size > INLINE_MAX) {
@@ -47,13 +51,13 @@ export function vocabulary(mediaDir) {
   return [...new Set(names.filter(Boolean).map(String))];
 }
 
-// → { has_speech, language, sentences, sound (, descriptor, tags) }. Tracks past LONG s go in ~PART s
+// keys = analysisKeys(). → { has_speech, language, sentences, sound, model (, descriptor, tags) }. Tracks past LONG s go in ~PART s
 // parts (one long call loops until its JSON is cut off), split at quiet moments, with OVERLAP s either
 // side; a text-only merge call unifies speaker numbering and portraits.
 const LONG = 180, PART = 150, OVERLAP = 2, SNAP_WINDOW = 15;
-export async function transcribeAudio(key, track, { brand, vocab = [], standalone = false } = {}) {
+export async function transcribeAudio(keys, track, { brand, vocab = [], standalone = false } = {}) {
   const dur = track.duration;
-  const call = (path, duration, part) => soundCall(key, path, { brand, vocab, standalone, duration, part });
+  const call = (path, duration, part) => soundCall(keys, path, { brand, vocab, standalone, duration, part });
   if (!dur || dur <= LONG) return call(track.path, dur, null);
 
   const cuts = splitPoints(track.path, dur, Math.ceil(dur / PART));
@@ -73,7 +77,7 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
     return (o.sentences || []).map((x) => ({ ...x, start: at(x.start), end: at(x.end) }))
       .filter((x) => { const mid = (x.start + x.end) / 2; return mid >= parts[k].own[0] && (mid < parts[k].own[1] || k === parts.length - 1); });
   });
-  const merged = await mergeParts(key, parts, outs, kept, standalone);
+  const merged = await mergeParts(keys, parts, outs, kept, standalone);
   const langs = outs.filter((o) => o.has_speech && o.language).map((o) => o.language);
   return {
     unreadable: false,
@@ -81,22 +85,26 @@ export async function transcribeAudio(key, track, { brand, vocab = [], standalon
     language: langs.sort((a, b) => langs.filter((l) => l === b).length - langs.filter((l) => l === a).length)[0] || '',
     sentences: numberSpeakers(kept.flatMap((ss, k) => ss.map((x) => ({ ...x, speaker: merged.map.get(`${k + 1}:${x.speaker}`) || `part${k + 1}:${x.speaker}` })))),
     sound: merged.sound,
+    model: [...new Set(outs.map((o) => o.model))].join(' + '),
     ...(standalone ? { descriptor: merged.descriptor, tags: merged.tags } : {}),
   };
 }
 
 // A cut-off or looping reply is retried once with a repetition limit at temperature 1; loops left
 // after that are collapsed.
-async function soundCall(key, path, { brand, vocab, standalone, duration, part }) {
+async function soundCall(keys, path, { brand, vocab, standalone, duration, part }) {
   const secs = duration ? round(duration, 1) : null;
-  const ask = (strict) => generateJSON(key, {
-    parts: [filePart(path, 'audio/mpeg'), { type: 'text', text: buildAudioPrompt({ brand, vocab, duration: secs, standalone, part, strict }) }],
-    schema: buildAudioSchema({ standalone, part: !!part }),
-    maxOutputTokens: 4000 + Math.round(25 * (secs || PART)), // a loop hits this in seconds, not minutes
-    ...(strict ? { temperature: 1 } : {}),
-  });
+  const ask = async (strict) => {
+    const { out, model } = await generateJSON(keys, {
+      parts: [filePart(path, 'audio/mpeg'), { text: buildAudioPrompt({ brand, vocab, duration: secs, standalone, part, strict }) }],
+      schema: buildAudioSchema({ standalone, part: !!part }),
+      maxOutputTokens: 8000 + Math.round(25 * (secs || PART)), // thinking counts too; a loop hits this in seconds, not minutes
+      ...(strict ? { temperature: 1 } : {}),
+    });
+    return { ...out, model };
+  };
   let out = null;
-  try { out = await ask(false); } catch (e) { if (!/NoObjectGenerated|parse/i.test(`${e?.name} ${e?.message}`)) throw e; }
+  try { out = await ask(false); } catch (e) { if (!/NoObjectGenerated|unparseable/i.test(`${e?.name} ${e?.message}`)) throw e; }
   if (!out || loops(out.sentences)) {
     console.error(`sound call ${out ? 'looped on a word' : 'returned unparseable JSON'}${part ? ` (part ${part.index}/${part.of})` : ''} — retrying with a repetition limit`);
     out = await ask(true);
@@ -150,7 +158,7 @@ function numberSpeakers(sentences) {
 }
 
 // Falls back to the parts' own labels and joined portraits when the merge call fails.
-async function mergeParts(key, parts, outs, kept, standalone) {
+async function mergeParts(keys, parts, outs, kept, standalone) {
   const input = parts.map((p, k) => {
     const lines = {};
     for (const x of kept[k]) { const l = (lines[x.speaker] ||= []); if (l.length < 3) l.push(String(x.text).slice(0, 160)); }
@@ -158,7 +166,7 @@ async function mergeParts(key, parts, outs, kept, standalone) {
     return { index: p.index, from: p.from, to: p.to, speakers, lines, sound: outs[k].sound };
   });
   try {
-    const m = await generateJSON(key, { parts: [{ type: 'text', text: buildMergePrompt({ parts: input, standalone }) }], schema: buildMergeSchema({ standalone }) });
+    const { out: m } = await generateJSON(keys, { parts: [{ text: buildMergePrompt({ parts: input, standalone }) }], schema: buildMergeSchema({ standalone }) });
     return { map: new Map((m.speakers || []).map((x) => [`${x.part}:${x.label}`, x.speaker])), sound: m.sound, descriptor: m.descriptor, tags: m.tags };
   } catch (e) {
     console.error(`merge call failed (${e.message}) — keeping each part's own speaker labels`);
@@ -172,7 +180,7 @@ export function toTranscript(out, duration) {
   const segments = (out.sentences || []).filter((s) => String(s.text || '').trim())
     .map((s) => ({ start: cl(s.start), end: Math.max(cl(s.start), cl(s.end)), speaker: String(s.speaker || 'S1').trim(), text: s.text.trim() }));
   if (!out.has_speech || !segments.length) return null;
-  return { language: String(out.language || '').toLowerCase(), text: segments.map((s) => s.text).join(' '), segments, model: ANALYSIS_MODEL };
+  return { language: String(out.language || '').toLowerCase(), text: segments.map((s) => s.text).join(' '), segments, model: out.model || ANALYSIS_MODEL };
 }
 
 // ---------- word timings ----------
@@ -232,7 +240,48 @@ function tidyTimes(times, db) {
   return w;
 }
 
-export async function alignWords({ file, transcript, key }) {
+// ---------- whisper.cpp ----------
+const WORDS_MODEL = 'whisper-large-v3-turbo';
+const WHISPER_FILE = 'ggml-large-v3-turbo-q5_0.bin';
+const WHISPER_DIR = join(homedir(), '.cache', 'adpk', 'whisper');
+
+async function whisperModel() {
+  const path = join(WHISPER_DIR, WHISPER_FILE);
+  if (existsSync(path)) return path;
+  console.error(`Downloading the Whisper model (574 MB, once) to ${WHISPER_DIR}…`);
+  mkdirSync(WHISPER_DIR, { recursive: true });
+  const res = await fetch(`https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${WHISPER_FILE}`);
+  if (!res.ok) throw new Error(`Whisper model download failed: HTTP ${res.status}`);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(`${path}.part`));
+  renameSync(`${path}.part`, path);
+  return path;
+}
+
+// → [{ word, start, end }]. DTW token times (t_dtw, 10 ms units; DTW needs flash attention off) mark
+// where each token ENDS. A word ends at its last letter/digit token and starts where the previous token
+// ended (punctuation tokens hold the pauses), or at whisper's own token start when that is later and
+// still before the end.
+async function whisperWords(wav, language) {
+  if (!have('whisper-cli')) throw new Error('whisper-cli is missing — run bash tools/setup.sh (Windows: tools\\setup.ps1)');
+  const out = join(dirname(wav), 'words');
+  run('whisper-cli', ['-m', await whisperModel(), '-f', wav, '-l', language || 'auto', '-ojf', '-of', out, '-np', '-nfa', '--dtw', 'large.v3.turbo', '-t', String(Math.min(8, availableParallelism()))]);
+  const words = [];
+  let prev = null;
+  for (const t of JSON.parse(readFileSync(`${out}.json`, 'utf8')).transcription.flatMap((s) => s.tokens)) {
+    if (/^\[_.*\]$/.test(t.text)) continue; // special tokens
+    const end = (t.t_dtw >= 0 ? t.t_dtw * 10 : t.offsets.to) / 1000;
+    if (/[\p{L}\p{N}]/u.test(t.text)) {
+      const from = t.offsets.from / 1000, lead = prev ?? end - (t.offsets.to - t.offsets.from) / 1000;
+      const start = Math.min(end, from < end ? Math.max(from, lead) : lead);
+      if (/^\s/.test(t.text) || !words.length) words.push({ word: t.text.trim(), start, end });
+      else Object.assign(words.at(-1), { word: words.at(-1).word + t.text, end });
+    }
+    prev = end;
+  }
+  return words;
+}
+
+export async function alignWords({ file, transcript }) {
   // Punctuation-only tokens ride on their neighbour.
   const words = [];
   transcript.segments.forEach((s, si) => {
@@ -242,13 +291,14 @@ export async function alignWords({ file, transcript, key }) {
     }
   });
   if (!words.length) return { ...transcript, words: [], words_model: null };
-  if (!key) throw new Error('no AI Gateway key for word timings');
 
   const track = audioTrack(file);
   if (!track) throw new Error('no audio stream');
   let times;
   try {
-    times = mapTimings(words.map((w) => w.word), await transcribeWords(key, readFileSync(track.path)));
+    const wav = join(track.dir, 'words.wav');
+    run('ffmpeg', ['-y', '-v', 'error', '-i', track.path, '-c:a', 'pcm_s16le', wav]);
+    times = mapTimings(words.map((w) => w.word), await whisperWords(wav, transcript.language));
     const db = loudness(file);
     if (db?.length) times = tidyTimes(times, db);
   } finally { rmSync(track.dir, { recursive: true, force: true }); }

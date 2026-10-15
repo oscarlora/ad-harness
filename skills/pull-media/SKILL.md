@@ -12,7 +12,7 @@ Fetch media into a local cache for **catalog-media**. Sources:
   (share the client folder with that account); without them, the public link works when shared
   "anyone with the link" (Google Docs/Vids skipped). With `--brand`, a folder pull skips files already
   in the brand's `drive-sources.json`.
-- **Air.inc** — a board share link (`app.air.inc/a/<id>/b/<board>`), no key. Sub-boards aren't walked.
+- **Air.inc** — a board share link (`app.air.inc/a/<id>/b/<board>`), no key; sub-boards included.
 - **URL** — a direct media file, or a YouTube/social link via `yt-dlp`.
 - **Dropbox / OneDrive** — not wired; download and pass the folder as a local source.
 

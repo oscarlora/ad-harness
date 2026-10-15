@@ -35,10 +35,10 @@ class Cursor {
 }
 
 export class Media {
-  // url(src) -> fetchable URL of a doc path.
+  // url(src) -> fetchable URL of a doc path; caches key on url(src), which carries the file's version.
   constructor(url) {
     this.url = url;
-    this.videos = new Map(); // src -> Promise<{ track, half, duration }>
+    this.videos = new Map(); // url -> Promise<{ track, half, duration }>
     this.cursors = new Map(); // clip id -> Cursor
     this.queue = new Map(); // clip id -> its last pending decode
     this.images = new Map();
@@ -48,18 +48,19 @@ export class Media {
   }
 
   video(src) {
-    if (!this.videos.has(src)) {
+    const key = this.url(src);
+    if (!this.videos.has(key)) {
       const p = (async () => {
-        const input = new Input({ source: new UrlSource(this.url(src)), formats: ALL_FORMATS });
+        const input = new Input({ source: new UrlSource(key), formats: ALL_FORMATS });
         const track = await input.getPrimaryVideoTrack();
         if (!track) throw new Error(`${src}: no video track`);
         const { averagePacketRate } = await track.computePacketStats(48);
         return { track, half: 0.5 / averagePacketRate, duration: await input.computeDuration() };
       })();
-      p.catch(() => this.videos.delete(src));
-      this.videos.set(src, p);
+      p.catch(() => this.videos.delete(key));
+      this.videos.set(key, p);
     }
-    return this.videos.get(src);
+    return this.videos.get(key);
   }
 
   // The frame a clip shows at source time ts (nearest frame). One call per clip at a time (a clip's decoder is
@@ -74,9 +75,12 @@ export class Media {
   // Decoders can fail transiently: retry, then fall back to software decoding.
   async decode(id, src, ts, attempt = 0) {
     const { track, half, duration } = await this.video(src);
+    const key = this.url(src);
     let c = this.cursors.get(id);
+    if (c && c.key !== key) { this.cursors.delete(id); await c.release().catch(() => {}); c = null; } // the file changed
     if (!c) {
       c = new Cursor(new VideoSampleSink(track, attempt >= 2 ? { hardwareAcceleration: 'prefer-software' } : {}));
+      c.key = key;
       this.cursors.set(id, c);
     }
     try {
@@ -98,22 +102,35 @@ export class Media {
   }
 
   image(src) {
-    if (!this.images.has(src)) {
-      const p = fetch(this.url(src)).then((r) => { if (!r.ok) throw new Error(`${src}: HTTP ${r.status}`); return r.blob(); }).then(createImageBitmap);
-      p.catch(() => this.images.delete(src));
-      this.images.set(src, p);
+    const key = this.url(src);
+    if (!this.images.has(key)) {
+      const p = fetch(key).then((r) => { if (!r.ok) throw new Error(`${src}: HTTP ${r.status}`); return r.blob(); }).then(createImageBitmap);
+      p.catch(() => this.images.delete(key));
+      this.images.set(key, p);
     }
-    return this.images.get(src);
+    return this.images.get(key);
   }
 
   // Decoded sound of a file (an audio file or a video's track), shared by preview and export.
   sound(src, ctx) {
-    if (!this.audio.has(src)) {
-      const p = fetch(this.url(src)).then((r) => { if (!r.ok) throw new Error(`${src}: HTTP ${r.status}`); return r.arrayBuffer(); })
-        .then((b) => ctx.decodeAudioData(b)).catch(() => null); // a video without sound plays silent
-      this.audio.set(src, p);
+    const key = this.url(src);
+    if (!this.audio.has(key)) {
+      const p = (async () => {
+        const r = await fetch(key);
+        if (!r.ok) throw new Error(`${src}: HTTP ${r.status}`);
+        const buf = await ctx.decodeAudioData(await r.arrayBuffer());
+        // decodeAudioData drops where the track starts in the file; a video's audio often starts ~0.5 s
+        // after its first frame. Pad that lead back so buffer time = file time, like the video frames.
+        const track = await new Input({ source: new UrlSource(key), formats: ALL_FORMATS }).getPrimaryAudioTrack().catch(() => null);
+        const lead = Math.round(Math.max(0, (await track?.getFirstTimestamp().catch(() => 0)) || 0) * buf.sampleRate);
+        if (lead < buf.sampleRate / 100) return buf;
+        const out = new AudioBuffer({ numberOfChannels: buf.numberOfChannels, length: buf.length + lead, sampleRate: buf.sampleRate });
+        for (let ch = 0; ch < buf.numberOfChannels; ch++) out.copyToChannel(buf.getChannelData(ch), ch, lead);
+        return out;
+      })().catch(() => null); // a video without sound plays silent
+      this.audio.set(key, p);
     }
-    return this.audio.get(src);
+    return this.audio.get(key);
   }
 
   // Source durations of every media clip, for clips without an end.

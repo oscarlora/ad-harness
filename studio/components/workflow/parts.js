@@ -1,10 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { fileUrl } from '../../lib/client/api.js';
-import Markdown from './Markdown.js';
 
 // A brand file's text, refetched when its version changes; null until it arrives.
-function useFileText(ws, brand, p, v) {
+export function useFileText(ws, brand, p, v) {
   const [text, setText] = useState(null);
   useEffect(() => {
     if (!p) return undefined;
@@ -30,9 +29,4 @@ export function TextDisclosure({ ws, brand, label, file }) {
       <div className="disclosure__body">{text ?? 'Loading'}</div>
     </details>
   );
-}
-
-export function MdFile({ ws, brand, file }) {
-  const text = useFileText(ws, brand, file.p, file.v);
-  return text == null ? <p className="flow-note">Loading</p> : <Markdown text={text} />;
 }

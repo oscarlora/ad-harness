@@ -90,6 +90,10 @@ function createR2({ accountId, accessKeyId, secretAccessKey, bucket, region = 'a
       if (!res.ok) throw new Error(`R2 get ${key} -> HTTP ${res.status}`);
       return Buffer.from(await res.arrayBuffer());
     },
+    async remove(key) {
+      const res = await send('DELETE', key);
+      if (!res.ok && res.status !== 404) throw new Error(`R2 delete ${key} -> HTTP ${res.status}`);
+    },
     async head(key) {
       const res = await send('HEAD', key);
       return res.ok ? { size: Number(res.headers.get('content-length') || 0) } : null;

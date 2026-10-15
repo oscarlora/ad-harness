@@ -20,7 +20,7 @@ if (['in', 'out', 'above', 'below'].some((k) => !args[k] || args[k] === true)) u
 
 const tmp = mkdtempSync(join(tmpdir(), 'story-'));
 process.on('exit', () => rmSync(tmp, { recursive: true, force: true }));
-// The canvas sits next to --out: Segmind only takes local refs from inside the brand folder.
+// The canvas sits next to --out.
 const padded = join(dirname(args.out), `.${basename(args.out, '.png')}.canvas.png`);
 const bar = args.paste ? 'white' : 'grey'; // with --paste, grey bars would read as content and leak into a grey subject
 run('ffmpeg', ['-v', 'error', '-y', '-i', args.in, '-vf', `pad=iw:trunc(iw*16/9/2)*2:0:(oh-ih)/2:color=${args.paste ? '0xFFFFFF' : '0x808080'}`, padded]);

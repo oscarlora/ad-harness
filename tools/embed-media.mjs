@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // embed-media.mjs — semantic vectors for the media catalog, into _catalog/vectors.json: one for each
-// record's text, one per video scene. Run after analyze-media; only changed records are re-embedded.
+// record's text, one per video scene, made locally (lib/embed.mjs). Run after analyze-media; only
+// changed records are re-embedded, and all of them when the model changed.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { catalogPaths, readRecords, parseArgs, mediaDirFrom, sha256, usage } from './lib/catalog.mjs';
-import { requireKey, embed, docText, packVec, EMBED_MODEL } from './lib/gateway.mjs';
+import { embed, docText, packVec, EMBED_MODEL } from './lib/embed.mjs';
 
-const HELP = `embed-media.mjs — semantic vectors for the media catalog (_catalog/vectors.json)
+const HELP = `embed-media.mjs — semantic vectors for the media catalog (_catalog/vectors.json), made locally
+with ${EMBED_MODEL} (no key; the model downloads once, ~210 MB)
 
   node tools/embed-media.mjs --media <media dir> [--force]
     --force  re-embed every record, not only changed ones`;
@@ -32,7 +34,6 @@ function recordText(r) {
 }
 
 export async function embedAll({ media, force = false }) {
-  const key = requireKey(media);
   const store = (!force && readVectors(media)) || { model: EMBED_MODEL, items: {} };
   const recs = readRecords(catalogPaths(media)).filter((r) => r.status === 'cataloged');
   const sigOf = (r) => sha256(JSON.stringify([recordText(r), (r.scenes || []).map((s) => s.description)]));
@@ -48,7 +49,7 @@ export async function embedAll({ media, force = false }) {
   if (jobs.length) {
     const vecs = [];
     for (let n = 0; n < jobs.length; n += 100) {
-      vecs.push(...await embed(key, jobs.slice(n, n + 100).map((j) => j.text)));
+      vecs.push(...await embed(jobs.slice(n, n + 100).map((j) => j.text)));
       console.log(`embedded ${Math.min(n + 100, jobs.length)}/${jobs.length}`);
     }
     for (const r of todo) store.items[r.id] = { sig: sigOf(r), scenes: [] };

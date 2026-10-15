@@ -1,5 +1,5 @@
-﻿# setup.ps1 — Windows twin of setup.sh, idempotent: Node LTS via winget when missing, npm deps and
-# the git hooks, then a health check. Works in Windows PowerShell 5.1 and PowerShell 7.
+﻿# setup.ps1 — Windows twin of setup.sh, idempotent: Node LTS via winget when missing, npm deps,
+# whisper.cpp and the git hooks, then a health check. Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
 
@@ -43,14 +43,14 @@ if (Test-NodeOk) {
   }
 }
 
-# ── npm deps (Vercel AI Gateway, the video export) — again whenever package.json changed ──
+# ── npm deps (media search embeddings, Vercel AI Gateway, the video export) — again whenever package.json changed ──
 $fresh = { param($dir) (Test-Path "$dir\node_modules\.package-lock.json") -and ((Get-Item "$dir\node_modules\.package-lock.json").LastWriteTime -gt (Get-Item "$dir\package.json").LastWriteTime) }
 if (& $fresh '.') {
   Ok 'npm deps present'
 } else {
   npm install --no-fund --no-audit 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { Ok 'npm deps installed' }
-  else { Warn "npm install failed — the media library and the Vercel AI Gateway provider won't work until it succeeds" }
+  else { Warn "npm install failed — semantic media search, the video export and the Vercel AI Gateway won't work until it succeeds" }
 }
 
 # ── git hooks ─────────────────────────────────────────────────────────────────
@@ -78,6 +78,28 @@ else {
   else { Warn 'Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium' }
 }
 
+# ── whisper.cpp (word timings for captions): the CPU build from its GitHub releases into ~\.local\bin,
+# where the tools look. Its model downloads on first use.
+$localBin = Join-Path $HOME '.local\bin'
+$hasWhisper = { (Has 'whisper-cli') -or (Test-Path (Join-Path $localBin 'whisper-cli.exe')) }
+if (-not (& $hasWhisper)) {
+  $asset = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'whisper-bin-win-cpu-arm64.zip' } else { 'whisper-bin-x64.zip' }
+  Write-Host '  Installing whisper.cpp to ~\.local\bin...'
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072   # TLS 1.2 on PowerShell 5.1
+    $ProgressPreference = 'SilentlyContinue'
+    $releases = Invoke-RestMethod 'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=20' -Headers @{ 'User-Agent' = 'adpk-setup' }
+    $url = ($releases | ForEach-Object { $_.assets } | Where-Object { $_.name -eq $asset } | Select-Object -First 1).browser_download_url
+    $tmp = Join-Path $env:TEMP 'adpk-whisper'
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $tmp, $localBin | Out-Null
+    Invoke-WebRequest $url -OutFile "$tmp\whisper.zip" -UseBasicParsing
+    Expand-Archive "$tmp\whisper.zip" $tmp -Force
+    Get-ChildItem $tmp -Recurse -Include 'whisper-cli.exe', 'whisper.dll', 'ggml*.dll' | Copy-Item -Destination $localBin -Force
+    Remove-Item $tmp -Recurse -Force
+  } catch { }
+}
+
 # ── Health check ──────────────────────────────────────────────────────────────
 Write-Host 'Health check'
 if (Test-Path '.env') {
@@ -88,6 +110,7 @@ if (Test-Path '.env') {
 
 # Required on Windows: images catalog through ffmpeg too (no sips).
 if (Has 'ffmpeg')   { Ok 'ffmpeg present' }   else { Bad 'ffmpeg missing (needed for media cataloging): winget install Gyan.FFmpeg' }
+if (& $hasWhisper) { Ok 'whisper-cli present' } else { Warn "whisper-cli missing (word timings for captions): re-run this setup, or unzip $asset from github.com/ggml-org/whisper.cpp/releases into ~\.local\bin" }
 if (Has 'yt-dlp')   { Ok 'yt-dlp present' }   else { Warn 'yt-dlp missing (optional — URL/social pulls): winget install yt-dlp.yt-dlp' }
 
 # Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).

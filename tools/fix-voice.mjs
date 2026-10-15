@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+// fix-voice.mjs — clean a speaker's voice and re-say mumbled words, with ElevenLabs (<WS>_ELEVENLABS_API_KEY).
+// When to use it: generate-voice (Isolate or re-voice).
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, extname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { applyEnv, die, inferWorkspace, parseArgs, round, run, sleep, usage } from './lib/catalog.mjs';
+applyEnv();
+
+const HELP = `fix-voice.mjs — clean a speaker's voice and re-say mumbled words (ElevenLabs).
+
+  node tools/fix-voice.mjs isolate <clip>... --out <dir> [--bed -18]
+      Each clip (video or audio) → <dir>/raw/<name>.wav (its own audio), <dir>/isolated/<name>.wav
+      (ElevenLabs voice isolation) and <dir>/<name>.wav: the isolated voice with the raw audio --bed dB
+      under it, EQ'd, compressed and leveled to -16 LUFS. Use when background noise gets in the way.
+  node tools/fix-voice.mjs clone --name "<speaker>" <clip>... [--out <dir>]
+      Instant voice clone from the speaker's clearest clips (same room as the patch). Prints the voice id;
+      keep it in the brand's memory.md so later fixes reuse it.
+  node tools/fix-voice.mjs patch <dir> <name> --voice <id> --from <s> --to <s> --text "<words>"
+      [--before "<words>"] [--after "<words>"] [--takes 3] [--bed -18] [--video <clip>]
+      Re-says <words> in the cloned voice where the mouth moves (--from/--to: seconds in the clip): slow
+      takes, each fitted onto that span, level-matched and spliced into <dir>/isolated/<name>.wav (or
+      raw/<name>.wav when not isolated) with the raw audio 32 dB under the patch, then finished like
+      isolate → <dir>/<name>-fix-a.wav, -b, -c (+ .mp4 previews with --video). The user picks by ear.
+      --before/--after: the words around the patch, so the take's intonation fits.`;
+
+const args = parseArgs(process.argv.slice(2), { help: HELP });
+const [cmd, ...rest] = args._;
+const SR = 44100;
+const FINISH = 'highpass=f=90,equalizer=f=300:t=q:w=1:g=-2.5,equalizer=f=3500:t=q:w=1.2:g=3,'
+  + 'acompressor=threshold=-24dB:ratio=2.5:attack=5:release=120:makeup=2,loudnorm=I=-16:TP=-1.5:LRA=7';
+
+function key(p) {
+  const ws = inferWorkspace(p) || die(`can't tell the workspace from ${p} (expected workspaces/<WS>/...)`);
+  return process.env[`${ws.toUpperCase()}_ELEVENLABS_API_KEY`] || die(`${ws.toUpperCase()}_ELEVENLABS_API_KEY missing in .env`);
+}
+const nameOf = (f) => basename(f, extname(f));
+const db = (x) => 10 ** (x / 20);
+const ff = (a) => run('ffmpeg', ['-v', 'error', '-y', ...a]);
+const readF32 = (f) => { const b = run('ffmpeg', ['-v', 'quiet', '-i', f, '-ac', '1', '-ar', String(SR), '-f', 'f32le', '-'], { binary: true }).stdout; return new Float32Array(b.buffer, b.byteOffset, b.length >> 2).slice(); };
+function writeWav(out, x, filter) {
+  const tmp = join(tmpdir(), `fix-voice-${process.pid}-${Date.now()}.f32`);
+  writeFileSync(tmp, Buffer.from(x.buffer));
+  ff(['-f', 'f32le', '-ar', String(SR), '-ac', '1', '-i', tmp, ...(filter ? ['-af', filter] : []), '-ar', String(SR), '-ac', '1', out]);
+  rmSync(tmp);
+}
+const rms = (x) => { let s = 0, n = 0; for (const v of x) if (Math.abs(v) > 0.01) { s += v * v; n++; } return Math.sqrt(s / Math.max(1, n)); };
+
+async function eleven(k, path, body, accept = 'audio/mpeg') {
+  for (let i = 0; ; i++) { // the plan allows a few requests at a time: wait and retry when it says too many
+    const r = await fetch(`https://api.elevenlabs.io${path}`, { method: 'POST', headers: { 'xi-api-key': k, accept, ...(typeof body === 'string' && { 'Content-Type': 'application/json' }) }, body });
+    if (r.ok) return Buffer.from(await r.arrayBuffer());
+    const text = await r.text();
+    if (r.status === 429 && i < 6) { await sleep(3000 * (i + 1)); continue; }
+    die(`ElevenLabs ${path}: ${r.status} ${text.slice(0, 300)}`);
+  }
+}
+const form = (fields, files) => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, v); for (const [k, f] of files) fd.append(k, new Blob([readFileSync(f)]), basename(f)); return fd; };
+const finish = (iso, raw, bedDb, out) => { const x = new Float32Array(iso.length); for (let i = 0; i < x.length; i++) x[i] = iso[i] + (raw[i] || 0) * db(bedDb); writeWav(out, x, FINISH); };
+
+async function isolate() {
+  const out = resolve(args.out || usage(HELP)), k = key(out), bed = +(args.bed ?? -18);
+  if (!rest.length) usage(HELP);
+  for (const d of ['raw', 'isolated']) mkdirSync(join(out, d), { recursive: true });
+  const queue = [...rest];
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    for (let f; (f = queue.shift());) {
+      const n = nameOf(f), raw = join(out, 'raw', `${n}.wav`), iso = join(out, 'isolated', `${n}.wav`);
+      ff(['-i', f, '-vn', '-ac', '1', '-ar', String(SR), raw]);
+      const mp3 = join(out, 'isolated', `${n}.mp3`);
+      writeFileSync(mp3, await eleven(k, '/v1/audio-isolation', form({}, [['audio', raw]])));
+      ff(['-i', mp3, '-ac', '1', '-ar', String(SR), iso]); rmSync(mp3);
+      finish(readF32(iso), readF32(raw), bed, join(out, `${n}.wav`));
+      console.log(`isolated  ${n}`);
+    }
+  }));
+}
+
+async function clone() {
+  if (!args.name || !rest.length) usage(HELP);
+  const k = key(resolve(args.out || rest[0]));
+  const r = JSON.parse((await eleven(k, '/v1/voices/add', form({ name: args.name }, rest.map((f) => ['files', f])), 'application/json')).toString());
+  console.log(`voice id  ${r.voice_id}  (${args.name})`);
+}
+
+async function patch() {
+  const [dirArg, name] = rest;
+  if (!dirArg || !name || !args.voice || args.from == null || args.to == null || !args.text) usage(HELP);
+  const dir = resolve(dirArg), k = key(dir), from = +args.from, to = +args.to, bed = +(args.bed ?? -18);
+  const rawF = join(dir, 'raw', `${name}.wav`), isoF = join(dir, 'isolated', `${name}.wav`);
+  if (!existsSync(rawF)) die(`${rawF} missing: run isolate first (it also keeps the raw audio)`);
+  const raw = readF32(rawF), isolated = existsSync(isoF);
+  const base = isolated ? readF32(isoF) : raw;
+  const a = Math.round(from * SR), b = Math.round(to * SR), fade = Math.round(0.02 * SR), ramp = Math.round(0.05 * SR);
+  const ref = rms([...base.subarray(Math.max(0, a - SR / 2), a), ...base.subarray(b, b + SR / 2)]);
+  const tags = 'abcdef'.slice(0, +(args.takes || 3));
+  const settings = [[0.45, 0.15], [0.3, 0.3], [0.6, 0.05], [0.5, 0.1], [0.35, 0.2], [0.55, 0.0]];
+  for (const [i, tag] of [...tags].entries()) {
+    const body = JSON.stringify({
+      text: args.text, model_id: 'eleven_multilingual_v2',
+      ...(args.before && { previous_text: args.before }), ...(args.after && { next_text: args.after }),
+      voice_settings: { stability: settings[i][0], similarity_boost: 0.9, style: settings[i][1], use_speaker_boost: true, speed: 0.7 },
+    });
+    const mp3 = join(dir, `${name}-take-${tag}.mp3`);
+    writeFileSync(mp3, await eleven(k, `/v1/text-to-speech/${args.voice}?output_format=mp3_44100_192`, body));
+    const trimmed = join(tmpdir(), `fix-voice-${process.pid}-${tag}.wav`);
+    ff(['-i', mp3, '-af', 'silenceremove=start_periods=1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse', '-ac', '1', '-ar', String(SR), trimmed]);
+    const len = readF32(trimmed).length / SR, tempo = len / (to - from);
+    const fitted = join(tmpdir(), `fix-voice-${process.pid}-${tag}-fit.wav`);
+    ff(['-i', trimmed, '-af', `atempo=${Math.min(2, Math.max(0.5, tempo))}`, '-ac', '1', '-ar', String(SR), fitted]);
+    const take = readF32(fitted).subarray(0, b - a), gain = ref / rms(take);
+    const v = base.slice(), bedGain = new Float32Array(v.length).fill(isolated ? db(bed) : 0);
+    for (let j = 0; j < fade; j++) { v[a - fade + j] *= 1 - j / fade; v[b + j] *= j / fade; }
+    for (let j = a; j < b; j++) { const e = Math.min(1, (j - a) / fade, (b - j) / fade); v[j] = (take[j - a] || 0) * gain * e; }
+    if (isolated) for (let j = a - ramp; j < b + ramp; j++) { // the original stays faintly under the patch
+      const t = j < a ? (j - (a - ramp)) / ramp : j >= b ? 1 - (j - b) / ramp : 1;
+      bedGain[j] = db(bed) + (db(-32) - db(bed)) * t;
+    }
+    const x = new Float32Array(v.length);
+    for (let j = 0; j < x.length; j++) x[j] = v[j] + (raw[j] || 0) * bedGain[j];
+    const out = join(dir, `${name}-fix-${tag}.wav`);
+    writeWav(out, x, FINISH);
+    rmSync(trimmed); rmSync(fitted);
+    if (args.video) ff(['-i', args.video, '-i', out, '-map', '0:v', '-map', '1:a', '-vf', 'scale=540:-2', '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast', '-c:a', 'aac', '-b:a', '192k', '-shortest', out.replace(/\.wav$/, '.mp4')]);
+    console.log(`take ${tag}    ${out}  (played at ${round(tempo)}x its natural pace)`);
+  }
+}
+
+const cmds = { isolate, clone, patch };
+if (!cmds[cmd]) usage(HELP);
+await cmds[cmd]();

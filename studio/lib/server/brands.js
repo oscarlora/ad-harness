@@ -57,9 +57,9 @@ export const brandPage = (Component, extra) => async function BrandTabPage({ par
   return <Component ws={ctx.ws} brand={ctx.brand} {...(extra ? await extra(params) : {})} />;
 };
 
-// Page title "<Brand> · <label> · Ad Production Kit"; label may be a function of the params.
+// Page title "<Brand> · <label> · ADPK"; label may be a function of the params.
 export const brandMetadata = (label) => async ({ params }) => {
   const ctx = await brandCtx(params);
   const text = typeof label === 'function' ? await label(params) : label;
-  return { title: `${ctx?.brand || 'Unknown brand'} · ${text} · Ad Production Kit` };
+  return { title: `${ctx?.brand || 'Unknown brand'} · ${text} · ADPK` };
 };

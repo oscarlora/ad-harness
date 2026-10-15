@@ -4,16 +4,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiBase, fileUrl, openFile, postJson } from '../../lib/client/api.js';
 import { isTyping } from '../../lib/client/hooks.js';
+import { compose } from '../../engine/doc.js';
 import { clock } from '../BrandPage.js';
 import { IcCheck, IcPause, IcPlay, IcX } from '../icons.js';
 import { Dot } from '../workflow/parts.js';
+import { SafeZones, useZones, ZoneButton } from '../Player.js';
 import Timeline from './Timeline.js';
+import Trim from './Trim.js';
 
-// A doc path (relative to the ad folder, may climb with ../) as a brand-relative path.
+// A doc path (relative to the ad folder, may climb with ../) as a brand-relative path; climbing past the
+// brand keeps its ../ (the shared library).
 function brandPath(ad, src) {
   const out = ['outputs', ad];
   for (const part of String(src).split('/')) {
-    if (part === '..') out.pop(); else if (part && part !== '.') out.push(part);
+    if (part === '..' && out.length && out.at(-1) !== '..') out.pop(); else if (part && part !== '.') out.push(part);
   }
   return out.join('/');
 }
@@ -31,9 +35,22 @@ export default function Editor({ ws, brand, ad, edit }) {
   const [playing, setPlaying] = useState(false);
   const [draft, setDraft] = useState(null); // a note being written: { t, from (drag start), box, text }
   const [focus, setFocus] = useState(null); // note id
+  const [off, setOff] = useState(() => new Set()); // track names turned off in the preview (never written to the doc)
+  const [trimId, setTrimId] = useState(null); // the clip open in the trim panel
+  const rootRef = useRef(null), tlRef = useRef(null);
+  useEffect(() => { // the fixed timeline's height sizes the preview above it
+    const el = tlRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(() => rootRef.current?.style.setProperty('--tl-h', `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [!!doc]); // eslint-disable-line react-hooks/exhaustive-deps -- tlRef exists once the doc has loaded
+  const toggleTrack = useCallback((name) => setOff((s) => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n; }), []);
   const live = useRef({ t: 0, busy: false, pending: null, stop: null, until: null, starting: false, actx: null, c0: 0, t0: 0, raf: 0 });
 
-  const url = useCallback((src) => fileUrl(ws, brand, brandPath(ad, src)), [ws, brand, ad]);
+  const versions = useRef({}); // src -> mtime, so a replaced file gets a new URL
+  versions.current = plan.media || {};
+  const url = useCallback((src) => fileUrl(ws, brand, brandPath(ad, src), versions.current[src]), [ws, brand, ad]);
 
   // The canvas draws at the size it shows on screen (device pixels), up to the doc's own size.
   const stageRef = useRef(null);
@@ -133,12 +150,14 @@ export default function Editor({ ws, brand, ad, edit }) {
     let dead = false;
     (async () => {
       // A file caught mid-write reads as broken JSON: read it again before calling it an error.
-      const read = () => fetch(fileUrl(ws, brand, plan.p, plan.v), { cache: 'no-store' }).then((r) => r.json());
+      const get = (p) => fetch(fileUrl(ws, brand, p, plan.v), { cache: 'no-store' }).then((r) => r.json());
+      const read = async () => { const own = await get(plan.p); return own.base ? compose(own, await get(plan.p.replace(/[^/]+$/, own.base))) : own; };
       const raw = await read().catch(() => new Promise((r) => setTimeout(r, 250)).then(read));
       const wasPlaying = !!live.current.stop;
       if (wasPlaying) pause();
       fitCanvas(raw.size || [1080, 1920]);
-      const d = await engine.load(raw, raw.fx ? `${url(raw.fx)}&v=${Date.now()}` : null); // fx.js re-imported fresh
+      const shown = { ...raw, tracks: (raw.tracks || []).map((tr) => (off.has(tr.name) ? { ...tr, hidden: true, mute: true } : tr)) };
+      const d = await engine.load(shown, raw.fx ? `${url(raw.fx)}&v=${Date.now()}` : null); // fx.js re-imported fresh
       if (dead) return;
       setDoc(d);
       setError('');
@@ -146,7 +165,7 @@ export default function Editor({ ws, brand, ad, edit }) {
       if (wasPlaying) play(live.current.until);
     })().catch((e) => { if (!dead) setError(`${plan.file}: ${e.message || e}`); });
     return () => { dead = true; };
-  }, [engine, ws, brand, plan.p, plan.v, plan.file, url, draw, pause, play, fitCanvas]);
+  }, [engine, ws, brand, plan.p, plan.v, plan.file, off, url, draw, pause, play, fitCanvas]);
 
   // Space plays, arrows step a frame (with Shift, a second).
   useEffect(() => {
@@ -217,12 +236,17 @@ export default function Editor({ ws, brand, ad, edit }) {
   const shown = notes.filter((n) => n.box && (n.id === focus || (!playing && n.status !== 'done' && n.status !== 'approved' && Math.abs(n.t - t) < 0.2)));
   const exp = edit.export?.plan === plan.file ? edit.export : null;
   const W = doc?.W || 1080, H = doc?.H || 1920;
+  const [zone, nextZone] = useZones(W / H);
+  const trimClip = trimId && doc?.tracks.flatMap((tr) => tr.clips).find((c) => c.id === trimId);
+  const applyTrim = (cut) => postJson(`${apiBase(ws, brand)}/edit`, { ad, trim: { plan: plan.file, id: trimId, ...cut } })
+    .then(() => setTrimId(null)).catch((e) => setError(e.message));
 
   return (
-    <div className="ed">
+    <div className="ed" ref={rootRef}>
       <div className="ed__main">
         <div className="ed__stage" ref={stageRef} style={{ aspectRatio: `${W} / ${H}` }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} role="img" aria-label="Preview: click or drag to leave a note">
           <canvas ref={canvasRef} />
+          {zone && <div className="ed__zones"><SafeZones mode={zone} ratio={W / H} /></div>}
           {shown.map((n) => (
             <div key={n.id} className="ed__box" data-status={n.status} style={boxStyle(n.box)} />
           ))}
@@ -253,19 +277,23 @@ export default function Editor({ ws, brand, ad, edit }) {
             </div>
           )}
           <div className="spacer" />
+          {nextZone && <ZoneButton mode={zone} onClick={nextZone} className={zone ? 'btn' : 'btn btn--icon'} />}
           <Export ws={ws} brand={brand} ad={ad} plan={plan} exp={exp} onError={setError} />
         </div>
         {error && <p className="ed__error">{error}</p>}
-        <Notes notes={notes} focus={focus} onPick={pick} onReview={review} onAction={noteAction} />
+        <Notes notes={notes} focus={focus} onPick={pick} onReview={review} onAction={noteAction} lead={(n) => <span className="ed-note__time">{clock(n.t, true)}</span>} hint="Click or drag on the video to leave a note." />
       </aside>
       {doc && (
-        <Timeline doc={doc} t={t} notes={pending} onSeek={seek} onPick={pick}>
+        <div className="ed__tl" ref={tlRef}>
+        <Timeline doc={doc} t={t} notes={pending} onSeek={seek} onPick={pick} off={off} onToggle={toggleTrack} onClip={(id) => { pause(); setTrimId(id); }}>
           <button type="button" className="ed__play" onClick={() => (playing ? pause() : play())} aria-label={playing ? 'Pause' : 'Play'}>
             {playing ? <IcPause /> : <IcPlay />}
           </button>
           <span className="ed__clock">{clock(t, true)}<span> / {clock(doc.duration, true)}</span></span>
         </Timeline>
+        </div>
       )}
+      {trimClip && <Trim key={trimClip.id} clip={trimClip} src={url(trimClip.src)} onApply={applyTrim} onClose={() => setTrimId(null)} />}
     </div>
   );
 }
@@ -291,33 +319,38 @@ function Export({ ws, brand, ad, plan, exp, onError }) {
   );
 }
 
-// Pending notes, done ones first (to review and approve); approved ones only in the history.
-function Notes({ notes, focus, onPick, onReview, onAction }) {
+// Pending notes, done ones first (to review and approve); approved ones only in the history. Notes come in order;
+// lead(n) shows what a note is on (its moment, or the text it quotes); onReview (optional) plays a done one's change.
+export function Notes({ notes, focus, onPick, onReview, onAction, lead, hint }) {
   const [history, setHistory] = useState(false);
   const approved = notes.filter((n) => n.status === 'approved');
   const order = { done: 0, seen: 1, open: 1 };
-  const list = history ? [...approved].sort((a, b) => a.t - b.t)
-    : notes.filter((n) => n.status !== 'approved').sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1) || a.t - b.t);
+  const list = history ? approved
+    : notes.filter((n) => n.status !== 'approved').sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1));
   return (
     <section className="ed__notes">
       <div className="ed__notes-head">
         <span className="eyebrow">{history ? 'Approved' : 'Notes'}</span>
+        <div className="spacer" />
+        {!history && list.length > 0 && (
+          <button type="button" className="ed__history" title="Move every note to the history" onClick={() => list.forEach((n) => onAction({ approve: n.id }))}>Archive all</button>
+        )}
         {(approved.length > 0 || history) && (
           <button type="button" className="ed__history" onClick={() => setHistory(!history)}>{history ? 'Back to notes' : `History (${approved.length})`}</button>
         )}
       </div>
-      {!list.length && <p className="flow-note">{history ? 'Nothing approved yet.' : 'Click or drag on the video to leave a note.'}</p>}
+      {!list.length && <p className="flow-note">{history ? 'Nothing approved yet.' : hint}</p>}
       <ul>
         {list.map((n) => {
           const [state, label] = STATUS[n.status] || STATUS.open;
           return (
             <li key={n.id} className="ed-note" data-status={n.status} aria-current={n.id === focus || undefined}>
               <button type="button" className="ed-note__main" onClick={() => onPick(n)}>
-                <span className="ed-note__time">{clock(n.t, true)}</span>
+                {lead(n)}
                 <span className="ed-note__text">{n.text}</span>
               </button>
               <div className="ed-note__acts">
-                {(n.status === 'done' || n.status === 'approved') && (
+                {onReview && (n.status === 'done' || n.status === 'approved') && (
                   <button type="button" className="ed-note__act" title="Watch the change" aria-label="Watch the change" onClick={() => onReview(n)}><IcPlay /></button>
                 )}
                 {n.status === 'done' && (

@@ -14,7 +14,7 @@ const MODEL = { s25: 'Seedance 2.5', minimax: 'MiniMax', mini: 'Seedance Mini', 
 // Seedance 2.5 leads when present; a preview (clip + voice + music mix) is never the default.
 const defaultTake = (clips) => clips.find((c) => c.model === 's25') || clips.find((c) => c.model !== 'preview') || clips[0];
 
-const PROVIDER = { kie: 'kie.ai', segmind: 'Segmind', gateway: 'AI Gateway' };
+const PROVIDER = { kie: 'kie.ai', gateway: 'AI Gateway' };
 const span = (ns) => (ns.length > 1 ? `${Math.min(...ns)}–${Math.max(...ns)}` : '');
 
 // [icon, name, value] per non-empty parameter.

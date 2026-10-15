@@ -1,5 +1,6 @@
 // Headless page for tools/edit-video.mjs: renders the same engine Studio previews, to an MP4 or to stills.
-// Query: plan (path under /f/), mode = export | frames, scale, from, to, at (comma-separated seconds), boxes.
+// Query: plan (path under /f/), mode = export | audio | frames, scale, from, to, at (comma-separated seconds), boxes.
+import { compose } from './doc.js';
 import { createEngine, exportVideo } from './index.js';
 
 const q = new URLSearchParams(location.search);
@@ -7,7 +8,9 @@ const post = (path, body) => fetch(path, { method: 'POST', body });
 
 async function main() {
   const planUrl = new URL(`/f/${q.get('plan')}`, location.href);
-  const raw = await (await fetch(planUrl)).json();
+  const get = async (u) => (await fetch(u)).json();
+  const own = await get(planUrl);
+  const raw = own.base ? compose(own, await get(new URL(own.base, planUrl))) : own;
   const scale = +(q.get('scale') || 1);
   const [W, H] = raw.size || [1080, 1920];
   const even = (n) => 2 * Math.round(n / 2);
@@ -38,6 +41,8 @@ async function main() {
       sx.fillText(`${t.toFixed(2)}s`, x + canvas.width / 40, y + canvas.width / 14);
     }
     await post('/out?offset=0', await sheet.convertToBlob({ type: 'image/png' }));
+  } else if (q.get('mode') === 'audio') {
+    await post('/out?offset=0', wav(await engine.mix(), +(q.get('from') || 0), q.get('to') ? +q.get('to') : doc.duration));
   } else {
     let chain = Promise.resolve();
     const write = (data, pos) => { const copy = data.slice(); chain = chain.then(() => post(`/out?offset=${pos}`, copy)); };
@@ -52,6 +57,20 @@ async function main() {
   }
   await engine.close();
   return { ms: Math.round(performance.now() - t0), duration: doc.duration, errors: engine.errors };
+}
+
+// 16-bit PCM WAV of [a, b) of an AudioBuffer.
+function wav(buf, a, b) {
+  const ch = buf.numberOfChannels, s = Math.round(a * buf.sampleRate), n = Math.max(0, Math.min(buf.length, Math.round(b * buf.sampleRate)) - s);
+  const v = new DataView(new ArrayBuffer(44 + n * ch * 2)), data = Array.from({ length: ch }, (_, c) => buf.getChannelData(c));
+  [...'RIFF'].forEach((x, i) => v.setUint8(i, x.charCodeAt(0)));
+  [...'WAVEfmt '].forEach((x, i) => v.setUint8(8 + i, x.charCodeAt(0)));
+  [...'data'].forEach((x, i) => v.setUint8(36 + i, x.charCodeAt(0)));
+  v.setUint32(4, 36 + n * ch * 2, true); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, ch, true);
+  v.setUint32(24, buf.sampleRate, true); v.setUint32(28, buf.sampleRate * ch * 2, true); v.setUint16(32, ch * 2, true);
+  v.setUint16(34, 16, true); v.setUint32(40, n * ch * 2, true);
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) v.setInt16(44 + (i * ch + c) * 2, Math.max(-1, Math.min(1, data[c][s + i])) * 32767, true);
+  return v.buffer;
 }
 
 main().then((r) => post('/done', JSON.stringify(r)), (e) => post('/done', JSON.stringify({ error: `${e?.message || e}` })));

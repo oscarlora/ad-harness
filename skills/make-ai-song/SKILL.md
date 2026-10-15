@@ -22,8 +22,8 @@ concrete scenes (a 3am clock).
 
 Follow **write-copy** for voice and claims. Song rules:
 
-- **Length:** about 110–130 sung words gives a 2-minute mid-tempo song. Suno sets the length itself
-  and ignores "short" or a BPM: change the word count, not the prompt.
+- **Length:** about 110–130 sung words gives a 2-minute mid-tempo song. Suno ignores "short" or a
+  BPM in the prompt: change the word count, or set a target with `--duration` (10–360 s).
 - **One line = one shot**, every line easy to picture.
 - **The first line is the hook:** a person, an age, a moment ("I found a photo of me at thirty-nine").
 - **The product enters in someone's words** (a friend, a grandma), named once as brand + category.
@@ -58,11 +58,11 @@ side by side in 1:1. No text in the pictures.
 
 ## 6. Clips
 
-One MiniMax H3 Max run per clip at 480p, with the storyboard sheet and the character sheets as
+One MiniMax H3 run per clip at 768p, with the storyboard sheet and the character sheets as
 references (**write-prompt**, Video models).
 
     node tools/generate-video.mjs --prompt-file <ad>/prompts/clip-01.txt --image <sheet> --image <hero> \
-      [--image <cast>] [--image <product>] --aspect 9:16 --resolution 480p --duration <clip length, rounded up> \
+      [--image <cast>] [--image <product>] --aspect 9:16 --duration <clip length, rounded up> \
       --out <ad>/clips/clip-01.mp4 --timeout 1500
 
 The prompt lists the shots with rough timings ("Shot 2 (5.1–9.9s): …") and ends with the rules:
@@ -90,4 +90,4 @@ sound.
 
 ## 8. Versions and export
 
-With **edit-video** (versions, Export), format `Song`. Clips stay 480p drafts (AGENTS.md, Video).
+With **edit-video** (versions, Export), format `Song`. Clips stay at 768p (AGENTS.md, Video).

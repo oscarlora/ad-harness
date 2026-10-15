@@ -10,6 +10,7 @@ loudness. This skill owns the track and the taste.
 
 ## Sourcing
 
+- **You pick it**: search the shared library first (**search-media**), generate when nothing fits.
 - **User-supplied, copyright-free, or generated only.** Never rip a commercial or trending track.
   If the user names one, ask for their licensed file or offer alternatives in the same vibe.
 - **Store it findable.** A track the brand will reuse goes into the media library
@@ -18,10 +19,10 @@ loudness. This skill owns the track and the taste.
 
 ## Generating
 
-`tools/generate-music.mjs` renders a purpose-length instrumental bed with **Seed Audio 1.0** by
-default, from the prompt and `--duration`. Use `--provider suno` only when the user explicitly wants
-Suno, a full song, or a long-form track; it returns two full-length takes and `--duration` trims them. A sung song
-ad: **make-ai-song**.
+`tools/generate-music.mjs` renders an instrumental bed on **Suno** (kie.ai) at the length you set
+(`--duration`, default 30 s; takes land within a few seconds of it). Each run gives two takes.
+`--model V6` (default) for detail; `V6_MINI` when speed matters, `V6_WILD` for something bolder —
+same price. A full song: `--vocals`; a sung song ad: **make-ai-song**.
 
 - **Trend research first.** Browse TikTok Creative Center's trending sounds or a licensed library's
   viral charts, then translate the sound's anatomy (tempo, drum palette, bounce, vocal treatment)
@@ -43,3 +44,8 @@ vary the vibe. Under dialogue, prefer instrumental or vocal-light.
 - **Duck under speech** — `node tools/edit-video.mjs duck <edit.json> --track Music --words <transcript>`.
 - **Fades** — `fadeIn` ~0.5 s and `fadeOut` ~1–2 s ending with the video, so the end doesn't sound
   like a cut.
+- **Shape it to the story** — never drop to silence: for a pause on a turn, crossfade (~0.1 s) to a
+  low-passed copy of the same track, in sync on its own track, and back to clear on the answer.
+  Land the track's strong moments (accents, re-entries; find them on an onset envelope) on the
+  turns and the product shot, moving the music only by whole beats at a cut that hides the jump.
+  Lift it ~3 dB at the turn, and to full where no one speaks.

@@ -70,19 +70,24 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
   return downloaded.length;
 }
 
-// Air's public share API (no key): fetch each clip's original, not the transcode. Sub-boards aren't walked.
+// Air's public share API (no key): fetch each clip's original, not the transcode, from the board
+// and every sub-board (a sub-board's clips list only as descendantBoardId of the shared board).
 async function pullAir(source, out, { dryRun } = {}) {
   const m = source.match(/air\.inc\/a\/([\w-]+)\/b\/([\w-]+)/);
   if (!m) { console.error('Air: pass a board share link (app.air.inc/a/<id>/b/<board id>).'); process.exit(1); }
   const [, short, boardId] = m;
+  const api = `https://api.air.inc/shorturl/${short}`;
   const clips = [];
-  for (let cursor = null; ;) {
-    const r = await fetch(`https://api.air.inc/shorturl/${short}/clips/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limit: 100, boardId, ...(cursor && { cursor }) }) });
-    if (!r.ok) { console.error(`Air: board listing -> HTTP ${r.status} (is the board shared by link?)`); process.exit(1); }
-    const j = await r.json();
-    clips.push(...j.data.clips);
-    if (!j.pagination?.hasMore) break;
-    cursor = j.pagination.cursor;
+  for (const board of [boardId, ...(await airSubBoards(api, boardId))]) {
+    const scope = board === boardId ? { boardId } : { boardId, descendantBoardId: board };
+    for (let cursor = null; ;) {
+      const r = await fetch(`${api}/clips/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ limit: 100, ...scope, ...(cursor && { cursor }) }) });
+      if (!r.ok) { console.error(`Air: board listing -> HTTP ${r.status} (is the board shared by link?)`); process.exit(1); }
+      const j = await r.json();
+      clips.push(...j.data.clips);
+      if (!j.pagination?.hasMore) break;
+      cursor = j.pagination.cursor;
+    }
   }
   console.log(`Air board ${boardId}: ${clips.length} assets`);
   let n = 0;
@@ -95,6 +100,15 @@ async function pullAir(source, out, { dryRun } = {}) {
     console.log(`  ↓ ${file}`); n++;
   }
   return n;
+}
+
+// Every sub-board id under a shared board, depth first.
+async function airSubBoards(api, id) {
+  const r = await fetch(`${api}/boards/${id}`);
+  if (!r.ok) return [];
+  const ids = [];
+  for (const b of (await r.json()).data || []) ids.push(b.id, ...(await airSubBoards(api, b.id)));
+  return ids;
 }
 
 const HELP = `pull-media.mjs — fetch media (folder, Drive, Air board, URL) into a local cache for catalog-media

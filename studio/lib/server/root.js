@@ -19,3 +19,4 @@ export function repoRoot() {
 }
 
 export const workspacesDir = () => join(repoRoot(), 'workspaces');
+export const sharedLibraryDir = () => join(workspacesDir(), 'Shared', 'Library');

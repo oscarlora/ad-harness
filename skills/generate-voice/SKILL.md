@@ -1,21 +1,18 @@
 ---
 name: generate-voice
-description: Design and generate natural voiceovers with Gemini 3.8 Flash TTS or Seed Audio 1.0 through tools/generate-voice.mjs. Use when an ad needs narration, dialogue, a voice take, a pronunciation correction, a pacing change, a designed speaker voice, or a voice isolated from music or re-voiced (ElevenLabs).
+description: Design and generate natural voiceovers with Gemini 3.8 Flash TTS through tools/generate-voice.mjs. Use when an ad needs narration, dialogue, a voice take, a pronunciation correction, a pacing change, a designed speaker voice, or a voice isolated from music or re-voiced (ElevenLabs).
 ---
 
 # Generate voice
 
 `tools/generate-voice.mjs` sends a `--script-file` with one or two speakers to **Gemini 3.8 Flash
-TTS** (the Gateway takes one speaker only). Raw prompts (`--prompt-file`), 3+ speakers and
-`[DIRECTIVE]` lines switch to **Seed Audio 1.0** on Segmind automatically; `--model seed-audio`
-forces it (e.g. to clone a `reference_audio`). Use `--model elevenlabs/...` (kie) only when a known
-voice ID is required.
+TTS** on kie. Three or more speakers: generate each pair or voice separately and join them in the edit.
 
 ## Design the voice
 
-For Gemini TTS, pick a prebuilt voice per speaker — `voice_name:` in the `--voices-file` block or
+Pick a prebuilt voice per speaker — `voice_name:` in the `--voices-file` block or
 `--voice-name Kore,Puck` in speaker order (default Kore, then Puck); the `description` becomes the
-delivery direction. Seed Audio voices are designed, not selected. Describe:
+style of each of that speaker's lines. Describe:
 
 - where the speaker grew up and their accent, first and outright, with two or three concrete
   features of that accent (otherwise the model guesses from the name, face or setting);
@@ -32,7 +29,8 @@ Describe natural human behavior, not vague labels like "conversational": speaks 
 explaining something across a table; takes small breaths at thought breaks; never sounds like an
 announcer.
 
-Prompt structure:
+Prompt structure (for `generate-voice.mjs`, voice and delivery go in the `description`, the script
+in the `--script-file`):
 
 ```text
 voice:
@@ -46,8 +44,8 @@ script:
 The exact spoken copy goes here.
 ```
 
-The script is verbatim. Over Seed Audio's 2,048-character limit, compress the voice and delivery
-directions; never cut or paraphrase the spoken copy.
+The script is verbatim; never cut or paraphrase the spoken copy. A one-off sound goes in the line as a
+Gemini tone tag (`<laugh>`, `<sigh>`, `<short pause>`).
 
 ## Pronunciation
 
@@ -63,11 +61,21 @@ node tools/generate-voice.mjs \
   --out workspaces/<WS>/<Brand>/outputs/<ad>/voice/vo-a.mp3
 ```
 
-Raw Seed Audio prompts (`--prompt-file`, `--target-length`), labeled dialogue (`--voices-file`) and
-every other flag: `--help`. Keep earlier takes with `-a`, `-b`, `-c` suffixes.
+Labeled dialogue (`--voices-file`) and every other flag: `--help`. Keep earlier takes with `-a`, `-b`, `-c` suffixes.
 
 ## Isolate or re-voice (ElevenLabs)
 
-With `<WS>_ELEVENLABS_API_KEY`, call the API directly (no tool): `POST /v1/audio-isolation` strips
-music and noise from a voice; `POST /v1/speech-to-speech/<voice_id>`
-(`model_id=eleven_multilingual_sts_v2`) re-voices a take, keeping its exact delivery.
+`tools/fix-voice.mjs` (`--help`) fixes a real speaker's voice. It needs `<WS>_ELEVENLABS_API_KEY`;
+ask for it only when this fix comes up (they paste it into `.env`):
+
+- **`isolate`** only when background noise gets in the way of the speech: ElevenLabs isolation with
+  the original 18 dB under it, EQ'd and leveled per clip (ffmpeg's `afftdn` and RNNoise sound watery or
+  miss music and other voices).
+- **`clone`** once per speaker, from their clearest clips in the same room; keep the voice id in the
+  brand's `memory.md`.
+- **`patch`** a word they mumbled or cut off (**review-ugc-footage**): isolation and Speech-to-Speech
+  keep a mumble, so the clone re-says it where the mouth moves. Give the words they actually said (let
+  the grammar decide, not a transcript's guess) and the words around them. The user picks the take by ear.
+
+`POST /v1/speech-to-speech/<voice_id>` (`model_id=eleven_multilingual_sts_v2`) re-voices a whole take
+with its exact delivery, when a clear guide recording exists.

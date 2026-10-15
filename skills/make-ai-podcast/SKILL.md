@@ -177,15 +177,14 @@ node tools/generate-video.mjs \
   --prompt-file <clip>.txt \
   --image <host-base>.png --image <guest-base>.png \
   --model seedance-2.5 \
-  --aspect 9:16 --resolution 480p --duration <within the model's cap> --generate-audio \
+  --aspect 9:16 --resolution 480p --duration <within the model's cap> \
   --out workspaces/<WS>/<Brand>/outputs/<ad-name>/clips/<clip>.mp4 --timeout 600
 ```
 
 - `--image`: the base image of each character who speaks in that clip.
-- Keep `--generate-audio` on; the prompt says no music.
-- **Always pass `--model seedance-2.5`**; `seedance-2-mini` is the cheap option.
-- Resolution follows the 480p ladder (AGENTS.md). Seedance 2.5 reaches 1080p only on the Gateway;
-  without a Gateway key, switch only the model to `seedance-2` for the master.
+- Sound stays on (no `--no-audio`); the prompt says no music.
+- **Always pass `--model seedance-2.5`**.
+- Resolution: AGENTS.md, Video.
 - Check each clip silently with `ffprobe` (duration, streams, audio present); no frame pulls unless
   the user asks.
 
@@ -193,7 +192,7 @@ node tools/generate-video.mjs \
 
 The clips carry no music and no on-screen product; both go in during the edit. Two routes:
 
-- **Self-edit in the kit.** Load **edit-video** and build the cut as an edit document: the clips
+- **Self-edit in ADPK.** Load **edit-video** and build the cut as an edit document: the clips
   in order, the product graphic at the beat that fits (**search-media**), captions and music as
   wanted (**caption-video**, **add-music**).
 - **Hand off to an editor:** **write-handoff** (Editor handoff).

@@ -4,13 +4,14 @@ import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { brandUrl, fileUrl, workflowUrl } from '../../lib/client/api.js';
 import { useBrandData } from '../../lib/client/hooks.js';
-import { Badge, Bars, LoadError, words } from '../BrandPage.js';
+import { Bars, LoadError, words } from '../BrandPage.js';
 import Editor from '../edit/Editor.js';
 import { IcLeft } from '../icons.js';
 import Player from '../Player.js';
 import ViewerShell from '../ViewerShell.js';
-import { Dot, MdFile, TextDisclosure } from './parts.js';
+import { Dot, TextDisclosure } from './parts.js';
 import Markdown from './Markdown.js';
+import MdEditor from './MdEditor.js';
 import Storyboard from './Storyboard.js';
 
 const baseName = (n) => n.split('/').pop();
@@ -25,8 +26,8 @@ function Lightbox({ ws, brand, images, index, onStep, onClose }) {
   );
 }
 
-// A step's files, rendered by kind.
-function Files({ ws, brand, files }) {
+// A step's files, rendered by kind; .md files edit in place (view: which parts, see MdEditor).
+function Files({ ws, brand, ad, files, view, notes }) {
   const [zoom, setZoom] = useState(-1);
   const images = files.filter((f) => f.type === 'image');
   const videos = files.filter((f) => f.type === 'video');
@@ -38,7 +39,7 @@ function Files({ ws, brand, files }) {
       {files.filter((f) => f.type === 'md').map((f) => (
         <section key={f.p}>
           {files.length > 1 && <div className="eyebrow">{baseName(f.name)}</div>}
-          <MdFile ws={ws} brand={brand} file={f} />
+          <MdEditor ws={ws} brand={brand} ad={ad} file={f} view={view} notes={notes.filter((n) => n.file === f.name)} />
         </section>
       ))}
       {images.length > 0 && (
@@ -93,46 +94,42 @@ function Panel({ ws, brand, step, data }) {
           <div className="v v--pre">{v}</div>
         </div>
       ))}
-      {pn.files && <Files ws={ws} brand={brand} files={pn.files} />}
+      {pn.files && <Files ws={ws} brand={brand} ad={data.folder} files={pn.files} view={pn.view} notes={data.comments || []} />}
       {pn.storyboard && storyboard && <Storyboard ws={ws} brand={brand} sb={storyboard} />}
     </section>
   );
 }
 
-// Opens on the edit when there is one, else the storyboard, else the step in progress, else the last one done.
+// Opens on the edit when there is one, else the storyboard, else the step in progress if it shows something, else the last one done.
 const defaultStep = (d) => d.steps.find((s) => s.panel?.editor)?.key
   || (d.storyboard && 'storyboard')
-  || d.steps.find((s) => s.state === 'current')?.key
+  || d.steps.find((s) => s.state === 'current' && Object.keys(s.panel || {}).length)?.key
   || [...d.steps].reverse().find((s) => s.done)?.key
   || d.steps[0]?.key;
 
 function Detail({ ws, brand, ad }) {
-  const { data, error, load, updatedAt } = useBrandData(ws, brand, `workflow?ad=${encodeURIComponent(ad)}`);
+  const { data, error, load } = useBrandData(ws, brand, `workflow?ad=${encodeURIComponent(ad)}`);
   const [sel, setSel] = useState(null);
   const steps = data?.steps || [];
   const step = steps.find((s) => s.key === sel) || (data && steps.find((s) => s.key === defaultStep(data)));
 
   return (
     <div>
-      <Bars ws={ws} brand={brand} current="workflow" count={data ? `Ad ${data.id}` : 'Loading'} updatedAt={updatedAt} />
+      <Bars ws={ws} brand={brand} current="workflow" bottom={false} />
       {error && <LoadError what="this ad" error={error} onRetry={load} />}
       {!error && data && (
         <div className="flow-page">
           <header className="flow-head">
-            <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')}><IcLeft />All ads</Link>
-            <h1>{words(data.concept)}</h1>
-            <div className="flow-head__sub">
-              {[data.format, data.persona, data.angle, data.product].filter(Boolean).map(words).join(' · ')}
-              {data.status && <Badge status={data.status} />}
-            </div>
+            <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')} aria-label="All ads" title="All ads"><IcLeft /></Link>
+            <h1><span className="flow-head__id">{data.id}</span>{words(data.concept)}</h1>
+            <nav className="flow-steps" aria-label="Steps">
+              {steps.map((s) => (
+                <button key={s.key} type="button" className="flow-step" data-state={s.state} aria-pressed={s === step} title={STATE[s.state]} onClick={() => setSel(s.key)}>
+                  <Dot state={s.state} />{s.label}{s.count && <small>{s.count}</small>}
+                </button>
+              ))}
+            </nav>
           </header>
-          <nav className="flow-steps" aria-label="Steps">
-            {steps.map((s) => (
-              <button key={s.key} type="button" className="flow-step" data-state={s.state} aria-pressed={s === step} title={STATE[s.state]} onClick={() => setSel(s.key)}>
-                <Dot state={s.state} />{s.label}{s.count && <small>{s.count}</small>}
-              </button>
-            ))}
-          </nav>
           {step && <Panel ws={ws} brand={brand} step={step} data={data} />}
         </div>
       )}

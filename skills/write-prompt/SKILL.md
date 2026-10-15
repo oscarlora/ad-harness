@@ -22,7 +22,7 @@ Turn the locked concept into one structured, easy-to-read prompt, then generate.
 - **Each generation is stateless.** Describe the final image, never an edit of a previous attempt (no "don't do X" caveats about a prior output). Hard requirements (element counts, "natural undistorted proportions", single image) go in **Constraints**. To fix an ad, rebuild the whole prompt fresh; never add product-appearance or dimension language to force a fix.
 - **Revisions regenerate — never edit a previous render.** For any revision (ad, frame, clip), fold the change into the prompt that made it (an ad's is in its record) and generate fresh with the original refs. No image-to-image edit pass on a prior render, and don't ask edit-vs-regenerate (image edits stay fine for preparing base photos, or when the user asks). When recasting real footage, the base is always **the original source frame**, with a short prompt naming only the change. To keep a person across shots, add a **face-only crop** (head and hair) from her approved frame and say "use image 2 only for her face and hair, nothing else". Never feed a whole generated frame back as a reference: each pass gets crisper until it reads fake.
 - Position elements with **ideate-image-format**'s five horizontal bands (portrait) or clear anchor points, never percentages.
-- **Defaults for image ads:** 1 generation, GPT Image 2.5 Flare (its fast variant), 4:5, 1K tier, medium quality. Switch models only when the user asks, even when one mangles something (flag it). Never change aspect, lower quality, resize or upscale on your own.
+- **Defaults for image ads:** 1 generation, GPT Image 2.5 Flare (its fast variant), 4:5, 1K tier. Switch models only when the user asks, even when one mangles something (flag it). Never change aspect, resize or upscale on your own.
 - **References:** the tool hosts local files itself (signed R2 URLs, or kie's file hosting without R2); there is nothing to upload or delete. Pass an existing HTTPS URL directly when the reference isn't a cataloged brand asset.
 
 ## How a model reads a prompt (every generator: image, video, voice)
@@ -97,6 +97,8 @@ Every ad gets its own folder in `outputs/`. A render lands in `drafts/`; on appr
   shares one ID, even across concepts: each new concept continues the variation count (V6, V7, …),
   and the record's `variations` map gives each its own concept, copy and prompt. Folder and file
   names keep the first concept's name.
+- **Concept** — 2–4 words naming the angle's core message (`Greens-Beat-Pills`), not a line lifted
+  from the script.
 - **Format** — e.g. `Static`, `UGC`, `Voiceover-Mashup`, `Voiceoverless-Mashup`, `Podcast`, `Animation`, `Slides`, `Song`.
 - Underscores between parts, hyphens inside a part (`Disappearing-Woman`).
 
@@ -125,18 +127,23 @@ Delegation and long renders: AGENTS.md (operating principles).
    prompt's `File name:` line) and remove the temp prompt file. Index refresh and R2 push: AGENTS.md.
 
 To **re-generate** from an existing record, `generate-image.mjs --record <record.json>` reads the
-prompt, refs and params and stamps the result back. All flags: `--help`. A provider that can't take
-the request is skipped (kie's GPT Image 2.5 has no 4:5 or 5:4); if every provider fails, stop and ask.
+prompt, refs and params and stamps the result back. All flags: `--help`. When the tool refuses a
+request, tell the user and name the fallback it gives (Nano Banana 2.1); switch only on their yes.
+GPT Image 2.5 has no 4:5 or 5:4 on kie: the tool renders 3:4 / 4:3 and center-crops it (about 3% off
+each edge), nothing else changed.
 
 ## Video models
 
-`tools/generate-video.mjs` (limits per model in its `--help`), on the same auto routing:
+`tools/generate-video.mjs` runs on kie (every limit in its `--help`). Every model adds its own sound;
+only Seedance 2.5 can turn it off (`--no-audio`). On the others, end the prompt with "No sound." when
+the clip needs none; if sound still comes, name only the sounds wanted and add "nothing else". Mute
+what's left in the edit. Switch models only on the user's yes; a refused request names the
+fallback.
 
-- **MiniMax H3 Max** (the default): 5–15 s clips, 480p drafts and a 768p master, with sound. It
-  has no audio control (`--no-audio` changes nothing): to get silence, say so in the prompt. With
-  `--image` references only Segmind runs H3 Max. kie carries only base MiniMax H3 (Hailuo 03), which
-  renders 768p whatever you ask; the tool warns when it falls back there. The Gateway takes no references
-  (first and last frame only).
-- **Seedance 2.5:** up to 30 s and 30 reference images; generates voices and sound
-  (`--generate-audio`). Masters reach 720p, or 1080p on the Gateway. **Seedance 2** and **2 Mini** cap
-  at 15 s.
+- **MiniMax H3** (the default): 4–15 s clips at 768p (2K only when asked), prompts up to 7,000
+  characters. Frames, or references (9 images, 3 videos, 3 audio clips), not both.
+- **Gemini Omni 1.1 Flash** (the fallback): 4, 6, 8 or 10 s, 9:16 or 16:9, 720p (same price
+  as 360p), up to 4K.
+  Up to 7 reference images, or one video it reworks (a 10 s window).
+- **Seedance 2.5** (Omni's fallback): 4–30 s, 480p drafts up to 1080p; 30 images, 10 videos and 10
+  audio clips as references. Speaks the dialogue it is given.

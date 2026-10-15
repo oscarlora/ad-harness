@@ -154,23 +154,23 @@ the frame, not against it**. Each prompt stands alone, written like a director's
 - **SOUND:** only this shot's sounds, placed in time. Say in the prompt: no music, crowd chatter,
   room tone or ambience.
 
-**Narrated:** MiniMax H3 Max, or Seedance 2.5 for longer clips (**write-prompt**, Video models). One
+**Narrated:** MiniMax H3, or Seedance 2.5 for longer clips (**write-prompt**, Video models). One
 run per planned clip: its shots' frames in order as `--image` refs, then the sheets of who's in it
 (9 images at most on MiniMax). The prompt lists `SHOT n (a–b s), image n:` with a hard cut at each,
 and SOUND carries the effects, so every clip comes back with its own sound. Name each clip after its
 first shot (`clips/clip-07.mp4` covers shots 07–12). Run independent clips in parallel (long
 renders: AGENTS.md).
 
-    node tools/generate-video.mjs --model minimax-h3-max --prompt-file <ad>/prompts/clip-07.txt \
+    node tools/generate-video.mjs --model minimax-h3 --prompt-file <ad>/prompts/clip-07.txt \
       --image <ad>/frames/frame-07.png --image <ad>/frames/frame-08.png --image <ad>/sheets/<setting>.png \
       --aspect 9:16 --duration <clip seconds, rounded up> --out <ad>/clips/clip-07.mp4 --timeout 1500
 
 **Dialogue:** one Seedance 2.5 run per shot at 480p from its frame; it makes the voices and sound
-too (Seedance 2 Mini is the budget fallback). Leave `--aspect` off (the frame sets the shape).
+too. Leave `--aspect` off (the frame sets the shape).
 
     node tools/generate-video.mjs --prompt-file <ad>/prompts/clip-01.txt \
       --model seedance-2.5 --first-frame <ad>/frames/frame-01.png --resolution 480p \
-      --duration <shot seconds> --generate-audio --out <ad>/clips/clip-01.mp4 --timeout 900
+      --duration <shot seconds> --out <ad>/clips/clip-01.mp4 --timeout 900
 
 Dialogue prompts add two sections:
 
@@ -188,8 +188,8 @@ Dialogue prompts add two sections:
 Preview each clip mixing its own sound, the voiceover span and the music under it. When one shot
 misses, fix its prompt (**write-prompt**) and regenerate **that shot
 alone** from its frame (`--first-frame`, at least the model's minimum length; fix the frame first
-when the frame set it up), then splice it in at the clip's real cut. Clips stay 480p drafts
-(AGENTS.md, Video).
+when the frame set it up), then splice it in at the clip's real cut. Clips stay at the tool's
+default tier (AGENTS.md, Video).
 
 ## 8. Edit
 

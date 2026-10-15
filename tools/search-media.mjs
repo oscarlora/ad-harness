@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // search-media.mjs — search the media catalog: filters narrow, then keyword and vector rankings are
-// fused. A video scene hit returns its time range. Without vectors or a key, keywords alone (no npm deps).
+// fused. A video scene hit returns its time range. Without current vectors, keywords alone (no npm deps).
 import { catalogPaths, readRecords, readRoster, parseArgs, mediaDirFrom, usage } from './lib/catalog.mjs';
-import { gatewayKey, embed, queryText, unpackVec, cosine } from './lib/gateway.mjs';
+import { embed, queryText, unpackVec, cosine, EMBED_MODEL } from './lib/embed.mjs';
 import { readVectors } from './embed-media.mjs';
 
 const HELP = `search-media.mjs — search a brand's media catalog
@@ -12,7 +12,7 @@ const HELP = `search-media.mjs — search a brand's media catalog
        [--product "Bowl de Pollo"] [--person "Kathe"] [--source brand|generated|external]
        [--keywords-only] [--limit 20] [--json]
     --like <id>      rank by similarity to that asset's description (combine with filters)
-    --keywords-only  skip the vector ranking
+    --keywords-only  skip the vector ranking (and loading its local model)
     --json           machine-readable results`;
 
 function loadAliases(mediaDir) {
@@ -86,7 +86,7 @@ async function search(mediaDir, opts = {}) {
   });
 
   const store = opts.keywordsOnly ? null : readVectors(mediaDir);
-  const key = store ? gatewayKey(mediaDir) : '';
+  if (!store && !opts.keywordsOnly && (opts.query || opts.like)) console.error(`No ${EMBED_MODEL} vectors — keywords only. Run embed-media for semantic search.`);
   let ranked; let mode = 'keywords';
 
   if (opts.like) {
@@ -96,12 +96,9 @@ async function search(mediaDir, opts = {}) {
     mode = 'similar';
   } else if (opts.query) {
     const kw = keywordRank(rows, opts.query.split(/\s+/).filter(Boolean).flatMap(expand)).map((r) => ({ r }));
-    if (store && key) {
-      const [q] = await embed(key, [queryText(opts.query)]);
-      const sem = semanticRank(rows, store, q).slice(0, 50);
-      ranked = fuse([sem, kw]);
-      mode = 'hybrid';
-    } else ranked = kw;
+    const q = store && await embed([queryText(opts.query)]).then(([v]) => v, (e) => console.error(`${e.message} — keywords only`));
+    if (q) { ranked = fuse([semanticRank(rows, store, q).slice(0, 50), kw]); mode = 'hybrid'; }
+    else ranked = kw;
   } else {
     ranked = rows.sort((a, b) => String(a.id).localeCompare(String(b.id))).map((r) => ({ r }));
   }

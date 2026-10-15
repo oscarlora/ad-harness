@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // transcribe-media.mjs — any audio/video clip -> transcript JSON (lib/transcribe.mjs).
-// A library item reuses its catalog transcript. Without a Gateway key it exits 3 (SKIP).
+// A library item reuses its catalog transcript. Word timings run locally (whisper.cpp). Without a kie
+// key for a transcript it exits 3 (SKIP).
 
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { typeOf, inferWorkspace, inferBrand, brandDirFrom, mediaDirFrom, catalogPaths, readRecords, parseArgs, die, usage } from './lib/catalog.mjs';
-import { gatewayKey, spend, ANALYSIS_MODEL } from './lib/gateway.mjs';
+import { typeOf, inferWorkspace, inferBrand, brandDirFrom, mediaDirFrom, catalogPaths, readRecords, parseArgs, die, usage, REPO_ROOT } from './lib/catalog.mjs';
+import { analysisKeys, spend, spendText, ANALYSIS_MODEL } from './lib/analyze.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary, alignWords } from './lib/transcribe.mjs';
 
 const HELP = `transcribe-media.mjs — audio/video clip -> transcript JSON
@@ -17,8 +18,10 @@ Required:
 
 Optional:
   --out <path>             Output JSON (default: alongside the input as <name>.transcript.json)
-  --words                  Add word timings (for captions and cuts)
-  --workspace <WS>         Workspace whose Gateway key to use when the input isn't under workspaces/<WS>/
+  --words                  Add word timings (for captions and cuts), from local Whisper
+  --workspace <WS>         Workspace whose kie key to use when the input isn't under workspaces/<WS>/
+
+Transcripts: Gemini on kie.ai (<WS>_KIE_API_KEY; optional fallback when kie fails: <WS>_AI_GATEWAY_API_KEY).
 
 Output: { model, language, has_speech, text, sound?, segments:[{start,end,speaker,text}],
           words?:[{start,end,word,speaker}], words_model? }`;
@@ -39,7 +42,7 @@ async function main() {
   const out = a.out ? resolve(String(a.out)) : input.replace(/\.[^./]+$/, '') + '.transcript.json';
 
   const ws = a.workspace ? String(a.workspace) : inferWorkspace(input);
-  const key = gatewayKey(a.workspace ? join(resolve('workspaces'), ws, '_') : input);
+  const keys = analysisKeys(a.workspace ? join(REPO_ROOT, 'workspaces', ws, '_') : input);
   const media = join(brandDirFrom(input), 'inputs', 'media');
 
   let result;
@@ -49,13 +52,13 @@ async function main() {
     const t = rec.audio_transcript;
     result = { model: t.model || rec.analysis?.model || '', has_speech: true, ...t, sound: rec.audio_description };
   } else {
-    if (!key) { console.error(`SKIP: no AI Gateway key — add ${(ws || '<WS>').toUpperCase()}_AI_GATEWAY_API_KEY to .env (or pass --workspace)`); process.exit(3); }
+    if (!keys.kie) { console.error(`SKIP: no kie key — add ${(ws || '<WS>').toUpperCase()}_KIE_API_KEY to .env (or pass --workspace)`); process.exit(3); }
     const track = audioTrack(input);
     try {
       if (!track || track.silent) result = { model: ANALYSIS_MODEL, language: '', has_speech: false, text: '', sound: track ? 'Silent — no audible sound.' : 'No audio track.', segments: [] };
       else {
-        const snd = await transcribeAudio(key, track, { brand: inferBrand(input), vocab: vocabulary(media) });
-        const t = toTranscript(snd, track.duration) || { language: snd.language || '', text: '', segments: [], model: ANALYSIS_MODEL };
+        const snd = await transcribeAudio(keys, track, { brand: inferBrand(input), vocab: vocabulary(media) });
+        const t = toTranscript(snd, track.duration) || { language: snd.language || '', text: '', segments: [], model: snd.model };
         result = { ...t, has_speech: !!t.segments.length, sound: snd.sound };
       }
     } finally { if (track) rmSync(track.dir, { recursive: true, force: true }); }
@@ -63,13 +66,12 @@ async function main() {
 
   if (a.words) {
     if (!result.segments.length) result = { ...result, words: [], words_model: null };
-    else if (!key) { console.error(`SKIP: no AI Gateway key for word timings — add ${(ws || '<WS>').toUpperCase()}_AI_GATEWAY_API_KEY to .env (or pass --workspace)`); process.exit(3); }
-    else result = await alignWords({ file: input, transcript: result, key });
+    else result = await alignWords({ file: input, transcript: result });
   }
 
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(result, null, 2) + '\n');
-  console.error(`segments  ${result.segments.length}${result.words ? `  words ${result.words.length} (${result.words_model || 'none'})` : ''}  [${result.language || '—'}]${spend.usd ? `  $${spend.usd.toFixed(4)}` : ''}`);
+  console.error(`segments  ${result.segments.length}${result.words ? `  words ${result.words.length} (${result.words_model || 'none'})` : ''}  [${result.language || '—'}]${spend.credits || spend.usd ? `  ${spendText()}` : ''}`);
   console.log('Saved: ' + out);
 }
 

@@ -1,4 +1,4 @@
-# The All-in-One Ad Production Kit
+# The All-in-One Ad Production Kit (ADPK)
 
 Everything you need to make Meta ads with Claude, Codex or any AI agent: skills and tools to go from
 idea to ready-to-launch ad. Creative strategists, copywriters, video editors, designers and business
@@ -16,6 +16,8 @@ Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for
 - **Animated video ads:** animated characters speaking or acting out your script, in Pixar,
   claymation or any animation style.
 - **Slides video ads:** a narrated explainer, one illustrated slide per line.
+- **UGC edits:** a creator's footage checked against the script, then cut into the ad.
+- **Short recuts:** sub-30 s versions recombined from a finished talking-head or UGC edit.
 
 ## How it works
 
@@ -31,8 +33,9 @@ Everything runs through your agent: say what you want in plain words.
    approve each step before the next.
 5. **Edit:** clips, captions, music and effects are cut into the final video. You watch it in the
    studio and click on the video to leave notes; the agent applies them while you watch, then exports.
+   A creator's footage is first checked against the script. A finished talking-head edit can be recut into shorter ads from the same footage.
 6. **Review and upload:** *"Open the studio"* — the local web app: **Board** (review ads),
-   **Media** (search the library), **Workflow** (each ad's progress and its edit). Approved ads are uploaded to
+   **Media** (search the library), **Workflow** (each ad's progress, its brief to edit live, and its edit). Approved ads are uploaded to
    Google Drive, Notion, or anywhere you set up (e.g. Dropbox). Anything you or a client want
    remembered goes into the brand's memory, so the next ads follow it.
 
@@ -43,10 +46,10 @@ when you finish to back it up.
 
 Teams share brands through cloud storage:
 
-- At the start of every session: *"Update the kit and pull Acme"* — the latest kit and the
+- At the start of every session: *"Update ADPK and pull Acme"* — the latest ADPK and the
   latest brand files. Updating never touches your brand work or `.env`.
 - At the end of your work: *"Push Acme"*. The sync warns before overwriting someone's newer work.
-- Share each workspace's `.env` block through a password vault, and propose kit changes as a
+- Share each workspace's `.env` block through a password vault, and propose ADPK changes as a
   pull request.
 
 ## How to set it up
@@ -57,14 +60,14 @@ Teams share brands through cloud storage:
 The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
 keys ([.env.example](.env.example)):
 
-- **Generation:** at least one of [Segmind](https://www.segmind.com), [kie.ai](https://kie.ai) or
-  the [Vercel AI Gateway](https://vercel.com/ai-gateway); the Gateway also runs the media library.
+- **Generation and media analysis:** a [kie.ai](https://kie.ai) key. Search and caption timing run on your
+  computer.
 - **Cloud storage (teams; optional solo):** a
   [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket the team and their
   agents pull from and push to.
 - **Uploads (optional):** Google Drive, Notion.
 
-Videos are edited in the kit's own editor and exported through Chrome, Edge, or a Chromium that
+Videos are edited in ADPK's own editor and exported through Chrome, Edge, or a Chromium that
 setup installs. It runs on macOS, Windows and Linux.
 
 ## How it's organized

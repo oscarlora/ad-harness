@@ -2,10 +2,10 @@
 // Returned paths are brand-relative (POSIX), for the /file route.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { isSeparator, tableCells } from '../../components/workflow/Markdown.js';
+import { inSections, isSeparator, parseDoc, tableCells } from '../../components/workflow/Markdown.js';
 import { adFolders, displayText } from './ads.js';
 import { readJson } from './brands.js';
-import { editInfo } from './edit.js';
+import { docNotes, editInfo } from './edit.js';
 
 const IMG = /\.(png|jpe?g|webp|gif|avif)$/i;
 const VID = /\.(mp4|mov|m4v|webm)$/i;
@@ -146,16 +146,18 @@ function shotsWithMedia(brandDirAbs, folder, sb, files) {
 
 // ---- steps per format ----
 // A step: { key, label, done, count?, panel } where panel holds any of
-// { note, md (inline text), fields: [[label, text]], files: [...], storyboard: true }.
+// { note, md (inline text), fields: [[label, text]], files: [...], view ({ only, pick?, cols? } regex sources: the .md sections to show, the blocks among them, a table's columns by header), storyboard: true }.
 const ROOT_VIDEO = (f) => !f.rel.includes('/') && f.type === 'video' && !/^reference/i.test(f.rel);
 const ROOT_EXPORT = (f) => ROOT_VIDEO(f) || (!f.rel.includes('/') && f.type === 'audio');
 const ROOT_MD = (f) => !f.rel.includes('/') && f.type === 'md' && !/^analysis\.md$/i.test(f.rel);
+const REFERENCE = (f) => !f.rel.includes('/') && /^reference/i.test(f.rel) && f.type !== 'other';
 const under = (dir, ...types) => (f) => f.rel.startsWith(`${dir}/`) && (!types.length || types.includes(f.type));
 const any = (...preds) => (f) => preds.some((p) => p(f));
 const EXPORTED = any(ROOT_VIDEO, under('final', 'video')); // edit-video exports to final/
 const count = (files) => { const n = files.filter((f) => ['image', 'video', 'audio'].includes(f.type)).length; return n > 1 ? String(n) : ''; };
 
 // Each step lists the files that evidence it (and optionally record fields); optional steps show only when they have files.
+// A step with a section shows those sections of the newest root .md (the brief); pick narrows them to matching blocks, cols to matching table columns.
 const FAMILIES = {
   image: [ // make-image-ad
     { key: 'copy', label: 'Copy', fields: (rec) => Object.entries(rec?.copy || {}).map(([k, v]) => [k, displayText(v)]) },
@@ -179,8 +181,15 @@ const FAMILIES = {
     { key: 'broll', label: 'B-roll', optional: true, files: under('broll', 'image', 'video') },
     { key: 'export', label: 'Export', files: ROOT_EXPORT },
   ],
-  creator: [ // creator-filmed (UGC) and editor-built formats: a brief, then the delivered video
-    { key: 'brief', label: 'Brief', files: any(ROOT_MD, (f) => !f.rel.includes('/') && /^reference/i.test(f.rel) && f.type !== 'other', (f) => /^analysis\.md$/i.test(f.rel), under('slides', 'image')) },
+  ugc: [ // creator-filmed: write-copy's brief template, built section by section, then the edit
+    { key: 'concept', label: 'Concept', section: /^concept/i, pick: /^\*\*(Message|For|Format|Concept Overview):/ },
+    { key: 'script', label: 'Script', section: /^(lines to camera|hooks|script)/i, pick: /^\|/, cols: /^(scene|line)$/i },
+    { key: 'storyboard', label: 'Storyboard', section: /^(lines to camera|slides|b-?roll|visuals)/i, pick: /^\|/, cols: /^(?!line$)/i, files: any(REFERENCE, under('slides', 'image')) },
+    { key: 'brief', label: 'Brief', files: any(ROOT_MD, (f) => /^analysis\.md$/i.test(f.rel)) },
+    { key: 'edit', label: 'Edit', files: ROOT_VIDEO },
+  ],
+  creator: [ // editor-built formats: a brief, then the delivered video
+    { key: 'brief', label: 'Brief', files: any(ROOT_MD, REFERENCE, (f) => /^analysis\.md$/i.test(f.rel), under('slides', 'image')) },
     { key: 'video', label: 'Video', files: ROOT_VIDEO },
   ],
   video: [ // other generated video (podcast, explainer)
@@ -199,14 +208,18 @@ function familyOf(format) {
   if (/song/.test(f)) return 'song';
   if (/static|image|screenshot|carousel/.test(f)) return 'image';
   if (/voiceover|audio/.test(f)) return 'voice';
-  if (/ugc|creator|text|handwritten/.test(f)) return 'creator';
+  if (/ugc|creator/.test(f)) return 'ugc';
+  if (/text|handwritten/.test(f)) return 'creator';
   return 'video';
 }
 
-function genericSteps(family, files, rec) {
+function genericSteps(brandDirAbs, family, files, rec) {
+  const brief = files.filter(ROOT_MD).pop();
+  const blocks = brief && FAMILIES[family].some((d) => d.section) ? parseDoc(readText(brandDirAbs, brief.p)).blocks : [];
   const steps = [];
   for (const def of FAMILIES[family]) {
-    const own = def.files ? files.filter(def.files) : [];
+    const sec = !!def.section && inSections(blocks, def.section).some((on, i) => on && (!def.pick || def.pick.test(blocks[i].src)));
+    const own = [...(sec ? [brief] : []), ...(def.files ? files.filter(def.files) : [])];
     const fields = own.length ? [] : (def.fields?.(rec) || []).filter(([, v]) => v);
     if (def.optional && !own.length) continue;
     steps.push({
@@ -214,7 +227,7 @@ function genericSteps(family, files, rec) {
       label: def.label,
       done: !!(own.length || fields.length || def.done?.(rec)),
       count: count(own),
-      panel: { ...(fields.length ? { fields } : {}), ...(own.length ? { files: present(own, files) } : {}) },
+      panel: { ...(fields.length ? { fields } : {}), ...(own.length ? { files: present(own, files) } : {}), ...(sec ? { view: { only: def.section.source, pick: def.pick?.source, cols: def.cols?.source } } : {}) },
     });
   }
   return steps;
@@ -261,7 +274,7 @@ function adWorkflow(brandDirAbs, folder) {
   const family = familyOf(head.format);
   const { steps, storyboard = null } = family === 'animation'
     ? animationSteps(brandDirAbs, folder, files)
-    : { steps: genericSteps(family, files, rec) };
+    : { steps: genericSteps(brandDirAbs, family, files, rec) };
   // An edit document turns the last video step into the editor.
   const edit = family === 'image' ? null : editInfo(brandDirAbs, folder);
   if (edit) {
@@ -271,13 +284,13 @@ function adWorkflow(brandDirAbs, folder) {
     const count = open ? `${open} note${open === 1 ? '' : 's'}` : review ? `${review} to review` : last.count;
     Object.assign(last, { done: true, count, panel: { editor: true } });
   }
-  return { ...head, status: rec?.status || '', steps: withStates(steps), storyboard, edit };
+  return { ...head, status: rec?.status || '', steps: withStates(steps), storyboard, edit, comments: docNotes(brandDirAbs, folder) };
 }
 
 // The ad list: newest (highest id) first, each with its current step.
 export function workflowList(brandDirAbs) {
   const ads = adFolders(join(brandDirAbs, 'outputs')).map((folder) => {
-    const { steps, storyboard, edit, ...head } = adWorkflow(brandDirAbs, folder);
+    const { steps, storyboard, edit, comments, ...head } = adWorkflow(brandDirAbs, folder);
     const cur = steps.find((s) => s.state === 'current');
     return { ...head, step: cur ? { label: cur.label, count: cur.count } : null, states: steps.map((s) => s.state) };
   });

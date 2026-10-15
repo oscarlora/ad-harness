@@ -79,11 +79,11 @@ Check all frames side by side (an ffmpeg `xstack` contact sheet) against step 4.
 
 ## 6. Clips
 
-MiniMax H3 Max (**write-prompt**, Video models), 3–6 minutes a clip. Group whole shots into chunks of
+MiniMax H3 (**write-prompt**, Video models), 3–6 minutes a clip. Group whole shots into chunks of
 up to 15 s (never split a shot), pass their frames in order, and run every chunk at once (long renders:
 AGENTS.md):
 
-    node tools/generate-video.mjs --model minimax-h3-max --prompt-file <ad>/prompts/chunk-01.txt \
+    node tools/generate-video.mjs --model minimax-h3 --prompt-file <ad>/prompts/chunk-01.txt \
       --image <ad>/frames/frame-01.png --image <ad>/frames/frame-02.png --image <ad>/frames/frame-03.png \
       --aspect 16:9 --duration <chunk seconds, rounded up> --out <ad>/clips/chunk-01.mp4 --timeout 1500
 
@@ -92,7 +92,7 @@ The prompt says:
 - Images 1…N are the slides, reproduced exactly, each filling the 16:9 frame edge to edge (no bars),
   shown in order with hard cuts at the given seconds; the last runs to the end.
 - Camera locked; text stays exactly as printed; never write any words on screen.
-- Sound, said outright (MiniMax has no audio control: **write-prompt**, Video models). When the sound effects
+- Sound, said outright (MiniMax always adds sound: **write-prompt**, Video models). When the sound effects
   go on in the edit (**generate-sfx**): "Silent video: no sound, music or voice at all." When the
   clip carries them: each beat's **What we hear** sound at its time, next to its motion.
 - Lively: something always moving (blinks, breathing, bobbing icons).

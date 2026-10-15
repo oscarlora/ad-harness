@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// edit-video.mjs — an ad's edit.json: check it, export it, grab stills, and build its captions, color match,
+// edit-video.mjs — an ad's edit.json: check it, export it, grab stills, and build its captions, color match, tracking,
 // ducking and review comments. Export and stills run Studio's own engine (studio/engine) in a headless browser,
 // so they match Studio's preview frame for frame.
 
@@ -7,11 +7,13 @@ import { createServer } from 'node:http';
 import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync, writeSync, closeSync, watch } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { brandDirFrom, die, ffprobeJson, mimeOf, parseArgs, round, run, usage } from './lib/catalog.mjs';
+import { brandDirFrom, die, ffprobeJson, inferWorkspace, markEditing, mimeOf, parseArgs, pcm, readEditing, round, run, sessionId, typeOf, usage } from './lib/catalog.mjs';
+import { compose, val } from '../studio/engine/doc.js';
 
 const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
 
-  check    <edit.json>                            summary + problems (missing files, black gaps)
+  check    <edit.json>                            summary + problems (missing files, black: no picture on any track);
+                                                  export refuses black unless --allow-black
   place    <edit.json> --shots <shots.json> [--track Video] [--scene 0.25] [--max-rate 1] [--sfx <wav>]
                                                   shots on their lines: shots.json = {"clips":[{"file",
                                                   "starts":[timeline s of each shot], "end"}]}; finds each
@@ -20,11 +22,24 @@ const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
                                                   shots' own sound, cut the same way, as one WAV
   cut      <edit.json> --from s --to s            remove that stretch of time from every track: clips trimmed or
                                                   split, everything after it (clips, captions, keyframes) moves up
+  tighten  <edit.json> [--track Voice] [--detect <dir>] [--gap 0.15] [--keep 0.08]
+                                                  cut the speaker's dead air: lead-ins, tails, pauses over --gap (to
+                                                  --keep), by waveform, guarded by each clip's word timings (cached in
+                                                  .tighten/); --track: the speaker's track(s), comma-separated (default: a track named
+                                                  voice/dialog/vo); --detect: noise-free copies (fix-voice isolate's
+                                                  isolated/) to find speech on, named like the source or the clip
+  track    <edit.json> --clip <name> --at s --box x,y,w,h [--follow <clip,…>] [--zoom 3 [--from s] [--ramp 0.25]
+           [--to x,y]] [--radius 80]   follow an object (a label, a jar, a hand) through a video clip, frame by
+                                                  frame: --box is it at --at, in frame px; --follow clips keep their offset
+                                                  from it; --zoom keyframes the clip onto it (ease out over --ramp from
+                                                  --from, default the clip's start), sliding it to --to (default center)
   reframe  <edit.json> --size 1080x1350 --out <edit-v2.json>   the edit in another frame size (positions and
                                                   sizes scaled; media still fills the frame)
-  export   <edit.json> [--out <mp4>] [--scale 0.5] [--from s] [--to s] [--timeout 1800]
+  export   <edit.json> [--out <mp4>] [--scale 0.5] [--from s] [--to s] [--timeout 1800] [--allow-black]
                                                   H.264 + AAC; default out: the doc's "output", else
                                                   final/<id>_V<n>_<rest of folder>.mp4 (n from edit-v<n>.json)
+  audio    <edit.json> [--from s] [--to s] [--out <wav>] [--transcribe]   the mix alone, no picture: check a change
+                                                  by ear; --transcribe prints its words on the timeline clock
   frames   <edit.json> --at 1,4.5,9 [--out <png>] [--scale 0.5]   a contact sheet of those moments
   captions <edit.json> --words <transcript.json|timing.json> [--max 3] [--track Captions] [--from s] [--to s]
                                                   word-timed caption lines into the track's captions clip
@@ -35,11 +50,14 @@ const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
                                                   (to place sound effects on actions)
   duck     <edit.json> --track Music --words <transcript.json> [--speaker S1] [--db -10]
                                                   volume keyframes: the track dips while they speak
-  comments <ad folder> [--wait] [--done <id> --reply "…" --span 12.4-15]   review notes left in Studio: open
-                                                  ones print as JSON with what was on screen and a contact sheet of
-                                                  their moments (marked spots outlined), and turn "seen"; --wait
-                                                  blocks until there is one; --done marks one done with the
-                                                  changed stretch, which Studio's review button plays
+  comments <ad folder> [--wait] [--take] [--done <id> --reply "…" --span 12.4-15]   review notes left in Studio:
+                                                  open ones print as JSON with what was on screen and a contact
+                                                  sheet of their moments (marked spots outlined), and turn "seen"
+                                                  (a note on a .md brief has file and quote instead);
+                                                  --wait blocks until there is one. They go only to the session
+                                                  editing the ad (lib/catalog.mjs markEditing); --take takes it over.
+                                                  --done marks one done with the changed stretch, which Studio's
+                                                  review button plays
 
 Document (times are seconds on the timeline clock; any number marked * also takes keyframes
 [[t, value, easing?], …], easing: linear | in | out | ease (default) | back | bounce | elastic | hold):
@@ -48,6 +66,9 @@ Document (times are seconds on the timeline clock; any number marked * also take
     tracks: [ { name, hidden, mute, volume* (dB), opacity*, grade,
                 transform: { scale*, x*, y*, rotate*, origin: [x, y] }, clips: [...] } ] }
   The first track draws on top. Paths are relative to the document.
+  A version that only changes the hook: { base: "edit.json", from: "Body1", tracks: [its hook's clips] } plays them,
+  then the base from its first clip named "from" (compose in studio/engine/doc.js). Commands that change a document
+  refuse it: body changes go in the base, hook changes in the version's own clips.
   Every clip: type (else from src), at, end (or dur; media default to the source's end), name.
     video  src, in (source s), rate, mute, volume* (dB), fit (cover | contain | fill), grade,
            transition: { type, dur (0.4), dir, ease, color } into it from the clip before it on its track,
@@ -68,20 +89,44 @@ Document (times are seconds on the timeline clock; any number marked * also take
   grade: exposure* (stops), contrast*, saturation*, gamma* (1 = as shot), temperature*, tint* (-1..1),
     vignette*, grain* (0..1), match ([gL, ga, gb, oL, oa, ob]: Lab × g + o, from \`match\`)`;
 
-const args = parseArgs(process.argv.slice(2), { flags: ['wait'], help: HELP });
+const args = parseArgs(process.argv.slice(2), { flags: ['wait', 'take', 'transcribe', 'allow-black'], help: HELP });
 const [cmd, target] = args._;
 if (!cmd) usage(HELP);
 
-const readDoc = (p) => {
+const readJson = (p) => {
   if (!p || !existsSync(p)) die(`edit document not found: ${p || '(none given)'}`);
   try { return JSON.parse(readFileSync(p, 'utf8')); } catch (e) { die(`${p}: ${e.message}`); }
 };
-const saveDoc = (p, doc) => writeFileSync(p, JSON.stringify(doc, null, 1) + '\n');
+// A hook version reads as the whole edit; one about to be changed (write) must be a full document.
+const readDoc = (p, write = false) => {
+  const doc = readJson(p);
+  if (!doc.base) return doc;
+  if (write) die(`${basename(p)} takes everything after its hook from ${doc.base}: run this on ${doc.base}, or change the hook's own clips in ${basename(p)}`);
+  try { return compose(doc, readJson(resolve(dirname(p), doc.base))); } catch (e) { die(`${basename(p)}: ${e.message}`); }
+};
+const saveDoc = (p, doc) => {
+  writeFileSync(p, JSON.stringify(doc, null, 1) + '\n');
+  const holder = markEditing(dirname(p));
+  if (holder !== sessionId()) console.error(`WARN: session ${holder} is editing this ad too`);
+};
 // A clip's end on the timeline: end, else at + dur, else `open` (media run to the source's end).
 const clipEnd = (c, open = Infinity) => c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : open);
 const trackNamed = (doc, name) => (doc.tracks || []).find((tr) => tr.name === name) || die(`no track named "${name}" (tracks: ${(doc.tracks || []).map((t) => t.name).join(', ')})`);
 
 // ---------- check ----------
+// Stretches where no shown track has a full-frame picture (video or image without a box): they export black.
+function blackGaps(doc) {
+  const pic = (c) => c.src && (c.type || 'video') !== 'audio' && typeOf(c.src) !== 'audio' && c.w == null && c.h == null;
+  const spans = (doc.tracks || []).filter((tr) => !tr.hidden).flatMap((tr) => (tr.clips || []).filter(pic).map((c) => [c.at ?? 0, clipEnd(c, Infinity)]))
+    .sort((a, b) => a[0] - b[0]);
+  const end = doc.duration ?? Math.max(0, ...(doc.tracks || []).flatMap((tr) => (tr.clips || []).map((c) => clipEnd(c, Math.max(0, ...(c.lines || []).map((l) => l.end ?? 0)))))); // caption lines run the timeline too
+  const gaps = [];
+  let t = 0;
+  for (const [a, b] of spans) { if (a > t + 0.001) gaps.push([t, Math.min(a, end)]); t = Math.max(t, b); }
+  if (end > t + 0.001) gaps.push([t, end]);
+  return gaps.filter(([a, b]) => b - a > 0.001);
+}
+
 function check(p) {
   const doc = readDoc(p), dir = dirname(p), problems = [];
   const lines = [];
@@ -89,15 +134,13 @@ function check(p) {
   for (const tr of doc.tracks || []) {
     const clips = [...(tr.clips || [])].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
     lines.push(`${tr.name}${tr.mute ? ' (muted)' : ''}${tr.hidden ? ' (hidden)' : ''}: ${clips.length} clip(s)`);
-    clips.forEach((c, i) => {
+    clips.forEach((c) => {
       if (c.src && !existsSync(resolve(dir, c.src))) problems.push(`${tr.name}: missing ${c.src}`);
       const stop = clipEnd(c, null);
       if (stop != null) end = Math.max(end, stop);
-      const next = clips[i + 1];
-      const video = (x) => x?.src && (x.type || 'video') === 'video' && !/\.(mp3|wav|m4a|aac|ogg|opus|flac|png|jpe?g|webp|gif|avif)$/i.test(x.src);
-      if (stop != null && video(c) && video(next) && next.at > stop + 0.001) problems.push(`${tr.name}: ${round(next.at - stop)}s of black at ${round(stop)}s`);
     });
   }
+  for (const [a, b] of blackGaps(doc)) problems.push(`${round(b - a)}s of black at ${round(a)}s`);
   console.log(`${(doc.size || [1080, 1920]).join('x')} @ ${doc.fps || 30} fps · ${round(doc.duration ?? end)}s`);
   for (const l of lines) console.log('  ' + l);
   for (const pr of problems) console.log('PROBLEM: ' + pr);
@@ -111,7 +154,7 @@ const cutsIn = (f, thr) => [...(run('ffmpeg', ['-hide_banner', '-i', f, '-vf', `
 
 function placeCmd(p) {
   if (!args.shots) die('--shots <shots.json> is required');
-  const doc = readDoc(p), dir = dirname(p), fps = doc.fps || 30, maxRate = +(args['max-rate'] || 1);
+  const doc = readDoc(p, true), dir = dirname(p), fps = doc.fps || 30, maxRate = +(args['max-rate'] || 1);
   const fr = (t) => Math.round(Math.round(t * fps) / fps * 1e4) / 1e4;
   const clips = [];
   for (const c of readDoc(resolve(args.shots)).clips) {
@@ -157,33 +200,131 @@ function cutValues(o, a, b) {
   }
 }
 
-function cutCmd(p) {
-  const a = +args.from, b = +args.to;
-  if (!(b > a)) die('--from and --to (seconds, from < to) are required');
-  const doc = readDoc(p), d = b - a, shift = (t) => (t >= b ? round(t - d) : t > a ? a : t);
+// Remove [a, b] from every track of a document (times to the millisecond, so cut edges meet exactly).
+function cutDoc(doc, a, b) {
+  const d = b - a, shift = (t) => (t >= b ? round(t - d, 3) : t > a ? a : t);
   for (const tr of doc.tracks || []) {
     cutValues(tr, a, b);
     const out = [];
     for (const c of tr.clips || []) {
       const at = c.at ?? 0, end = clipEnd(c), rate = c.rate ?? 1;
+      if (c.dur != null) { c.end = end; delete c.dur; } // the branches below move `end`
       cutValues(c, a, b);
       if (c.lines) c.lines = c.lines.filter((l) => l.at < a || l.at >= b).map((l) => ({ ...l, at: shift(l.at), end: shift(l.end), ...(l.words && { words: l.words.map(([w, s, e, ...x]) => [w, shift(s), shift(e), ...x]) }) }));
-      if (end <= a || at >= b) { if (at >= b) { c.at = round(at - d); if (c.end != null) c.end = round(end - d); } out.push(c); continue; }
+      if (end <= a || at >= b) { if (at >= b) { c.at = round(at - d, 3); if (c.end != null) c.end = round(end - d, 3); } out.push(c); continue; }
       if (at >= a && end <= b) continue; // wholly inside: gone
       if (at < a && end > b && c.src && !c.lines) { // spans the cut: split, the second part skips the cut's source
         out.push({ ...c, end: a });
-        out.push({ ...c, at: a, in: round((c.in ?? 0) + (b - at) * rate), ...(c.end != null && { end: round(end - d) }), transition: undefined });
+        out.push({ ...c, at: a, in: round((c.in ?? 0) + (b - at) * rate, 3), ...(c.end != null && { end: round(end - d, 3) }), transition: undefined });
         continue;
       }
-      if (at < a) { if (c.end != null || c.dur != null) { c.end = round(Math.max(a, end - d)); delete c.dur; } } // trims its tail (or the cut, inside it)
-      else { c.in = round((c.in ?? 0) + (b - at) * rate); c.at = a; if (c.end != null) c.end = round(end - d); } // trims its head
+      if (at < a) { if (c.end != null || c.dur != null) { c.end = round(Math.max(a, end - d), 3); delete c.dur; } } // trims its tail (or the cut, inside it)
+      else { c.in = round((c.in ?? 0) + (b - at) * rate, 3); c.at = a; if (c.end != null) c.end = round(end - d, 3); } // trims its head
       out.push(c);
     }
-    tr.clips = out.filter((c) => c.end == null || c.end - (c.at ?? 0) >= 1 / (doc.fps || 30)); // slivers left by rounding
+    const kept = [];
+    for (const c of out) { // slivers left by rounding: the clip before them holds over their time, so no frame goes black
+      if (c.end == null || c.end - (c.at ?? 0) >= 1 / (doc.fps || 30)) { kept.push(c); continue; }
+      const prev = kept.at(-1);
+      if (prev?.end != null && Math.abs(prev.end - (c.at ?? 0)) < 1e-3) prev.end = c.end;
+    }
+    tr.clips = kept;
   }
-  if (doc.duration != null) doc.duration = round(doc.duration - d);
+  if (doc.duration != null) doc.duration = round(doc.duration - d, 3);
+}
+
+// ---------- tighten ----------
+// Speech in [a, b] of an audio file: 10 ms frames within 24 dB of the stretch's speech level (breaths and room
+// tone fall below it), dips under 0.12 s bridged, clicks under 0.06 s dropped.
+const speechCache = new Map();
+function speechIn(file, a, b) {
+  if (!speechCache.has(file)) {
+    const x = pcm(file, 16000) || new Int16Array(0), e = new Float32Array(Math.floor(x.length / 160));
+    for (let i = 0; i < e.length; i++) { let s = 0; for (let j = i * 160; j < i * 160 + 160; j++) s += (x[j] / 32768) ** 2; e[i] = 10 * Math.log10(s / 160 + 1e-12); }
+    speechCache.set(file, e);
+  }
+  const e = speechCache.get(file), i0 = Math.max(0, Math.round(a * 100)), i1 = Math.min(e.length, Math.round(b * 100));
+  if (i1 <= i0) return [];
+  const seg = [...e.subarray(i0, i1)].sort((p, q) => p - q), thr = seg[Math.floor(seg.length * 0.9)] - 24, out = [];
+  for (let i = i0; i < i1; i++) {
+    if (e[i] <= thr) continue;
+    let j = i; while (j < i1 && e[j] > thr) j++;
+    const s = i / 100, t = j / 100;
+    if (out.length && s - out.at(-1)[1] < 0.12) out.at(-1)[1] = t; else out.push([s, t]);
+    i = j;
+  }
+  return out.filter(([s, t]) => t - s >= 0.06);
+}
+
+// A file's words with their timings (transcribe-media --words), kept in <edit dir>/.tighten/.
+function wordsOf(dir, file) {
+  const out = join(dir, '.tighten', `${basename(file).replace(/\.[^.]+$/, '')}.words.json`);
+  if (!existsSync(out)) {
+    mkdirSync(dirname(out), { recursive: true });
+    const r = run(process.execPath, [join(import.meta.dirname, 'transcribe-media.mjs'), '--in', file, '--out', out, '--words'], { allowFail: true });
+    if (r.status !== 0) console.error(`WARN: no word timings for ${basename(file)} — cuts are waveform-only`);
+  }
+  try { return JSON.parse(readFileSync(out, 'utf8')).words || []; } catch { return []; }
+}
+
+// Cut the dead air out of the speaker's clips: the lead-in before the first word, the tail after the last, and every
+// pause over --gap down to --keep. Speech is found in each clip's waveform (on --detect's noise-free copy of the
+// source when there is one) and kept only where the transcript has a word; no cut reaches into a word's start, and the
+// first clip (the hook) keeps the transcript's lead so its first sound never clips. Every track slides along.
+function tightenCmd(p) {
+  const doc = readDoc(p, true), dir = dirname(p), gap = +(args.gap ?? 0.15), keep = +(args.keep ?? 0.08), LEAD = 0.03, TAIL = 0.05;
+  const names = String(args.track || '').split(',').filter(Boolean);
+  const tracks = (doc.tracks || []).filter((tr) => (names.length ? names.includes(tr.name) : /voice|dialog|\bvo\b/i.test(tr.name || '')));
+  if (!tracks.length) die('no speaker track: name it with --track (e.g. --track Voice)');
+  const detect = args.detect ? resolve(args.detect) : null;
+  const cuts = [];
+  for (const tr of tracks) for (const c of tr.clips || []) {
+    if (!c.src) continue;
+    const src = resolve(dir, c.src), at = c.at ?? 0, end = clipEnd(c, null), rate = c.rate ?? 1, i0 = c.in ?? 0;
+    if (end == null) continue;
+    const i1 = i0 + (end - at) * rate, stem = basename(c.src).replace(/\.[^.]+$/, '');
+    const det = [detect && join(detect, `${stem}.wav`), detect && c.name && join(detect, `${c.name}.wav`)].find((f) => f && existsSync(f)) || src;
+    const words = wordsOf(dir, src).map((w) => ({ ...w, end: Math.min(w.end, w.start + 0.065 * String(w.word).length + 0.15) }));
+    let sp = speechIn(det, i0, i1);
+    sp = sp.filter(([s, t]) => !words.length || words.some((w) => t > w.start - 0.05 && s < w.end + 0.05));
+    for (const w of words) if (w.start >= i0 && w.start < i1 && !sp.some(([s, t]) => t > w.start - 0.05 && s < w.end + 0.05)) sp.push([w.start, w.end]);
+    sp.sort((x, y) => x[0] - y[0]);
+    if (!sp.length) continue;
+    const T = (s) => at + (s - i0) / rate;
+    const safe = (a, b) => !words.some((w) => b > w.start - 0.04 && a < w.start + 0.2);
+    let head = sp[0][0] - LEAD;
+    if (at < 0.5) { const first = words.find((w) => w.start >= i0 - 0.05); if (first) head = Math.min(head, first.start - 0.06); }
+    if (head > i0 + 0.02) cuts.push([at, T(head)]);
+    const tail = sp.at(-1)[1] + TAIL;
+    if (tail < i1 - 0.02 && safe(tail, i1)) cuts.push([T(tail), end]);
+    for (let k = 1; k < sp.length; k++) {
+      const a = sp[k - 1][1] + keep / 2, b = sp[k][0] - keep / 2;
+      if (sp[k][0] - sp[k - 1][1] > gap && safe(a, b)) cuts.push([T(a), T(b)]);
+    }
+  }
+  cuts.sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const [a, b] of cuts) { if (merged.length && a <= merged.at(-1)[1] + 0.1) merged.at(-1)[1] = Math.max(merged.at(-1)[1], b); else merged.push([a, b]); }
+  const real = merged.filter(([a, b]) => b - a > 0.02).reverse();
+  for (const [a, b] of real) cutDoc(doc, a, b);
+  for (const tr of doc.tracks || []) { // where two shots should meet, hold the earlier over a hairline gap
+    const cl = [...(tr.clips || [])].sort((x, y) => (x.at ?? 0) - (y.at ?? 0));
+    for (let k = 1; k < cl.length; k++) {
+      const e = clipEnd(cl[k - 1], null), gapLen = (cl[k].at ?? 0) - e;
+      if (e != null && cl[k - 1].src && cl[k].src && gapLen > 0 && gapLen < 0.05) { cl[k - 1].end = cl[k].at; delete cl[k - 1].dur; }
+    }
+  }
   saveDoc(p, doc);
-  console.log(`cut ${round(a)}–${round(b)}s (${round(d)}s) from every track`);
+  console.log(`tightened: ${real.length} cuts, ${round(real.reduce((s, [a, b]) => s + b - a, 0))}s of dead air removed`);
+}
+
+function cutCmd(p) {
+  const a = +args.from, b = +args.to;
+  if (!(b > a)) die('--from and --to (seconds, from < to) are required');
+  const doc = readDoc(p, true);
+  cutDoc(doc, a, b);
+  saveDoc(p, doc);
+  console.log(`cut ${round(a)}–${round(b)}s (${round(b - a)}s) from every track`);
 }
 
 // ---------- reframe ----------
@@ -234,10 +375,13 @@ async function browser() {
   die('no browser for the export: install Google Chrome, or run: npx playwright-core install chromium');
 }
 
-// Serve the plan's brand folder + the engine page; collect the output; resolve when the page reports done.
+// Serve the plan's brand folder and the shared library + the engine page; collect the output; resolve when
+// the page reports done.
 async function runPage(planPath, query, outPath, { timeout = 1800, onProgress } = {}) {
   const brand = resolve(brandDirFrom(planPath));
-  const root = brand === resolve(planPath) ? dirname(planPath) : brand;
+  const inBrand = brand !== resolve(planPath);
+  const root = inBrand ? dirname(dirname(brand)) : resolve(dirname(planPath)); // workspaces/, so ../ reaches the library
+  const allowed = inBrand ? [brand, join(root, 'Shared', 'Library')] : [root];
   const app = await engineBundle();
   const fd = openSync(outPath, 'w');
   let resolveDone;
@@ -255,7 +399,7 @@ async function runPage(planPath, query, outPath, { timeout = 1800, onProgress } 
     if (u.pathname === '/') return res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><script type="module" src="/app.js"></script>');
     if (u.pathname === '/app.js') return res.writeHead(200, { 'Content-Type': 'text/javascript' }).end(app);
     const file = resolve(root, decodeURIComponent(u.pathname.replace(/^\/f\//, '')));
-    if (!u.pathname.startsWith('/f/') || !(file + sep).startsWith(root + sep) && file !== root) return res.writeHead(403).end();
+    if (!u.pathname.startsWith('/f/') || !allowed.some((d) => file === d || file.startsWith(d + sep))) return res.writeHead(403).end();
     let st;
     try { st = statSync(file); } catch { return res.writeHead(404).end(); }
     const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
@@ -295,6 +439,8 @@ const setStatus = (planPath, s) => writeFileSync(statusFile(planPath), JSON.stri
 
 async function exportCmd(p) {
   const doc = readDoc(p);
+  const black = blackGaps(doc);
+  if (black.length && !args['allow-black']) die(`black frames at ${black.map(([a, b]) => `${round(a)}s (${round(b - a)}s)`).join(', ')}: fix the edit, or --allow-black`);
   const out = args.out ? resolve(args.out) : defaultOut(p, doc);
   mkdirSync(dirname(out), { recursive: true });
   const query = { mode: 'export', scale: args.scale || 1, ...(args.from && { from: args.from }), ...(args.to && { to: args.to }) };
@@ -317,6 +463,17 @@ async function exportCmd(p) {
   }
 }
 
+async function audioCmd(p) {
+  const out = args.out ? resolve(args.out) : join(tmpdir(), 'ad-production-kit-edit', `mix-${Date.now()}.wav`);
+  mkdirSync(dirname(out), { recursive: true });
+  await runPage(p, { mode: 'audio', from: args.from || 0, ...(args.to && { to: args.to }) }, out);
+  console.log('Saved: ' + out);
+  if (!args.transcribe) return;
+  const words = out.replace(/\.wav$/i, '') + '.words.json', from = +(args.from || 0);
+  run(process.execPath, [join(import.meta.dirname, 'transcribe-media.mjs'), '--in', out, '--out', words, '--words', '--workspace', inferWorkspace(p)]);
+  console.log(JSON.parse(readFileSync(words, 'utf8')).words.map((w) => `${round(w.start + from)} ${w.word}`).join('\n'));
+}
+
 async function framesCmd(p) {
   if (!args.at) die('--at <seconds,seconds,…> is required');
   const out = args.out ? resolve(args.out) : join(tmpdir(), 'ad-production-kit-edit', `frames-${Date.now()}.png`);
@@ -326,7 +483,7 @@ async function framesCmd(p) {
 }
 
 // ---------- captions ----------
-// Words from a kit transcript ({words:[{word,start,end}]}) or a song timing file ({lines:[{words}]}).
+// Words from an ADPK transcript ({words:[{word,start,end}]}) or a song timing file ({lines:[{words}]}).
 function readWords(file) {
   const d = readDoc(file);
   // A song's lyric lines end a caption line too.
@@ -337,7 +494,7 @@ function readWords(file) {
 
 function captionsCmd(p) {
   if (!args.words) die('--words <transcript.json> is required');
-  const doc = readDoc(p), max = +(args.max || 3), from = +(args.from || 0), to = args.to ? +args.to : Infinity;
+  const doc = readDoc(p, true), max = +(args.max || 3), from = +(args.from || 0), to = args.to ? +args.to : Infinity;
   const ws = readWords(resolve(args.words)).filter((w) => w.start >= from && w.start < to);
   const groups = [];
   let g = [];
@@ -389,7 +546,7 @@ function stats(file, a, b) {
 }
 
 function matchCmd(p) {
-  const doc = readDoc(p), dir = dirname(p), tr = trackNamed(doc, args.track || 'Video');
+  const doc = readDoc(p, true), dir = dirname(p), tr = trackNamed(doc, args.track || 'Video');
   const vids = tr.clips.filter((c) => c.src && (c.type || 'video') === 'video');
   const st = vids.map((c) => {
     const a = c.in ?? 0, b = a + ((c.end ?? c.at + 2) - (c.at ?? 0)) * (c.rate ?? 1);
@@ -443,7 +600,7 @@ function movesCmd(p) {
 // ---------- ducking ----------
 function duckCmd(p) {
   if (!args.words || !args.track) die('--track <name> and --words <transcript.json> are required');
-  const doc = readDoc(p), tr = trackNamed(doc, args.track), dip = +(args.db ?? -10), base = typeof tr.volume === 'number' ? tr.volume : 0;
+  const doc = readDoc(p, true), tr = trackNamed(doc, args.track), dip = +(args.db ?? -10), base = typeof tr.volume === 'number' ? tr.volume : 0;
   const ws = readWords(resolve(args.words)).filter((w) => !args.speaker || w.speaker === args.speaker);
   const spans = [];
   for (const w of ws) { const s = spans[spans.length - 1]; if (s && w.start - s[1] < 0.6) s[1] = Math.max(s[1], w.end); else spans.push([w.start, w.end]); }
@@ -485,19 +642,25 @@ async function commentsCmd(dir) {
     save({ ...c, status: 'done', ...(args.reply && { reply: String(args.reply) }), ...(span && { span }) });
     return console.log(`done: ${c.id}`);
   }
+  // Notes go only to the session editing the ad.
+  const me = sessionId(), holder = markEditing(ad, me, !!args.take);
+  const mine = () => readEditing(ad)?.session === me || die(`session ${readEditing(ad)?.session} is editing this ad and gets its notes; --take to take them over`);
+  if (holder !== me) die(`session ${holder} is editing this ad and gets its notes; --take to take them over`);
   let open = read().filter((c) => c.status === 'open');
   if (!open.length && args.wait) {
     mkdirSync(cdir, { recursive: true });
     open = await new Promise((res) => {
-      const w = watch(cdir, () => { const o = read().filter((c) => c.status === 'open'); if (o.length) { w.close(); setTimeout(() => res(read().filter((c) => c.status === 'open')), 300); } });
+      const w = watch(cdir, () => { const o = read().filter((c) => c.status === 'open'); if (o.length && mine()) { w.close(); setTimeout(() => res(read().filter((c) => c.status === 'open')), 300); } });
     });
   }
   open.sort((a, b) => a.t - b.t);
   for (const c of open) save({ ...c, status: 'seen' });
   // Each note with what was on screen, and one sheet of their frames with the marked spots outlined.
-  const plans = [...new Set(open.map((c) => c.plan || 'edit.json'))].filter((f) => existsSync(join(ad, f)));
+  // A note on a .md (file, quote) needs no frame.
+  const onVideo = open.filter((c) => !c.file);
+  const plans = [...new Set(onVideo.map((c) => c.plan || 'edit.json'))].filter((f) => existsSync(join(ad, f)));
   for (const plan of plans) {
-    const doc = readDoc(join(ad, plan)), mine = open.filter((c) => (c.plan || 'edit.json') === plan);
+    const doc = readDoc(join(ad, plan)), mine = onVideo.filter((c) => (c.plan || 'edit.json') === plan);
     for (const c of mine) c.showing = onScreen(doc, c.t);
     const sheet = join(tmpdir(), 'ad-production-kit-edit', `notes-${basename(ad).split('_')[0]}-${plan.replace('.json', '')}.png`);
     mkdirSync(dirname(sheet), { recursive: true });
@@ -507,7 +670,89 @@ async function commentsCmd(dir) {
   console.log(JSON.stringify(open, null, 1));
 }
 
+// ---------- track ----------
+// The object in --box (frame px at --at) found in every frame of the clip, by normalized template matching
+// in a window around where it was the frame before; half resolution, sub-pixel peak, 3-frame smoothing.
+function findPath(dir, c, doc, at, [bx, by, bw, bh], radius) {
+  const [W, H] = (doc.size || [1080, 1920]).map((v) => Math.round(v / 2)), fps = doc.fps || 30, rate = c.rate ?? 1, c0 = c.at ?? 0;
+  const raw = run('ffmpeg', ['-v', 'quiet', '-ss', String(c.in ?? 0), '-t', ((clipEnd(c) - c0) * rate).toFixed(3), '-i', resolve(dir, c.src), '-vf',
+    `fps=${fps / rate},scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},format=gray`, '-f', 'rawvideo', '-'], { binary: true }).stdout;
+  const n = Math.floor(raw.length / (W * H)), px = (f, x, y) => raw[f * W * H + y * W + x];
+  const k0 = Math.min(n - 1, Math.max(0, Math.round((at - c0) * fps)));
+  const tw = Math.round(bw / 2), th = Math.round(bh / 2), R = Math.round(radius / 2);
+  const tx0 = Math.round(bx / 2), ty0 = Math.round(by / 2);
+  const T = new Float32Array(tw * th);
+  for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) T[y * tw + x] = px(k0, tx0 + x, ty0 + y);
+  const tm = T.reduce((a, b) => a + b, 0) / T.length;
+  let tv = 0; for (let i = 0; i < T.length; i++) { T[i] -= tm; tv += T[i] * T[i]; }
+  const score = (f, x0, y0) => {
+    let s = 0, s2 = 0, st = 0;
+    for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) { const v = px(f, x0 + x, y0 + y); s += v; s2 += v * v; st += v * T[y * tw + x]; }
+    const v = s2 - (s * s) / T.length;
+    return v > 1e-6 ? st / Math.sqrt(v * tv) : 0;
+  };
+  const pos = [], lost = [];
+  pos[k0] = [tx0, ty0];
+  for (const dirn of [1, -1]) {
+    for (let f = k0 + dirn; f >= 0 && f < n; f += dirn) {
+      const [px0, py0] = pos[f - dirn], sc = {};
+      let best = -2, bxy = [px0, py0];
+      for (let y = Math.max(0, Math.round(py0) - R); y <= Math.min(H - th, Math.round(py0) + R); y++)
+        for (let x = Math.max(0, Math.round(px0) - R); x <= Math.min(W - tw, Math.round(px0) + R); x++) {
+          const s = (sc[`${x},${y}`] = score(f, x, y));
+          if (s > best) { best = s; bxy = [x, y]; }
+        }
+      if (best < 0.4) { pos[f] = [px0, py0]; lost.push(f); continue; }
+      const sub = (a, b, m) => { const d = a - 2 * m + b; return a == null || b == null || d >= 0 ? 0 : (a - b) / (2 * d); };
+      const [x, y] = bxy, m = sc[`${x},${y}`];
+      pos[f] = [x + sub(sc[`${x - 1},${y}`], sc[`${x + 1},${y}`], m), y + sub(sc[`${x},${y - 1}`], sc[`${x},${y + 1}`], m)];
+    }
+  }
+  const smooth = pos.map((_, f) => {
+    const w = [pos[f - 1], pos[f], pos[f + 1]].filter(Boolean);
+    return [0, 1].map((i) => w.reduce((a, q) => a + q[i], 0) / w.length);
+  });
+  if (lost.length) console.error(`WARN: lost the object in ${lost.length} of ${n} frames (held in place) — check it on a frames sheet`);
+  // Object center in frame px, per timeline frame.
+  return smooth.map(([x, y], f) => ({ t: round(c0 + f / fps), x: x * 2 + bw / 2, y: y * 2 + bh / 2 }));
+}
+
+function trackCmd(p) {
+  if (!args.clip || args.at == null || !args.box) die('--clip <name> --at s --box x,y,w,h are required');
+  const doc = readDoc(p, true), dir = dirname(p), [W, H] = doc.size || [1080, 1920], C = [W / 2, H / 2];
+  const all = (doc.tracks || []).flatMap((tr) => tr.clips || []), named = (nm) => all.find((x) => x.name === nm) || die(`no clip named "${nm}"`);
+  const c = named(args.clip);
+  if (!c.src || clipEnd(c, null) == null) die(`"${c.name}" needs a src and an end (or dur)`);
+  const at = +args.at, path = findPath(dir, c, doc, at, args.box.split(',').map(Number), +(args.radius || 80));
+  // Where the object lands on screen: zoomed (scale S over --ramp from --from, sliding to --to) or under the clip's own transform.
+  let screen;
+  if (args.zoom) {
+    const S = +args.zoom, from = args.from != null ? +args.from : (c.at ?? 0), ramp = +(args.ramp || 0.25);
+    const [TX, TY] = args.to ? args.to.split(',').map(Number) : C;
+    const sAt = (t) => 1 + (S - 1) * (1 - (1 - Math.min(1, Math.max(0, (t - from) / ramp))) ** 3);
+    screen = path.map(({ t, x, y }) => { const s = sAt(t), q = (s - 1) / (S - 1 || 1); return { t, s, x: x + (TX - x) * q, y: y + (TY - y) * q, ox: x, oy: y }; });
+    // engine: screen = origin + s·(box − origin + object − center), origin = center → box = 2·center − object + (screen − center)/s
+    Object.assign(c, { origin: C, ...Object.fromEntries(['x', 'y', 'scale'].map((k) => [k, screen.map((q) => [q.t,
+      k === 'scale' ? round(q.s) : round(k === 'x' ? 2 * C[0] - q.ox + (q.x - C[0]) / q.s : 2 * C[1] - q.oy + (q.y - C[1]) / q.s, 1), 'linear'])])) });
+  } else {
+    screen = path.map(({ t, x, y }) => {
+      const s = val(c.scale, t, 1), bx = val(c.x, t, C[0]), by = val(c.y, t, C[1]), [ox, oy] = c.origin || [bx, by];
+      return { t, s, x: ox + s * (bx - ox + x - C[0]), y: oy + s * (by - oy + y - C[1]) };
+    });
+  }
+  // Followers keep their offset from the object at --at, scaling with the zoom.
+  const ref = screen.reduce((a, q) => (Math.abs(q.t - at) < Math.abs(a.t - at) ? q : a));
+  for (const nm of args.follow ? args.follow.split(',') : []) {
+    const f = named(nm), dx = val(f.x, at, C[0]) - ref.x, dy = val(f.y, at, C[1]) - ref.y, s0 = typeof f.scale === 'number' ? f.scale : 1;
+    f.x = screen.map((q) => [q.t, round(q.x + (dx * q.s) / ref.s, 1), 'linear']);
+    f.y = screen.map((q) => [q.t, round(q.y + (dy * q.s) / ref.s, 1), 'linear']);
+    if (args.zoom) f.scale = screen.map((q) => [q.t, round((s0 * q.s) / ref.s), 'linear']);
+  }
+  saveDoc(p, doc);
+  console.log(`tracked ${path.length} frames of "${c.name}"${args.zoom ? `, zoomed to ${args.zoom}×` : ''}${args.follow ? `; following: ${args.follow}` : ''}`);
+}
+
 const p = target && resolve(target);
-const cmds = { check, place: placeCmd, cut: cutCmd, reframe: reframeCmd, export: exportCmd, frames: framesCmd, captions: captionsCmd, match: matchCmd, moves: movesCmd, duck: duckCmd, comments: commentsCmd };
+const cmds = { check, place: placeCmd, track: trackCmd, cut: cutCmd, tighten: tightenCmd, reframe: reframeCmd, export: exportCmd, audio: audioCmd, frames: framesCmd, captions: captionsCmd, match: matchCmd, moves: movesCmd, duck: duckCmd, comments: commentsCmd };
 if (!cmds[cmd]) usage(HELP);
 Promise.resolve(cmds[cmd](cmd === 'comments' ? target : p)).catch((e) => die(e?.stack || String(e)));

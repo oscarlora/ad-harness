@@ -1,9 +1,9 @@
-# Ad Production Kit
+# Ad Production Kit (ADPK)
 
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
-## Changing the kit
+## Changing ADPK
 
 Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
 
@@ -26,10 +26,11 @@ Every file here — skills, docs, code, comments — is as short and plain as it
   the name whenever possible (`skills/pull-media/` ↔ `tools/pull-media.mjs`).
 - Before finishing, reread the change and cut anything not needed. Check that every `tools/` path
   and flag you mention exists, run `node tools/check-public.mjs --all`, and if you touched Studio,
-  restart the instance the user has open (it rebuilds) and check the page; never start a second one.
-- Learnings go into the kit (a skill, a tool or this file), or for one brand into its memory
+  check the page, running the user's instance with `--dev` (hot reload) while you change it; never
+  start a second one.
+- Learnings go into ADPK (a skill, a tool or this file), or for one brand into its memory
   (**save-brand-memory**), never an agent's private memory.
-  Off the maintainer's machine, propose kit changes as a PR (`gh pr create`).
+  Off the maintainer's machine, propose ADPK changes as a PR (`gh pr create`).
 
 ## How you reply
 
@@ -49,7 +50,7 @@ Brand work lives in `workspaces/`, which the repo never carries. It stays local,
 workspace's R2 bucket when it has one (see Operating principles).
 
     workspaces/<WS>/
-      _custom/           # the workspace's own skills and tools (extensions or changes to the kit)
+      _custom/           # the workspace's own skills and tools (extensions or changes to ADPK)
       <Brand>/
         inputs/          # DESIGN.md, <product>-research.md (+ -personas, -angles), memory.md, uploads.json, reviews.csv, products.json
           media/         # the searchable media library (catalog-media)
@@ -65,8 +66,8 @@ workspace's R2 bucket when it has one (see Operating principles).
 
 ## Skills
 
-To make an ad, settle the ad type first (ask if it isn't given), open Studio on the brand's Workflow
-page without asking (**open-studio**; the user watches each step land there), then follow its workflow:
+To make an ad, settle the ad type first (ask if it isn't given), open Studio on the ad's Workflow
+page without asking (**open-studio**; the user watches each step land there and edits there), then follow its workflow:
 
 - **make-image-ad** — image ads
 - **make-ai-podcast** — podcast video ads
@@ -80,7 +81,7 @@ Every workflow starts by loading the brand context: the product's `-research.md`
 and `-angles.md`, and the brand's `inputs/DESIGN.md` and `inputs/memory.md`; if research or
 DESIGN.md is missing or thin, run **research-brand** first. Once the ad has an ID, title the
 session `<brand initials> ad <ID> – <concept> (<format>)` (e.g. `AC ad 11 – Up to 40% off
-(static)`) and write its record (`outputs/json/<ID>.json`, schema in `tools/record-ad.mjs`) as
+(static)`; a session that makes more than one ad keeps every ID, `AC ad 11 + 12 – …`) and write its record (`outputs/json/<ID>.json`, schema in `tools/record-ad.mjs`) as
 `in-progress`; set `pending-review` when its output lands for the user, and `approved` on their yes.
 
 Steps (each owns its procedure and rules):
@@ -88,44 +89,46 @@ Steps (each owns its procedure and rules):
 - **Brand setup:** pull-reviews, research-brand, ideate-personas-angles, pull-fonts
 - **Media library:** pull-media, catalog-media, search-media
 - **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, write-prompt,
-  generate-voice, add-music, generate-sfx, caption-video, edit-video
+  generate-voice, add-music, generate-sfx, review-ugc-footage, caption-video, edit-video, recut-shorts
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
 
 ## First-time setup
 
-When the user asks to set up the kit from its GitHub link:
+When the user asks to set up ADPK from its GitHub link:
 
 1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
    `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
 2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows) and fix what its health
    check flags.
 3. Copy `.env.example` to `.env`, open it for them, and say which keys to add and where to get
-   them. They paste keys into the file, never into chat. Ask whether they work solo or as a team:
-   a team needs R2; solo can skip it, but then
-   needs a kie key, which hosts reference images for generation.
+   them. They paste keys into the file, never into chat. A kie key is all they need to start; a team
+   also needs R2.
 4. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`.
 5. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
 
 ## Operating principles
 
-- **Providers:** `--provider auto` tries Segmind, then kie, then the Vercel AI Gateway — each that
-  carries the model and has the workspace's key — moving on only when one rejects the request
-  before generating. A workspace can set its own exact list (`<WS>_PROVIDER_ORDER` in `.env`);
-  `--provider` forces one. Order, models and defaults: `tools/lib/providers.mjs`. Music and SFX run
-  on Seed Audio (Segmind); Suno for song ads or when asked. Media analysis runs on Gemini Flash Lite, never a
-  Pro model (`tools/lib/gateway.mjs`).
-- **Video: draft at 480p, never upscale.** Iterate at 480p. After approval, and only when the user
-  asks, generate a fresh take at a higher tier the model supports with the same prompt and
-  references. Never enlarge or upscale the draft, or use it as a reference.
+- **Providers:** everything runs on kie (`<WS>_KIE_API_KEY`). The only models are `MODELS` in
+  `tools/lib/providers.mjs` (defaults and fallbacks there); switch to a fallback, or pass
+  `--unlisted-model`, only on the user's yes after telling them. Music and SFX run on Suno. Media
+  analysis runs on Gemini 3.6 Flash (`tools/lib/analyze.mjs`); search vectors (`tools/lib/embed.mjs`)
+  and caption word timings (Whisper) run on this computer. A workspace with `<WS>_AI_GATEWAY_API_KEY`
+  quietly falls back to the Vercel AI Gateway when kie fails; never suggest it.
+- **Video: render at the tool's default tier, never upscale.** MiniMax H3 (768p) and Gemini Omni
+  (720p) takes are final. Seedance drafts at 480p; after approval, and only when the user asks,
+  generate a fresh take at 720p or 1080p with the same prompt and references. Never enlarge or
+  upscale a take, or use it as a reference.
 - **Long renders** run in the foreground with `--timeout`. One that may outlast the shell's limit
   runs as a tracked background command with a log; a killed render loses a paid task.
 - **Brand data syncs through R2 when the workspace has R2 keys** (teams need it; solo is optional).
   Pull before working a brand (`node tools/sync-brand.mjs --pull workspaces/<WS>/<Brand>`;
-  `--originals` adds heavy media; `--brands <WS>` lists brands) and push when done (`--push`). R2
-  is last-write-wins, so pull before you edit. Without R2 keys, everything stays local.
+  `--originals` adds heavy media; `--brands <WS>` lists brands) and push when done (`--push`). Push
+  never deletes: after renaming or deleting a folder, clear the old one with `--remove <brand dir>
+  <relpath>`. R2 is last-write-wins, so pull before you edit; pull never touches an ad being edited
+  here. Without R2 keys, everything stays local.
 - **Private brand data never goes in tracked files.** Examples use the placeholder brand Acme. A
   brand's rules go in its `memory.md` (**save-brand-memory**). A workspace's own skills and tools
-  (extensions or changes to the kit) live in `workspaces/<WS>/_custom/` (synced with its R2);
+  (extensions or changes to ADPK) live in `workspaces/<WS>/_custom/` (synced with its R2);
   load them when working that workspace. Commit hooks (`tools/check-public.mjs`) block local workspace
   and brand names and the terms in `_custom/private-terms.txt`, in files and commit messages.
 - **Approved generations go into the media library** (**catalog-media**, `--source-type
@@ -138,6 +141,7 @@ When the user asks to set up the kit from its GitHub link:
   (`node tools/record-ad.mjs --index <brand outputs/ dir>`) and pushes once.
 - **Update by reset, never merge.** At session start, `git fetch origin` and compare `HEAD` to
   `origin/main`; if behind, offer `git fetch origin && git reset --hard origin/main` (brand work and
-  `.env` are untracked, so it's safe). Never `git pull`; never `git clean` (it deletes brand work
+  `.env` are untracked, so it's safe), with what's new: the commit subjects
+  (`git log --format=%s HEAD..origin/main`) as a few plain bullets of what the user can now do. Never `git pull`; never `git clean` (it deletes brand work
   and `.env`). If `node` or `node_modules/` is missing, run `bash tools/setup.sh`. Tell users
   plainly — "there's a newer version; updating won't touch your brand work" — without git jargon.

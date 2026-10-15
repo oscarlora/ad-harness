@@ -8,11 +8,12 @@ import { join, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { catalogPaths, readRecords, readRecord, mergeRecord, readRoster, parseArgs, mediaDirFrom, inferBrand, slugify, ffprobeJson, round, usage } from './lib/catalog.mjs';
 import { videoPass, videoMeta, workDir, heavy } from './lib/media-probe.mjs';
-import { requireKey, filePart, generateJSON, spend, ANALYSIS_MODEL } from './lib/gateway.mjs';
+import { requireKeys, filePart, generateJSON, spendText, ANALYSIS_MODEL } from './lib/analyze.mjs';
 import { buildPrompt, buildSchema } from './lib/analysis-prompt.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary } from './lib/transcribe.mjs';
 
-const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MODEL} and fill their records
+const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MODEL} on kie.ai and fill their records
+(key: <WS>_KIE_API_KEY; optional fallback when kie fails: <WS>_AI_GATEWAY_API_KEY)
 
   node tools/analyze-media.mjs --media <media dir> [--ids 00001,00002 | --all] [--force] [--concurrency 4]
     --all    every record not analyzed yet
@@ -41,7 +42,7 @@ function mergeScenes(detected, got, duration) {
 
 const soundOf = (track, snd) => (!track ? 'No audio track.' : track.silent ? 'Silent — no audible sound.' : snd.sound);
 
-async function analyzeOne({ media, id, key, roster, brand, vocab }) {
+async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
   const paths = catalogPaths(media);
   const rec = readRecord(paths, id);
   if (!rec) throw new Error(`no record ${id}`);
@@ -52,29 +53,31 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
   try {
     if (type !== 'image' && !existsSync(original)) throw new Error(`original missing: ${rec.file.name} (pull it with sync-brand --pull --originals)`);
     const duration = rec.file.duration ?? (type === 'image' ? null : +ffprobeJson(original).format?.duration || null);
-    const patch = { id, analysis: { model: ANALYSIS_MODEL, at: new Date().toISOString() }, status: 'cataloged' };
-    let pic = null, snd = null, track = null;
+    const patch = { id, status: 'cataloged' };
+    let pic = null, snd = null, track = null, picModel = null;
 
     // Silent or missing tracks skip the sound call.
     const work = workDir(rec.sha256);
     if (type === 'video') temps.push(work);
     if (type !== 'image') { track = audioTrack(original, type === 'video' ? join(work, 'track.mp3') : null); if (track) temps.push(track.dir); }
-    const sound = async (standalone) => { if (track && !track.silent) snd = await transcribeAudio(key, track, { brand, vocab, standalone }); };
+    const sound = async (standalone) => { if (track && !track.silent) snd = await transcribeAudio(keys, track, { brand, vocab, standalone }); };
 
     if (type === 'image') {
       const proxy = join(paths.proxies, `${id}.jpg`);
       const part = existsSync(proxy) ? filePart(proxy, 'image/jpeg') : filePart(original, rec.file.mime);
-      pic = await generateJSON(key, { parts: [part, { type: 'text', text: buildPrompt('image', { brand, roster }) }], schema: buildSchema('image') });
+      ({ out: pic, model: picModel } = await generateJSON(keys, { parts: [part, { text: buildPrompt('image', { brand, roster }) }], schema: buildSchema('image') }));
     } else if (type === 'video') {
       const detected = cleanScenes(rec.scenes, duration);
       const proxy = await pictureProxy(original, work);
-      const picture = generateJSON(key, { parts: [filePart(proxy, 'video/mp4'), { type: 'text', text: buildPrompt('video', { brand, scenes: detected, roster, duration }) }], schema: buildSchema('video') });
-      [pic] = await Promise.all([picture, sound(false)]);
+      const picture = generateJSON(keys, { parts: [filePart(proxy, 'video/mp4'), { text: buildPrompt('video', { brand, scenes: detected, roster, duration }) }], schema: buildSchema('video') });
+      [{ out: pic, model: picModel }] = await Promise.all([picture, sound(false)]);
       patch.scenes = mergeScenes(detected, pic.scenes || [], duration);
     } else {
       await sound(true);
     }
     if (pic?.unreadable) throw new Error('Gemini could not decode the file');
+    // The model that actually answered (the Gateway fallback when kie failed).
+    patch.analysis = { model: [...new Set([picModel, snd?.model].filter(Boolean))].join(' + ') || ANALYSIS_MODEL, at: new Date().toISOString() };
 
     if (pic) {
       Object.assign(patch, {
@@ -107,7 +110,7 @@ async function analyzeOne({ media, id, key, roster, brand, vocab }) {
 const isAnalyzed = (r) => r.status === 'cataloged' && (r.visual_description || r.audio_description);
 
 export async function analyzeMany({ media, ids, all, force, concurrency = 4 }) {
-  const key = requireKey(media);
+  const keys = requireKeys(media);
   const roster = readRoster(media);
   const vocab = vocabulary(media);
   const brand = inferBrand(media);
@@ -118,18 +121,18 @@ export async function analyzeMany({ media, ids, all, force, concurrency = 4 }) {
   const worker = async () => {
     while (i < queue.length) {
       const id = queue[i++];
-      try { const r = await analyzeOne({ media, id, key, roster, brand, vocab }); done.push(r); console.log(`analyzed ${id} → ${r.name}`); }
+      try { const r = await analyzeOne({ media, id, keys, roster, brand, vocab }); done.push(r); console.log(`analyzed ${id} → ${r.name}`); }
       catch (e) { failed.push({ id, error: e.message }); console.log(`FAILED ${id}: ${e.message}`); }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
-  return { done, failed, queued: queue.length, usd: spend.usd };
+  return { done, failed, queued: queue.length };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const a = parseArgs(process.argv.slice(2), { flags: ['all', 'force'], help: HELP });
   if (!a.media || (!a.ids && !a.all)) usage(HELP);
   const res = await analyzeMany({ media: mediaDirFrom(a.media), ids: a.ids ? String(a.ids).split(',') : null, all: !!a.all, force: !!a.force, concurrency: a.concurrency ? +a.concurrency : 4 });
-  console.log(`${res.done.length}/${res.queued} analyzed${res.failed.length ? `, ${res.failed.length} failed` : ''} · $${res.usd.toFixed(4)}`);
+  console.log(`${res.done.length}/${res.queued} analyzed${res.failed.length ? `, ${res.failed.length} failed` : ''} · ${spendText()}`);
   if (res.failed.length) process.exit(1);
 }

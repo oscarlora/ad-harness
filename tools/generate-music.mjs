@@ -1,201 +1,137 @@
 #!/usr/bin/env node
-// generate-music.mjs — generate a music bed (Seed Audio 1.0), or a song on Suno when asked for.
-// Seed Audio beds are always instrumental. Suno returns two full takes per run and has no length
-// setting. Each saved file gets a <stem>.gen.json sidecar. Prompt craft: skills/add-music.
+// generate-music.mjs — Suno on kie.ai: an instrumental bed by default, or a song (--vocals, --lyrics).
+// Each task returns two takes; each saved file gets a <stem>.gen.json sidecar. Prompt craft:
+// skills/add-music. Exports runSuno, which generate-sfx.mjs uses for Suno Sounds.
 
-import { readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { applyEnv, die, ffprobeJson, findBin, parseArgs, run, sleep, usage } from './lib/catalog.mjs';
-import { downloadTo, errorText, kie, retryTransient, runSeedAudio, suffixed, times, userError, workspaceKeys, writeSidecars } from './lib/providers.mjs';
+import { pathToFileURL } from 'node:url';
+import { applyEnv, die, ffprobeJson, findBin, parseArgs, sleep, usage } from './lib/catalog.mjs';
+import { downloadTo, errorText, kie, retryTransient, suffixed, times, userError, workspaceKeys, writeSidecars } from './lib/providers.mjs';
 
 applyEnv();
 
-// kie validation demands a callBackUrl even though we poll; results are fetched via record-info.
-const CALLBACK_PLACEHOLDER = 'https://example.com/suno-callback';
+export const SUNO_MODELS = ['V6', 'V6_MINI', 'V6_WILD'];
 
-const HELP = `generate-music.mjs — ad-bed / song generator: Seed Audio 1.0 (default) or Suno (explicit)
+const HELP = `generate-music.mjs — music on Suno (kie.ai): an instrumental bed by default, or a song
 
   node tools/generate-music.mjs --prompt "<style>" --out <bed.mp3> [--duration 30]
   node tools/generate-music.mjs --lyrics <lyrics.txt> --prompt "<style>" --out <song.mp3>
 
+Each run gives two takes (<out>, <out>_2).
+
 Required:
-  --prompt "<text>"        Style: micro-genre + BPM + production markers
+  --prompt "<text>"        Style: micro-genre + BPM + production markers (max 1000 chars). With
+                           --vocals: the song idea (max 3000)
   --out <path>             Output audio path
 
 Optional:
-  --provider <name>        seed-audio (default; alias segmind) | suno (alias kie)
-  --vocals                 Suno only: a full song with vocals, Suno writing the lyrics
-  --lyrics <file>          Suno (implied): a song sung with these exact lyrics ([Section] tags are
-                           structure, not sung); --prompt becomes the style. Also writes
-                           <take>.suno-words.json (Suno's word timings). Never trimmed
-  --duration <seconds>     Seed Audio target length (default 30, best-effort). Suno: trim each take
-                           to the first N seconds; omit to keep full tracks
-  --model <name>           Suno only: V4_5 (default; V6 with --lyrics) | V4 | V4_5PLUS | V4_5ALL |
-                           V5 | V5_5 | V6 | V6_MINI | V6_WILD
-  --title <text>           Suno only: track title (default from --out)
-  --negative-tags "<text>" Suno only: styles to avoid
-  --num <n>                Generations (default 1). Seed Audio: one take each; Suno: two
+  --vocals                 A song with vocals, Suno writing the lyrics
+  --lyrics <file>          A song sung with these exact lyrics (max 5000 chars; [Section] tags are
+                           structure, not sung). Also writes <take>.suno-words.json (word timings)
+  --duration <seconds>     Target length, 10–360 (bed default 30; a song picks its own). Not with
+                           --vocals. Takes land within a few seconds of it
+  --model <name>           V6 (default) | V6_MINI (faster) | V6_WILD (bolder); same price
+  --title <text>           Track title (default from --out; max 80 chars)
+  --negative-tags "<text>" Styles to avoid
+  --num <n>                Runs (default 1); each gives two takes
   --timeout <seconds>      Max wait per task (default 600)
 
-Env:  <WORKSPACE>_SEGMIND_API_KEY by default; <WORKSPACE>_KIE_API_KEY for Suno.`;
+Env:  <WORKSPACE>_KIE_API_KEY (inferred from --out).`;
 
-// Suno endpoints report failures in a `code` field as well as the HTTP status.
-async function suno(path, opts) {
-  const json = await kie(path, opts);
-  if (json.code !== undefined && json.code !== 200) throw userError(`${path} -> code ${json.code} ${json.msg || JSON.stringify(json)}`);
-  return json;
+async function kieOk(path, body) {
+  const json = await kie(path, body && { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (json.code !== 200) throw Object.assign(userError(`${path} -> code ${json.code} ${json.msg || ''}`), { fatal: json.code >= 400 && json.code < 500 && json.code !== 429 });
+  return json.data;
 }
 
-// Friendly model name -> kie.ai Suno version id (V4_5, V4_5PLUS, ...). Unknown shapes pass through.
-function resolveModel(model) {
-  return String(model).toUpperCase().replace(/\+/g, 'PLUS').replace(/[.\s-]/g, '_').replace(/_+/g, '_');
-}
-
-async function createTask(opts) {
-  // Custom mode: `prompt` is sung verbatim (V6 reads `lyrics` first, so both carry it). Non-custom
-  // mode (--vocals): `prompt` describes the song and Suno writes the lyrics.
-  const input = opts.lyrics
-    ? { model: opts.model, customMode: true, instrumental: false, prompt: opts.lyrics, lyrics: opts.lyrics, style: opts.prompt, title: opts.title }
-    : opts.instrumental
-    ? { model: opts.model, customMode: true, instrumental: true, style: opts.prompt, title: opts.title }
-    : { model: opts.model, customMode: false, instrumental: false, prompt: opts.prompt };
-  if (opts.negativeTags) input.negativeTags = opts.negativeTags;
-  input.callBackUrl = CALLBACK_PLACEHOLDER;
-
-  const json = await suno('/api/v1/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
-  const taskId = json?.data?.taskId;
-  if (!taskId) throw new Error(`createTask failed: ${JSON.stringify(json)}`);
-  console.error(`task      suno ${opts.model} -> ${taskId}`);
-  return taskId;
-}
-
-async function pollResult(taskId, timeoutSec) {
+async function poll(taskId, timeoutSec) {
   const deadline = Date.now() + timeoutSec * 1000;
   for (;;) {
-    const json = await suno(`/api/v1/generate/record-info?taskId=${encodeURIComponent(taskId)}`);
-    const d = json?.data || {};
-    const tracks = d?.response?.sunoData || [];
-    // CALLBACK_EXCEPTION means our placeholder callback failed, not the audio — accept it when tracks exist.
-    if (d.status === 'SUCCESS' || (d.status === 'CALLBACK_EXCEPTION' && tracks.length)) {
-      if (!tracks.length) throw new Error(`task ${taskId} SUCCESS but no sunoData tracks`);
+    const d = await kieOk(`/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`);
+    if (d.state === 'success') {
+      const tracks = d.response?.data || [];
+      if (!tracks.length) throw new Error(`task ${taskId} succeeded with no tracks`);
+      console.error(`done      ${taskId} (${d.creditsConsumed} credits)`);
       return tracks;
     }
-    if (['CREATE_TASK_FAILED', 'GENERATE_AUDIO_FAILED', 'CALLBACK_EXCEPTION'].includes(d.status)) {
-      throw new Error(`task ${taskId} failed: ${d.status} ${d.errorMessage || d.errorCode || ''}`.trim());
-    }
-    if (d.status === 'SENSITIVE_WORD_ERROR') {
-      throw userError(`task ${taskId} rejected: SENSITIVE_WORD_ERROR — reword the prompt (artist/brand names trip this)`);
-    }
-    if (Date.now() > deadline) throw new Error(`task ${taskId} timed out after ${timeoutSec}s (status=${d.status})`);
-    console.error(`  ${taskId} ${d.status || 'PENDING'}`);
+    if (d.state === 'fail') throw userError(`task ${taskId} failed: ${d.failMsg || d.failCode}`);
+    if (Date.now() > deadline) throw new Error(`task ${taskId} timed out after ${timeoutSec}s (state=${d.state})`);
+    console.error(`  ${taskId} ${d.state}`);
     await sleep(5000);
   }
 }
 
-// Suno's word timings for one take -> <take>.suno-words.json. Live responses nest a second
-// {code,msg,data} envelope and use camelCase (alignedWords, hootCer), unlike the docs.
-// A failure only warns: the song is already saved.
-async function saveWords(track, saved) {
-  try {
-    const json = await suno('/api/v1/jobs/createTask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'ai-music-api/timeStamped-lyrics', input: { task_id: track.taskId, audio_id: track.id } }),
-    });
-    const d = json?.data?.data || json?.data || {};
-    const words = d.alignedWords || d.aligned_words;
-    if (!Array.isArray(words)) throw new Error(`no alignedWords in ${JSON.stringify(json).slice(0, 300)}`);
-    const out = saved.replace(/\.[^./]+$/, '.suno-words.json');
-    await writeFile(out, JSON.stringify({ task_id: track.taskId, audio_id: track.id, hoot_cer: d.hootCer ?? d.hoot_cer, aligned_words: words }, null, 2));
-    console.error(`words     ${words.length} timed words -> ${basename(out)}`);
-  } catch (e) {
-    console.error(`WARN: Suno word timestamps failed for ${basename(saved)} (task ${track.taskId}, audio ${track.id}): ${e.message}`);
+// `num` Suno tasks on kie, each polled to the end; saves every take next to `out` (_2, _3 …) and
+// prints "Saved:". Only a failed create is retried: a retried poll would pay twice.
+export async function runSuno(model, input, { num = 1, timeout = 600, out }) {
+  const { W, keys } = workspaceKeys(out);
+  if (!keys.kie) throw userError(`Workspace ${W} has no kie.ai key. Add ${W}_KIE_API_KEY to .env (get one at https://kie.ai/api-key).`);
+  const takes = await times(num, async () => {
+    const { taskId } = await retryTransient(() => kieOk('/api/v1/jobs/createTask', { model, input }));
+    console.error(`task      ${model} ${input.model} -> ${taskId}`);
+    return (await poll(taskId, timeout)).map((track) => ({ track, taskId }));
+  });
+  for (const [i, take] of takes.entries()) {
+    take.file = await downloadTo(take.track.audio_url || take.track.stream_audio_url, suffixed(out, i), { fallbackExt: 'mp3' });
+    if (findBin('ffprobe')) {
+      const meta = ffprobeJson(take.file);
+      if (!(meta.streams || []).some((s) => s.codec_type === 'audio')) throw userError(`${take.file} has no audio stream`);
+      console.error(`audio     take ${i + 1}: ${Number(meta.format?.duration || 0).toFixed(1)}s`);
+    }
+    console.log('Saved: ' + take.file);
   }
+  return takes;
 }
 
-// Trim to the first N seconds in place (stream copy).
-async function trimTo(file, seconds) {
-  if (!findBin('ffmpeg')) die('--duration needs ffmpeg (macOS: static build in ~/.local/bin — bash tools/setup.sh installs it)');
-  const tmp = file.replace(/(\.[^./]+)$/, '.trim$1');
-  const r = run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', file, '-t', String(seconds), '-c', 'copy', tmp], { allowFail: true });
-  if (r.status !== 0) { await unlink(tmp).catch(() => {}); die(`ffmpeg trim failed: ${r.stderr || r.error}`); }
-  await rename(tmp, file);
+// Suno's word timings for one take -> <take>.suno-words.json. Live responses nest a second {code,msg,data}
+// envelope inside data (hence res.code, res.data.alignedWords). A failure only warns: the song is saved.
+async function saveWords({ track, taskId, file }) {
+  try {
+    const res = await kieOk('/api/v1/jobs/createTask', { model: 'ai-music-api/timeStamped-lyrics', input: { task_id: taskId, audio_id: track.id } });
+    const words = res?.data?.alignedWords;
+    if (res?.code !== 200 || !Array.isArray(words)) throw new Error(`no alignedWords in ${JSON.stringify(res).slice(0, 300)}`);
+    const out = file.replace(/\.[^./]+$/, '.suno-words.json');
+    await writeFile(out, JSON.stringify({ task_id: taskId, audio_id: track.id, hoot_cer: res.data.hootCer, aligned_words: words }, null, 2));
+    console.error(`words     ${words.length} timed words -> ${basename(out)}`);
+  } catch (e) {
+    console.error(`WARN: Suno word timestamps failed for ${basename(file)} (task ${taskId}, audio ${track.id}): ${e.message}`);
+  }
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2), { flags: ['vocals'], help: HELP });
   if (!args.prompt) usage(HELP);
   if (!args.out) die('--out is required');
-  const provider = String(args.provider || (args.lyrics ? 'suno' : 'seed-audio')).toLowerCase();
-  if (!['seed-audio', 'segmind', 'suno', 'kie'].includes(provider))
-    die(`--provider must be seed-audio or suno, got: ${args.provider}`);
-
   const prompt = String(args.prompt).trim();
   if (!prompt) die('prompt is empty');
-  const duration = args.duration ? Number(args.duration) : undefined;
-  if (args.duration && (!Number.isFinite(duration) || duration <= 0)) die(`--duration must be a positive number of seconds, got ${args.duration}`);
-  const num = Math.max(1, parseInt(args.num || '1', 10));
-  const timeout = parseInt(args.timeout || '600', 10);
   const lyrics = args.lyrics ? (await readFile(String(args.lyrics), 'utf8')).trim() : undefined;
   if (args.lyrics && !lyrics) die(`--lyrics file is empty: ${args.lyrics}`);
   if (lyrics && args.vocals) die('--lyrics and --vocals are exclusive (--vocals lets Suno write its own lyrics)');
-  if (lyrics && duration) console.error('note      --duration ignored with --lyrics (the song sets the length)');
-
-  if (provider === 'seed-audio' || provider === 'segmind') {
-    if (lyrics) die('--lyrics is Suno only (Seed Audio does not sing given lyrics)');
-    if (args.vocals) die('--vocals requires --provider suno');
-    runSeedAudio({
-      prompt: ['Generate instrumental music only. No speech and no sung lyrics.', prompt, 'Start with the hook, with no intro. Keep the ending loopable.'].join(' '),
-      seconds: duration || 30, num, timeout, out: args.out,
-    });
-    return;
-  }
-
-  const { W, keys } = workspaceKeys(args.out);
-  if (!keys.kie) die(`Workspace ${W} has no kie.ai key. Add ${W}_KIE_API_KEY to .env (get one at https://kie.ai/api-key).`);
-
-  const instrumental = !args.vocals && !lyrics;
-  const model = resolveModel(String(args.model || (lyrics ? 'V6' : 'V4_5')));
-  const styleLimit = ['V3_5', 'V4'].includes(model) ? 200 : 1000;
-  if ((instrumental || lyrics) && prompt.length > styleLimit) die(`prompt is ${prompt.length} chars; ${model} allows ${styleLimit} for style`);
-  if (args.vocals && prompt.length > 500) die(`prompt is ${prompt.length} chars; --vocals mode allows 500`);
-  const lyricsLimit = model === 'V4' ? 3000 : 5000;
-  if (lyrics && lyrics.length > lyricsLimit) die(`lyrics are ${lyrics.length} chars; ${model} allows ${lyricsLimit}`);
-
+  if (args.vocals && args.duration) die('--duration does not work with --vocals; use --lyrics, or trim the take in the edit');
+  const model = String(args.model || 'V6').toUpperCase();
+  if (!SUNO_MODELS.includes(model)) die(`--model must be one of ${SUNO_MODELS.join(', ')}, got: ${args.model}`);
+  const duration = args.duration ? Number(args.duration) : lyrics || args.vocals ? undefined : 30;
+  if (duration !== undefined && !(duration >= 10 && duration <= 360)) die(`--duration must be 10–360 seconds, got: ${args.duration}`);
+  if (prompt.length > (args.vocals ? 3000 : 1000)) die(`prompt is ${prompt.length} chars; the limit is ${args.vocals ? 3000 : 1000}`);
+  if (lyrics?.length > 5000) die(`lyrics are ${lyrics.length} chars; the limit is 5000`);
+  const num = Math.max(1, parseInt(args.num || '1', 10));
+  const timeout = parseInt(args.timeout || '600', 10);
+  const negativeTags = args['negative-tags'] && String(args['negative-tags']);
   const title = String(args.title || basename(args.out, extname(args.out)).replace(/[-_]+/g, ' ')).slice(0, 80);
-  const opts = { model, prompt, title, instrumental, lyrics, negativeTags: args['negative-tags'] && String(args['negative-tags']) };
-  console.error(`music     ${lyrics ? 'song from --lyrics' : instrumental ? 'instrumental bed' : 'song with vocals'}  "${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}"`);
 
-  // Only a failed create is retried; once Suno returns a task id, the task is polled to the end.
-  const tracks = await times(num, async () => {
-    const taskId = await retryTransient(() => createTask(opts));
-    return (await pollResult(taskId, timeout)).map((t) => ({ ...t, taskId }));
-  });
-  const saved = [];
+  const input = args.vocals
+    ? { custom_mode: false, instrumental: false, model, prompt }
+    : { custom_mode: true, instrumental: !lyrics, model, title, style: prompt, lyrics, duration };
+  if (negativeTags) input.negative_tags = negativeTags;
+  console.error(`music     ${lyrics ? 'song from --lyrics' : args.vocals ? 'song with vocals' : 'instrumental bed'}  "${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}"`);
 
-  for (let i = 0; i < tracks.length; i++) {
-    const url = tracks[i].audioUrl || tracks[i].streamAudioUrl;
-    if (!url) die(`take ${i + 1} has no audio url: ${JSON.stringify(tracks[i])}`);
-    const file = await downloadTo(url, suffixed(args.out, i), { fallbackExt: 'mp3' });
-    if (duration && !lyrics) await trimTo(file, duration);
-    if (lyrics) await saveWords(tracks[i], file);
-    if (findBin('ffprobe')) {
-      const meta = ffprobeJson(file);
-      const f = meta.format || {};
-      if (!(meta.streams || []).some((s) => s.codec_type === 'audio')) die(`${file} has no audio stream`);
-      console.error(`audio     take ${i + 1}: ${Math.round(Number(f.duration || 0))}s  ${(Number(f.size || 0) / 1e6).toFixed(1)}MB  ${(meta.streams[0] || {}).codec_name || '?'}`);
-    }
-    console.log('Saved: ' + file);
-    saved.push(file);
-  }
-  await writeSidecars(saved, {
+  const takes = await runSuno('ai-music-api/generate', input, { num, timeout, out: args.out });
+  if (lyrics) for (const take of takes) await saveWords(take);
+  await writeSidecars(takes.map((t) => t.file), {
     tool: 'generate-music', model: `suno-${model}`, provider: 'kie', prompt: lyrics || prompt,
-    params: { style: lyrics ? prompt : null, vocals: !instrumental, duration: lyrics ? null : duration, 'negative-tags': opts.negativeTags },
+    params: { style: lyrics ? prompt : null, vocals: !!(lyrics || args.vocals), duration, 'negative-tags': negativeTags },
   });
 }
 
-main().catch((e) => die(errorText(e)));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((e) => die(errorText(e)));

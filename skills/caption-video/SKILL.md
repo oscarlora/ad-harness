@@ -16,7 +16,8 @@ A song uses its Suno timing file (`<out>.timing.json` from `tools/edit-song.py`,
 
 - Words run on the **timeline clock**: a voiceover placed at 0 already is; otherwise transcribe an
   export of the cut.
-- **No Gateway key** (the tool exits with a SKIP)? Use line-level timing: find the speech bounds
+- Word times come from local Whisper (`whisper-cli`, installed by setup). **No kie key** for the
+  transcript (the tool exits with a SKIP)? Use line-level timing: find the speech bounds
   with `ffmpeg`'s `silencedetect`, spread the script's lines across them as caption lines without
   word times, and tell the user the timings are approximate.
 
@@ -31,7 +32,8 @@ Then fix by hand:
   reads ("from" | "the root cause").
 - **Text from the brand, timing from the transcript.** On-screen text follows **write-copy** and the
   brand's spellings and product names even when the spoken line differs: fix transcript errors and
-  casing, keep the times.
+  casing, keep the times. A transcript can mishear: check a doubtful word against the audio
+  (re-transcribe that stretch), never against the script, since speakers go off-script.
 - `--max 1` makes word-by-word captions.
 
 ## 3. Style
@@ -40,10 +42,19 @@ Then fix by hand:
   deviate only with a reason. Any Google font by name (`Archivo Black` for a heavier look).
 - **Karaoke / lyric:** `active` styles the word being said (`color`, `scale` 1.2–1.3), `upcoming`
   the words still to come (`opacity` 0.5; 0 reveals them word by word); `enter: "pop"` per line.
-- **Hook** (the opening on-screen line): a `text` clip, centered, `{braces}` around the words in the
-  accent color. If it covers a face, the product or the scene's key object in any shot it spans,
-  nudge it just enough to clear them; check a frame from each of those shots. Captions start only
-  after the hook ends; the two never show at once.
+- **Hook** (the opening on-screen line): a `text` clip in the caption style, no box and no entrance
+  animation, at most 2 lines (smaller text, or trimmed wording, before a third), `{braces}` around the
+  whole phrase that carries the message in the accent color ("{my belly just keeps growing}", not
+  just its tail; a list as one span, commas and "and" included), ideally its own line. It sits above the
+  speaker's head when there's room inside the safe area (**edit-video**, Text), else just under the
+  chin — always clear of the face, the product and the scene's key object in every shot it spans
+  (check a frame from each) and stays put through zooms. Captions start only after the hook
+  ends; the two never show at once. The same holds for any other on-screen text (a stat, a list,
+  slapped words, a badge): no captions under it, and it covers the whole sentence it belongs to
+  ("Heavy periods hit 1 in 4 women over 41", not just "1 in 4"), so no words go missing around it.
+  It sits where the captions sit unless that covers the face, the product or the shot's key object.
+- **Key words:** the few words that carry the ad take the accent color in the captions (a fourth
+  `color` element on the word), first mention only.
 - A workflow may set its own font and placement (song, slides); these rules still apply.
 - **Brand font** (from `inputs/DESIGN.md`) only when a licensed font file exists in `inputs/media/brand/`: map it in the
   document's `fonts`. Never hunt the web for a brand's commercial font.

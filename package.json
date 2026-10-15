@@ -8,10 +8,11 @@
   "scripts": {
     "studio": "npm run dev --prefix studio"
   },
-  "description": "Shared generation + sync tooling for Ad Production Kit. The AI SDK deps (ai, @ai-sdk/gateway, undici) run the Vercel AI Gateway — the media library and the third generation provider after Segmind and kie.ai, whose paths stay dependency-free.",
+  "description": "Shared generation + sync tooling for Ad Production Kit. AI SDK deps (ai, @ai-sdk/gateway, undici): the optional Vercel AI Gateway fallback. @huggingface/transformers: the media library's local search vectors.",
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.110",
+    "@huggingface/transformers": "^4.3.1",
     "ai": "^7.0.137",
     "esbuild": "^0.28.2",
     "playwright-core": "^1.64.0",

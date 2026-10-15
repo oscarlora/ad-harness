@@ -18,7 +18,7 @@ import { join, basename, extname, relative, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, RESERVED } from './catalog.mjs';
 import { readDriveSources } from './drive.mjs';
-import { INLINE_MAX } from './gateway.mjs';
+import { INLINE_MAX } from './analyze.mjs';
 
 const HAS_FFMPEG = have('ffmpeg') && have('ffprobe');
 const HAS_SIPS = have('sips');
@@ -102,7 +102,7 @@ export async function videoPass(file, meta, { scenes = false, sprite = null, wor
       ['-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(tmp, `p${i}.mp4`)]]));
     if (sprite) outs.push([`fps=1/${sprite.interval},scale=192:${sprite.frameH},tile=10x10`, ['-frames:v', '1', sprite.path]]);
     if (scenes) outs.push(["select='eq(n,0)+gt(scene,0.3)',metadata=print:file=scenes.txt", ['-f', 'null', '-']]); // frame 0 keeps the sink fed (no cut at 0 survives MIN_SCENE)
-    const audio = work && rung === 0 && meta.hasAudio ? ['-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', join(tmp, 'track.mp3')] : [];
+    const audio = work && rung === 0 && meta.hasAudio ? ['-map', '0:a:0', '-vn', '-af', 'aresample=async=1:first_pts=0', '-ac', '1', '-ar', '16000', '-b:a', '32k', join(tmp, 'track.mp3')] : [];
     const graph = (pre) => `[0:v]${pre}${outs.length > 1 ? `,split=${outs.length}${outs.map((_, i) => `[s${i}]`).join('')};` : '[s0];'}`
       + outs.map(([chain], i) => `[s${i}]${chain}[o${i}]`).join(';');
     const maps = outs.flatMap(([, args], i) => ['-map', `[o${i}]`, ...args]);

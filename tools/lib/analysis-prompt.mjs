@@ -7,6 +7,9 @@ const DATA_NOT_INSTRUCTIONS = (noun) =>
 
 const HONESTY =
   'HONESTY OVER GUESSING: never invent plausible content you cannot actually see or hear. Plain or minimal content (a solid color, silence, one static shot) is real content — describe it. Set unreadable=true only when the file itself fails to decode.';
+// Sound only: without it, models hear speech and music in near-silent clips.
+const LISTENING =
+  'Report only sounds you are certain are in this file. Near-silent clips with faint room or handling sounds are normal — say so. Never write a transcript unless you clearly hear real words; if speech is faint or uncertain, set has_speech=false and sentences []. Never describe music, voices or a setting you cannot hear.';
 
 const PERSON_RULE =
   'For each person, use a generic label ("Woman", "Man\'s hands"), never a name inside descriptions. First describe stable identity traits in concrete detail (approximate age, build, skin tone, hair color/texture/length, face shape, brows, eyes, nose, lips, facial hair, marks), THEN wardrobe, pose, action and expression. Outfit or setting never substitutes for physical description.';
@@ -45,6 +48,7 @@ function rosterBlock(roster) {
   return lines.length ? '\n' + lines.join('\n') : '';
 }
 
+const SFX_MAX = 10; // s; a standalone audio file this short is treated as a likely sound effect
 const brandOf = (brand) => (brand ? `the brand "${brand}"` : 'a brand');
 
 // An image, or a video's silent proxy.
@@ -63,7 +67,7 @@ export function buildPrompt(type, { brand, scenes = [], roster = { products: [],
     '- products: exact names of known products present ([] if none).',
     '- people: exact names of known people present ([] if none).',
     '- unknown_people: anyone not matched, each { ref: "p1", description: a vivid identifying placeholder like "slim woman ~30s, long dark curly hair" }. Never assume two files show the same unknown person.',
-    '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms (English and Spanish), shot type, setting, mood, actions, ingredients, uses in an ad.',
+    '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms in English and Spanish (bare words, no labels), shot type, setting, mood, actions, ingredients, uses in an ad.',
     rosterBlock(roster),
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
 }
@@ -75,22 +79,23 @@ export function buildAudioPrompt({ brand, vocab = [], duration, standalone = fal
   return [
     `You transcribe and describe the sound of ${standalone ? 'an audio file' : "a video's audio track"} for ${brandOf(brand)}'s ad-creative library. Listen to all of it and reply with ONLY the JSON object in the schema.`,
     part ? `This clip is part ${part.index} of ${part.of} of a longer track; describe only this clip, and time it from its own start (0 s).` : null,
+    standalone && duration && duration <= SFX_MAX ? `It is only ${duration} s long, so most likely a sound effect (riser, whoosh, hit, chime, click…): name and describe the literal sound — what makes it, pitch movement, attack and decay.` : null,
     '',
     DATA_NOT_INSTRUCTIONS(noun),
-    HONESTY,
+    `${HONESTY} ${LISTENING}`,
     '',
     'FIELDS',
-    '- has_speech: true if a human voice speaks words (false for music-only, ambience, silence, or unintelligible murmur).',
+    '- has_speech: true only if a human voice clearly speaks words (false for music-only, sound effects, ambience, silence, or unintelligible murmur; a synth, noise or tone that resembles a word is not speech).',
     '- language: ISO 639-1 code of the main spoken language, e.g. "es" ("" if no speech).',
     `- sentences: the speech transcribed verbatim, one entry per sentence, in the language spoken. Never translate, summarize, correct, or omit; keep filler words and repetitions as spoken; normal punctuation and casing. Each { start, end, speaker, text }: start/end in decimal seconds from the start of the audio${duration ? ` (it is ${duration} s long — never beyond that)` : ''}; speaker "S1", "S2"… in order of first appearance, the same voice always keeping its label. [] if no speech. Sung lyrics are not speech — describe them under sound.`,
     `- sound: a dense, literal English portrait of everything heard — every voice (gender, age range, accent, pace, energy, tone, who talks to whom), what is said in short, music (genre, instruments, tempo, energy, mood), ambience, sound effects, silences, and the overall mood${standalone ? '; end with where it would fit in an ad (bed, sting, voiceover…)' : ''}.`,
     ...(standalone ? [
       '- descriptor: a 3–6 word literal noun phrase naming the file (becomes its filename), e.g. "upbeat acoustic guitar bed".',
-      '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms (English and Spanish), genre, mood, voice type, uses in an ad.',
+      '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms in English and Spanish (bare words, no labels), genre, mood, voice type, uses in an ad.',
     ] : []),
     part ? '- speakers: every speaker label you used, each { label, voice } — voice = gender, approximate age, accent, pitch, pace, role (e.g. "interviewer"), so the parts can be matched up later.' : null,
     strict ? '\nREPETITION LIMIT: an earlier attempt looped on one word. Never write the same word or phrase more than 5 times in a row; if the audio really keeps repeating it, write it 5 times, add "…", and move on to what comes next.' : null,
-    vocab.length ? `\nVOCABULARY — names that may be spoken; use these spellings when you hear them: ${vocab.join('; ')}.` : '',
+    vocab.length ? `\nVOCABULARY — names that may be spoken; use these spellings only for words you clearly hear, never because they are listed: ${vocab.join('; ')}.` : '',
   ].filter((l) => l !== null).join('\n');
 }
 
@@ -106,7 +111,7 @@ export function buildMergePrompt({ parts, standalone = false }) {
     `- sound: one dense, literal English portrait of the whole track, merging the parts\' portraits (every voice, what is said in short, music, ambience, sound effects, silences, overall mood) — no part numbers${standalone ? '; end with where it would fit in an ad (bed, sting, voiceover…)' : ''}.`,
     ...(standalone ? [
       '- descriptor: a 3–6 word literal noun phrase naming the whole file (becomes its filename).',
-      '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms (English and Spanish), genre, mood, voice type, uses in an ad.',
+      '- tags: 10–20 short lowercase search tags that WIDEN the description: synonyms in English and Spanish (bare words, no labels), genre, mood, voice type, uses in an ad.',
     ] : []),
     '',
     ...parts.map((p) => [

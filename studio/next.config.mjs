@@ -10,6 +10,7 @@ const nextConfig = {
   // Brand files are read via runtime paths; stop the tracer globbing the app dir.
   outputFileTracingExcludes: { '*': ['./**'] },
   turbopack: { root: appDir },
+  agentRules: false, // dev mode would otherwise write studio/AGENTS.md
 };
 
 export default nextConfig;
