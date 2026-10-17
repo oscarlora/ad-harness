@@ -14,9 +14,9 @@
 // the on-page count. Not built yet: Yotpo is keyed by an app_key in the page, Reviews.io by a store token.
 
 import { writeFile } from 'node:fs/promises';
-import { decodeHtml, die, parseArgs, usage } from './lib/catalog.mjs';
+import { die, parseArgs, usage } from './lib/catalog.mjs';
+import { getJson, getText, htmlText, listShopifyProducts } from './lib/web.mjs';
 
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 const MAX_PAGES = 100;
 const OKENDO_API = 'https://api.okendo.io/v1';
 const STAMPED_API = 'https://stamped.io/api';   // public widget feed: getappkey + /widget (per page)
@@ -54,18 +54,6 @@ const SIGNATURES = {
   stamped:  [/\bstamped\b/i],
   reviewsio: [/reviews\.io/i],
 };
-
-async function getText(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA } });
-  if (!res.ok) return '';
-  return res.text();
-}
-
-async function getJson(url) {
-  const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
-  return res.json();
-}
 
 // Scan the homepage plus (if Shopify) one product page — where widget scripts and store ids live.
 async function collectHtml(store) {
@@ -149,8 +137,6 @@ async function pullOkendo({ subscriber, productId, limit }) {
 
 // ---------- Stamped adapter ----------
 // No JSON feed: get the public key from getappkey, then parse /widget's rendered HTML per page.
-const htmlText = (s) => decodeHtml((s || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
-
 function parseStampedWidget(html) {
   const out = [];
   const blocks = html.split(/(?=<div class="stamped-review" )/).slice(1);
@@ -259,17 +245,6 @@ const JM_SEARCH_LADDER = ['love', 'great', 'good', 'best', 'recommend', 'amazing
   'easy', 'feel', 'nice', 'perfect', 'happy', 'well', 'really', 'works', 'product', 'price', 'buy',
   'again', 'time', 'day', 'first', 'definitely', 'beautiful', 'gift', 'fast', 'shipping', 'order',
   'size', 'friend', 'family', 'worth', 'little', 'bit', 'just'];
-
-async function listShopifyProducts(store) {
-  const products = [];
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const d = await getJson(`${store}/products.json?limit=250&page=${page}`);
-    const batch = d.products || [];
-    products.push(...batch);
-    if (batch.length < 250) break;
-  }
-  return products;
-}
 
 function jmUrl(shopDomain, productId, { page = 1, dir = 'desc', rating, verified, search } = {}) {
   let u = `${JUDGEME_API}/reviews/reviews_for_widget?shop_domain=${encodeURIComponent(shopDomain)}`

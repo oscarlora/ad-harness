@@ -1,17 +1,17 @@
 ---
 name: pull-reviews
-description: Get a brand's reviews into a CSV when none was supplied. Detects the store's review platform (Okendo, Stamped, Judge.me, Loox, Yotpo, Reviews.io) and pulls the public review feed to inputs/reviews.csv. Use at the start of research when the brand is a DTC/Shopify store and no reviews CSV was handed over, or when asked to pull or refresh reviews.
+description: Get a brand's reviews into a CSV when none was supplied. Detects the store's review platform (Okendo, Stamped, Judge.me, Loox, Yotpo, Reviews.io) and pulls the public review feed to inputs/sources/reviews.csv. Use at the start of research when the brand is a DTC/Shopify store and no reviews CSV was handed over, or when asked to pull or refresh reviews.
 ---
 
 # Pull reviews
 
-Pull a store's public reviews into `inputs/reviews.csv`, before **research-brand**.
+Pull a store's public reviews into `inputs/sources/reviews.csv`, during **research-brand**'s collection.
 
 ## Pull
 
 1. Auto-detect, pull, write the CSV:
    ```
-   node tools/pull-reviews.mjs --store <url> --out "workspaces/<Workspace>/<Brand>/inputs/reviews.csv"
+   node tools/pull-reviews.mjs --store <url> --out "workspaces/<Workspace>/<Brand>/inputs/sources/reviews.csv"
    ```
    `--detect-only` prints the platform + id without writing.
 2. Sanity-check the printed count and average against the public product page.
@@ -43,4 +43,4 @@ per review, all products store-wide.
 - **Verify provenance** when a set looks too clean: re-fetch a few `review_id`s live, confirm the
   bodies match, and cross-check the total + star breakdown against the public count.
 - **Flag incentivized reviews** via the `incentivized` column, quote the concrete reviews, and note
-  the caveat in the product's `-research.md`.
+  the caveat in `customers.md`.

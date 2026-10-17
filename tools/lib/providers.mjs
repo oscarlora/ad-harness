@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { brandDirFrom, extForMime, inferBrand, inferWorkspace, loadEnv, mimeOf, sleep, typeOf, wsKey } from './catalog.mjs';
-import { r2FromEnv } from './r2.mjs';
+import { fetchMissing, r2FromEnv } from './r2.mjs';
 
 // The only models tools accept by name. kie = its model id (generate-*.mjs add the per-mode suffix);
 // gateway = the same model's AI Gateway id, set only where the Gateway catalog carries it;
@@ -189,6 +189,7 @@ export async function kieUploadAll(refs) {
 export async function kieUpload(refPath) {
   if (/^https?:\/\//i.test(refPath)) return refPath;
   const abs = resolve(refPath);
+  await fetchMissing(abs);
   if (!existsSync(abs)) throw userError(`reference not found: ${refPath}`);
   const fd = new FormData();
   fd.append('file', new Blob([await readFile(abs)], { type: mimeOf(abs) }), basename(abs));

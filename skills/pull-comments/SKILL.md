@@ -50,7 +50,7 @@ One block per ad **in the chat**:
 
 Then stop. Do not regenerate until the user approves.
 
-## 4. On approval — hand to write-prompt
+## 4. On approval — hand to write-image-prompt
 
 Fixes rewrite the prompt from scratch, never amend (**write-prompt**). Update the record's fields,
 rebuild `generation.prompt` fresh and regenerate (`generate-image.mjs --record`). Re-upload only what

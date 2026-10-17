@@ -1,12 +1,13 @@
 #!/bin/bash
 # setup.sh — install and first-run setup on macOS and Linux: idempotent, no admin password, no keys.
-# Downloads the kit when run outside it, installs Node (and on macOS ffmpeg 8 and whisper.cpp) under
-# ~/.local when missing, the npm deps, the shared library and the git hooks, then the next step
-# (the kie key: AGENTS.md, First-time setup). Any failure stops it with a plain-language fix. Updates: AGENTS.md.
+# Downloads ADPK when run outside it, installs Node (and on macOS ffmpeg 8 and whisper.cpp) under
+# ~/.local when missing, the npm deps, the shared library's catalog and the git hooks, then the next step
+# (the kie key: skills/set-up-adpk). Any failure stops it with a plain-language fix.
+# Updating an install: AGENTS.md.
 #
 # Usage: curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
 #        … | bash -s -- <folder>     to install somewhere other than ~/ad-production-kit
-#        bash tools/setup.sh         inside the kit
+#        bash tools/setup.sh         inside ADPK
 #        ADPK_BRANCH=<branch>        before bash: install that branch (to test it before merging)
 # Everything sits in functions run by the last line, so a piped download runs only once it's complete.
 set -u
@@ -35,7 +36,7 @@ sha256() { { command -v sha256sum >/dev/null && sha256sum "$1" || shasum -a 256 
 progress() { [ -t 2 ] && echo --progress-bar || echo -sS; }
 offline="Check your internet connection."
 
-# ── git (downloads the kit and its updates) ─────────────────────────────────
+# ── git (downloads ADPK and its updates) ─────────────────────────────────
 need_git() {
   if [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
     xcode-select --install >/dev/null 2>&1
@@ -49,24 +50,24 @@ need_git() {
     done
     ok "Installed Apple's command line tools"
   fi
-  command -v git >/dev/null 2>&1 || fail "git is missing (it downloads the kit and its updates)." \
+  command -v git >/dev/null 2>&1 || fail "git is missing (it downloads ADPK and its updates)." \
     "Install it: sudo apt install git (Ubuntu, Debian) or sudo dnf install git (Fedora)."
 }
 
-# ── the kit itself: this checkout, or a clone into the chosen folder ────────
+# ── ADPK itself: this checkout, or a clone into the chosen folder ────────
 get_kit() {
   if [ -f "$SELF" ] && is_kit "$(dirname "$SELF")/.."; then
     cd "$(dirname "$SELF")/.." && return
   fi
   local dir=${1:-$HOME/ad-production-kit}
   if is_kit "$dir"; then
-    ok "The kit is in $(pretty "$dir")"
+    ok "ADPK is in $(pretty "$dir")"
   elif [ -e "$dir" ]; then
-    fail "$(pretty "$dir") already exists and isn't the kit." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
+    fail "$(pretty "$dir") already exists and isn't ADPK." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
   else
     need_git
-    git clone -q -b "${ADPK_BRANCH:-main}" "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download the kit." "$offline"
-    ok "Downloaded the kit to $(pretty "$dir")"
+    git clone -q -b "${ADPK_BRANCH:-main}" "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download ADPK." "$offline"
+    ok "Downloaded ADPK to $(pretty "$dir")"
   fi
   cd "$dir" || fail "Couldn't open $(pretty "$dir")."
 }
@@ -82,7 +83,7 @@ install_node() {
   case "$(uname -s)" in
     Darwin) os=darwin ;;
     Linux)  os=linux ;;
-    *) fail "This setup runs on macOS and Linux." "On Windows, ask your AI agent to set up the kit (see the README)." ;;
+    *) fail "This setup runs on macOS and Linux." "On Windows, ask your AI agent to set up ADPK (see the README)." ;;
   esac
   case "$(uname -m)" in
     x86_64 | amd64)  arch=x64 ;;
@@ -121,7 +122,7 @@ add_to_path() {
     if mkdir -p "$(dirname "$HOME/$f")" && echo "$line" >>"$HOME/$f"; then added="$added ~/$f"
     else warn "Couldn't update ~/$f: add this line to it yourself: $line"; fi
   done
-  [ -n "$added" ] && ok "Added the kit's tools to your PATH (${added# })"
+  [ -n "$added" ] && ok "Added ADPK's tools to your PATH (${added# })"
   return 0
 }
 
@@ -206,7 +207,7 @@ install_whisper() {
 
 main() {
   echo "Ad Production Kit setup"
-  command -v curl >/dev/null 2>&1 || fail "curl is missing (it downloads what the kit needs)." \
+  command -v curl >/dev/null 2>&1 || fail "curl is missing (it downloads what ADPK needs)." \
     "Install it: sudo apt install curl (Ubuntu, Debian) or sudo dnf install curl (Fedora)."
   get_kit "$@"
   export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"
@@ -214,18 +215,19 @@ main() {
   install_ffmpeg
   install_whisper
   case "$(command -v node) $(command -v ffmpeg) $(command -v whisper-cli)" in *"$HOME/.local/"*) add_to_path ;; esac
-  npm_deps . "the kit's tools" "Kit tools"
+  npm_deps . "ADPK's tools" "ADPK's tools"
   npm_deps studio "the studio app" "Studio app"
-  node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals </dev/null >"$LOG" 2>&1 \
-    && ok "Shared library ready (music, sound effects, references)" \
-    || warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry."
+  # The shared library's catalog only: its files download when an ad uses one (fetchMissing, lib/r2.mjs).
+  node tools/sync-brand.mjs --pull workspaces/Shared/Library </dev/null >"$LOG" 2>&1 \
+    && ok "Shared library ready (music, sound effects, references; each file downloads when used)" \
+    || warn "Couldn't reach the shared library (music, sound effects): run this setup again later to retry."
   # Blocks commits that mention a client workspace or brand (the repo is public).
   git config core.hooksPath .githooks 2>/dev/null
   echo
   if grep -qsE '^[A-Za-z0-9_]+_KIE_API_KEY=.+' .env; then
-    ok "The kit is ready in $(pretty "$PWD")."
+    ok "ADPK is ready in $(pretty "$PWD")."
   else
-    printf "The kit is installed in %s. One step left: open your AI agent in that folder and say\n" "$(pretty "$PWD")"
+    printf "ADPK is installed in %s. One step left: open your AI agent in that folder and say\n" "$(pretty "$PWD")"
     printf "\"Finish setting up ADPK\". It helps you add your kie.ai key, the one key you need to start.\n"
   fi
   return 0

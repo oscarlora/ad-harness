@@ -51,7 +51,7 @@ Always use Suno's timings: transcribing singing mishears lines.
 
 ## 5. Storyboard
 
-Group the lines into clips no longer than MiniMax allows (**write-prompt**, Video models), cutting
+Group the lines into clips no longer than MiniMax allows (**write-video-prompt**, Video models), cutting
 only where a line starts. Split any line longer than about 6 s into two shots. One storyboard sheet
 per clip in `storyboards/`, its shots as vertical 9:16 panels: three in a 16:9 row, four as a 2×2 grid in 9:16, two
 side by side in 1:1. No text in the pictures.
@@ -59,13 +59,13 @@ side by side in 1:1. No text in the pictures.
 ## 6. Clips
 
 One MiniMax H3 run per clip, with the storyboard sheet and the character sheets as references
-(**write-prompt**, Video models).
+(**write-video-prompt**, Video models).
 
     node tools/generate-video.mjs --prompt-file <ad>/prompts/clip-01.txt --image <sheet> --image <hero> \
       [--image <cast>] [--image <product>] --aspect 9:16 --duration <clip length, rounded up> \
       --out <ad>/clips/clip-01.mp4 --timeout 1500
 
-The prompt, in MiniMax's layout (**write-prompt**, Writing for each model), times each shot
+The prompt, in MiniMax's layout (**write-video-prompt**), times each shot
 (`[Shot 2] At 00:05.100, the camera cuts to …`) and keeps the rules: match each panel, hard cuts,
 each panel fills the frame edge to edge, every surface plain, nobody speaks, both sound fields
 `N/A`.

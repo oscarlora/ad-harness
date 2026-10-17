@@ -20,7 +20,7 @@ When a note carries both, apply the fix through the revision plan and save only 
 
 Turn each durable point into one **imperative rule** with its reason, then check:
 
-- **Already in `<product>-research.md` or `DESIGN.md`?** Don't copy it.
+- **Already in the research (`brand.md`, `products/`, `customers.md`…) or `DESIGN.md`?** Don't copy it.
 - **Already in `memory.md`?** Sharpen the existing line; never stack a duplicate.
 - **Conflict** with either? Ask the user rather than silently overriding.
 
@@ -39,4 +39,4 @@ Scope a rule to its product or persona in parentheses if it isn't brand-wide. Ke
 ## 3. Promote when it stabilizes
 
 When a rule has held across several ads and is plainly brand law, move it into the right section of
-`DESIGN.md` (how ads look) or `<product>-research.md` (everything else) and delete it from `memory.md`.
+`DESIGN.md` (how ads look) or the research file it belongs to (everything else) and delete it from `memory.md`.

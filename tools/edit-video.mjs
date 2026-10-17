@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { brandDirFrom, die, ffprobeJson, inferWorkspace, loudness, markEditing, mimeOf, parseArgs, readEditing, round, run, sessionId, typeOf, usage } from './lib/catalog.mjs';
 import { compose, eachKeyed, endOf, keyed, r3, val } from '../studio/engine/doc.js';
 import { atempo, stretched, tempoOf } from './lib/stretch.mjs';
+import { fetchMissing } from './lib/r2.mjs';
 
 const HELP = `edit-video.mjs — an ad's edit document (outputs/<ad>/edit.json)
 
@@ -761,4 +762,6 @@ function trackCmd(p) {
 const p = target && resolve(target);
 const cmds = { check, place: placeCmd, track: trackCmd, cut: cutCmd, tighten: tightenCmd, reframe: reframeCmd, export: exportCmd, audio: audioCmd, frames: framesCmd, captions: captionsCmd, match: matchCmd, moves: movesCmd, duck: duckCmd, comments: commentsCmd };
 if (!cmds[cmd]) usage(HELP);
+// Library originals left in the cloud (a light pull) download before anything reads them.
+if (cmd !== 'comments' && existsSync(p || '')) await fetchMissing((readDoc(p).tracks || []).flatMap((tr) => (tr.clips || []).map((c) => c.src && resolve(dirname(p), c.src))));
 Promise.resolve(cmds[cmd](cmd === 'comments' ? target : p)).catch((e) => die(e?.stack || String(e)));

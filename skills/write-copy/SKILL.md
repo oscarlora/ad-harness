@@ -9,7 +9,7 @@ Write direct response. Every ad answers fast: **what is this**, **who is it for*
 
 ## Principles
 
-- **Use the customer's language and the user's creative direction.** Take wording from the user's brief, the persona's VOC quotes, verified reviews (`inputs/reviews.csv`) or the research doc's Reviews analysis. A brief alone is enough to build the reader's situation; don't swap it for product facts when VOC is missing. Keep distinctive phrasing ("aches and pains", not "bounce back") in fresh lines. User wording is direction, not a testimonial or evidence for a claim.
+- **Use the customer's language and the user's creative direction.** Take wording from the user's brief, the persona's VOC quotes, verified reviews (`inputs/sources/reviews.csv`) or `customers.md`. A brief alone is enough to build the reader's situation; don't swap it for product facts when VOC is missing. Keep distinctive phrasing ("aches and pains", not "bounce back") in fresh lines. User wording is direction, not a testimonial or evidence for a claim.
 - **Write to one reader:** the locked persona as "you", about their day. Never about the brand or "people".
 - **Outcome-led, not descriptive.** The hook names the result they get, not a feature: "Make it to 5 without the crash", not "steady energy from real oats". The visual and subline carry the mechanism.
 - **Feeling first, backing second.** The number, spec or study comes right after the outcome, never as the opener.
@@ -28,7 +28,7 @@ Write direct response. Every ad answers fast: **what is this**, **who is it for*
 
 ## Match the reader's awareness
 
-The persona's awareness stage (in the product's `-personas.md`) sets the hook's job and how much the ad explains:
+The persona's awareness stage (in `products/<product>-personas.md`) sets the hook's job and how much the ad explains:
 
 - **Unaware** — open with the situation or a surprising reframe; the product arrives last; explain the most.
 - **Problem-aware** — open on the pain or the real reason it keeps happening; the product is the fix.
@@ -36,7 +36,7 @@ The persona's awareness stage (in the product's `-personas.md`) sets the hook's 
 - **Product-aware** — open on proof or the strongest differentiator; keep copy short.
 - **Most-aware** — open on the offer; shortest copy of all.
 
-The market's sophistication stage (1–5, research doc's Market section) sets the claim type: stages 1–2, plain benefit claims; 3–4, lead with how the product works; 5, sell identity and experience.
+The market's sophistication stage (1–5, `brand.md`'s market) sets the claim type: stages 1–2, plain benefit claims; 3–4, lead with how the product works; 5, sell identity and experience.
 
 The product is always in the image; how loudly the words push it follows the awareness stage.
 
@@ -72,7 +72,7 @@ Budgets, as guidance: a hook at most ~12 words, a subline ~20, a tertiary item 2
 
 - **Subline** — pays off the hook: usually the plain why-it-works, or the outcome made real. A benefit goes in a scene they can feel ("still full at the 3pm meeting"), not adjectives.
 - **Tertiary** and every other small text slot (callouts, pills, badges, labels, list items) — one job each, no two slots the same job. The jobs: who it's for · proof (a verified customer's words, or a number with a timeframe) · the top objection, answered · offer or guarantee · how it works (ingredient or spec → what it does).
-- **Review quotes**, anywhere — verbatim from `inputs/reviews.csv`, verified reviews only, never incentivized. Trim with an ellipsis, never reword.
+- **Review quotes**, anywhere — verbatim from `inputs/sources/reviews.csv`, verified reviews only, never incentivized. Trim with an ellipsis, never reword.
 - **Call to action / offer text** (on screen and end cards) — short, starts with a verb, always carries value (offer, guarantee, outcome): "Tap to try it at up to 40% off", never a bare "Shop now". Urgency only when real ("ends Sunday").
 
 ## Video scripts
@@ -101,9 +101,9 @@ One row per idea. Every line is visualizable and hands off to the next (a connec
 
 Every claim, anywhere in an ad:
 
-- **Check the exact factual claim.** A claim goes in an ad only when the research doc or verified reviews back it, or the user signs it off; never invent numbers, mechanisms, results or testimonials. Before cutting or softening a claim, search for backing (the web, primary sources), never memory alone, keep the strongest true version you find, and add it to the research doc with its source. Cut only what the search can't support, and tell the user what you searched. A customer's desire ("I want to perform at work") isn't a product promise ("this improves performance"); check the meaning in context, visuals included. Flag the unsupported clause, not the whole angle.
+- **Check the exact factual claim.** A claim goes in an ad only when the research (`products/<product>.md`, `customers.md`) or verified reviews back it, or the user signs it off; never invent numbers, mechanisms, results or testimonials. Before cutting or softening a claim, search for backing (the web, primary sources), never memory alone, keep the strongest true version you find, and add it to the research doc with its source. Cut only what the search can't support, and tell the user what you searched. A customer's desire ("I want to perform at work") isn't a product promise ("this improves performance"); check the meaning in context, visuals included. Flag the unsupported clause, not the whole angle.
 - **Keep the selling force.** When correcting a claim, change only the unsupported part; keep the stakes, tension, specificity and customer voice. Write with confidence: once a claim is backed, state it flat, with no hedges ("seemed to", "sometimes", "may help", "estimated") unless the truth needs one, and keep a qualifier on the fact it qualifies. User-written lines: Video scripts. If a revision reads like a catalog, rewrite it around the approved premise and stakes.
-- **Claims gate**, when a workflow calls for it, before the script: the user signs off the product (and its research doc), the persona and angle, the **2–4 claims** the ad carries, and the product's **unique mechanism**. Confirm the mechanism, never infer it: take it from the brief, the client, or an explicit line in the doc, never stitched together from features and benefits. Work from the doc itself; don't re-summarize it into a brief.
+- **Claims gate**, when a workflow calls for it, before the script: the user signs off the product (and its research), the persona and angle, the **2–4 claims** the ad carries, and the product's **unique mechanism**. Confirm the mechanism, never infer it: take it from the brief, the client, or an explicit line in the doc, never stitched together from features and benefits. Work from the doc itself; don't re-summarize it into a brief.
 - Never guarantee results. Before/after framing is allowed. Never tell the reader something about themselves ("your gut is inflamed"): Meta rejects it.
 - Health-adjacent products: comfort-and-routine words, never treatment words (no "heals", "cures", "treats").
 - **Sensitive subjects (animals as food, predation):** frame it as nature's wisdom. No hunting, killing, prey, blood or carcass words or footage.

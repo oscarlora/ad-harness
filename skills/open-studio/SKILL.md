@@ -19,8 +19,8 @@ node studio/dev.mjs        # from the repo root → http://localhost:4179, or th
 Run it as a background command and read the address it prints; if Studio is already running it
 prints that address and exits, so it never starts a second one. Then open the address for the user
 in the agent app's in-app browser whenever it has one, bringing the pane up if it's hidden; only
-without one, `open <url>` (`start <url>` on Windows). Once an ad has its folder, open its own page
-(`/<Workspace>/<Brand>/workflow/<ad folder>`), not the list.
+without one, `open <url>` (`start <url>` on Windows). For an ad, open its own page by ID
+(`/<Workspace>/<Brand>/workflow/<ID>`, which survives a folder rename), not the list.
 Deps install via `tools/setup.sh` / `setup.ps1` (or `npm install --prefix studio` once).
 
 ## Pages
@@ -31,7 +31,8 @@ Deps install via `tools/setup.sh` / `setup.ps1` (or `npm install --prefix studio
 - **Media** — the catalog (`inputs/media/_catalog/`). Its sidebar shows each record's source, analysis
   and transcript, and edits the record's products, people and analysis directly.
 - **Workflow** — each ad folder's step bar for its format, inferred from the folder's files and the
-  record (`studio/lib/server/workflow.js`):
+  record (`studio/lib/server/workflow.js`). Every ad's bar opens with **Research**: the brand's
+  research, personas, angles and DESIGN.md as **research-brand** writes them. Then:
   - Image: Prompt · Drafts · Final · Meta copy
   - Animation and slides: Concept · Script · Voices · Storyboard · Sheets · Frames · Clips · Edit
   - Song: Concept · Lyrics · Song · Look · Storyboard · Clips · Edit

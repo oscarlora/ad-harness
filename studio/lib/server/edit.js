@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { ORIGIN, compose, endOf, mapTimes, r3 } from '../../engine/doc.js';
+import { adFolders } from './ads.js';
 import { readJson, within } from './brands.js';
 import { repoRoot } from './root.js';
 import { catalogLib } from './tools.js';
@@ -14,8 +15,11 @@ const NOTE_ID = /^n[a-z0-9]{6,16}$/;
 
 // An ad folder name as the client sends it ("<id>_…", one path segment) → its absolute path, or null when the name is
 // bad or the folder missing.
+// A bare <id> finds the ad's folder, so a link opened before a rename still works.
 export function adDir(brandDirAbs, ad) {
-  const dir = typeof ad === 'string' && /^\d+_[^/\\\0]+$/.test(ad) ? join(brandDirAbs, 'outputs', ad) : null;
+  const outputs = join(brandDirAbs, 'outputs');
+  const name = typeof ad !== 'string' ? null : /^\d+$/.test(ad) ? adFolders(outputs).find((f) => f.startsWith(`${ad}_`)) : /^\d+_[^/\\\0]+$/.test(ad) ? ad : null;
+  const dir = name && join(outputs, name);
   return dir && existsSync(dir) ? dir : null;
 }
 

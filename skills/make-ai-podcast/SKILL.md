@@ -19,7 +19,7 @@ claims gate (the persona and angle come from step 2).
 Settle each element in order; skip any the brief or the user already set.
 
 - **Product** — usually set by step 1's gate.
-- **Persona** and **angle** — from `-personas.md` and `-angles.md`; ideate fresh ones when none
+- **Persona** and **angle** — from the product's `-personas.md` and `-angles.md`; ideate fresh ones when none
   fits (**ideate-personas-angles**).
 - **Target market** — sets the voices' **accent** (US → American, UK → British) and the script's
   **language, idioms and phrasing**.
@@ -35,7 +35,7 @@ builds the voices from this text, and similar descriptions blur into one voice.
 
 ## 4. Set
 
-Generate the **podcast-set photo** with **write-prompt** (`tools/generate-image.mjs`, 9:16 at 1K,
+Generate the **podcast-set photo** with **write-image-prompt** (`tools/generate-image.mjs`, 9:16 at 1K,
 three rolls; save the pick as `base/set.png`). Options vary the vibe (backdrop, light, props) to
 fit the brand and persona. Use a real set photo only when the brand owns one the user wants
 (**search-media**); never adapt a photo of someone else's show.
@@ -91,7 +91,7 @@ prompt and reroll.
 
 ## 7. Script
 
-Write a very casual, speech-like conversation from the signed-off claims and the research doc's
+Write a very casual, speech-like conversation from the signed-off claims and `customers.md`'s
 customer language. Cover these **beats**, merged or reordered as feels natural: the hook exchange ·
 the problem in the guest's lived words · what they tried that didn't work · what actually works, said
 simply and hedged like a layperson · the result, with a number and a timeframe (signed-off claims
@@ -103,7 +103,7 @@ graphic goes on in the edit: write the dialogue so nothing needs to be shown.
 
 ## 8. Video prompts
 
-Split the script into consecutive clips within the model's per-clip cap (**write-prompt**, Video
+Split the script into consecutive clips within the model's per-clip cap (**write-video-prompt**, Video
 models); round each clip's length up to a whole second. Time each clip at **write-copy**'s pace
 (Length), counting every speaker's words. If a render drags, drop its duration by a second rather
 than cutting words; if it rushes, cut words rather than adding seconds.
@@ -114,7 +114,7 @@ open the next mid-sentence with that speaker already talking and moving.
 Make each prompt **fully self-contained**: restate every character, the set, and which reference
 image is which; never reference another clip.
 
-Lay each prompt out in Seedance's syntax (**write-prompt**, Writing for each model), with these
+Lay each prompt out in Seedance's syntax (**write-video-prompt**), with these
 labeled blocks:
 
 - **TASK** — bring lines X–Y to life, vertical 9:16. Use each character's base image exactly as

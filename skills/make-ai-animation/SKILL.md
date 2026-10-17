@@ -85,7 +85,7 @@ sound) below it.
   once free, they move left to right). Fast, never frantic: the thing to watch stays near the same
   spot in frame across a cut.
 - **Narrated: plan the clips** in a table under the shots: consecutive shots grouped into clips no
-  longer than the model allows (**write-prompt**, Video models), whole lines only.
+  longer than the model allows (**write-video-prompt**, Video models), whole lines only.
 - **Sound effects** only: each shot's sounds, specific to its action and timed to it (a plate
   clattering). A recurring sound gets the same words every time. No music, voices or ambience.
 
@@ -147,7 +147,7 @@ follow **write-prompt**'s "How a model reads a prompt".
 
 Every clip prompt follows **write-prompt**'s "How a model reads a prompt", above all **animate from
 the frame, not against it**. Each prompt stands alone, written like a director's notes and laid out in its model's syntax
-(**write-prompt**, Writing for each model):
+(**write-video-prompt**):
 
 - **TASK:** animate the frame(s) for N seconds keeping their exact style, drawing and light.
 - **CAMERA:** the move, its feel and where it ends up, with timings.
@@ -157,7 +157,7 @@ the frame, not against it**. Each prompt stands alone, written like a director's
 - **SOUND:** only this shot's sounds, placed in time; no music, chatter or ambience, said each
   model's way.
 
-**Narrated:** MiniMax H3, or Seedance 2.5 for longer clips (**write-prompt**, Video models). One
+**Narrated:** MiniMax H3, or Seedance 2.5 for longer clips (**write-video-prompt**, Video models). One
 run per planned clip: its shots' frames in order as `--image` refs, then the sheets of who's in it
 (9 images at most on MiniMax). The prompt gives each shot its frame and start second, with a hard cut at each,
 and SOUND carries the effects, so every clip comes back with its own sound. Name each clip after its

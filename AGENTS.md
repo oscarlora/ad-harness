@@ -3,27 +3,6 @@
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
-## First-time setup
-
-When the user asks to set up ADPK (e.g. from its GitHub link), or to finish setting it up:
-
-1. **Install,** unless you already run in the kit's folder: on macOS or Linux,
-   `curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash`
-   (into `~/ad-production-kit`; `… | bash -s -- <folder>` for a folder they pick). On Windows, clone
-   the repo (`winget install Git.Git` if git is missing) and run
-   `powershell -ExecutionPolicy Bypass -File tools\setup.ps1`. If it stops, it says why and how to fix
-   it: apply the fix (the user does what only they can, such as clicking Install) and run it again.
-2. **The kie key, before anything else:** ask what to call their workspace (their company, or their
-   own name when solo), create `workspaces/<WS>/`, and give `.env` (from `.env.example`) a
-   `<WS>_KIE_API_KEY=` line. Open the file for them and send them to https://kie.ai/api-key; they paste
-   the key into the file, never into chat. Go on once `node tools/check-keys.mjs <WS>` says it works.
-3. **Welcome:** show `tools/welcome.txt` word for word. If you're not running in the kit's folder,
-   ask them to reopen the agent there so it loads these rules.
-
-Everything else waits until a step needs it: R2 (a team needs it to share brands; solo is optional),
-Drive and Notion keys, and ffmpeg 8, Pillow, yt-dlp and the export browser (the tool that needs one
-says how to get it).
-
 ## Changing ADPK
 
 Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
@@ -56,7 +35,9 @@ Every file here — skills, docs, code, comments — is as short and plain as it
 
 ## How you reply
 
-- **Concise:** reply with the artifact itself — no preamble, no recap.
+- **Concise:** reply with the artifact itself — no preamble, no recap. The exceptions: an ad's plan
+  (Skills), and a line as each step over a minute starts (what it's doing; its landing line:
+  Visual).
 - **Clear:** the simplest words that carry the meaning; technical terms only where needed.
 - **Generative:** give 3 deliberately different options by default, as a plain numbered list in
   chat. Ask questions in chat, never through a picker or interview UI.
@@ -74,7 +55,9 @@ workspace's R2 bucket when it has one (see Operating principles).
     workspaces/<WS>/
       _custom/           # the workspace's own skills and tools (extensions or changes to ADPK); load them when working it
       <Brand>/
-        inputs/          # DESIGN.md, <product>-research.md (+ -personas, -angles), memory.md, uploads.json, reviews.csv, products.json, brief-templates.md
+        inputs/          # research-brand's files: brand.md, products/<product>.md (+ -personas, -angles), customers.md,
+                         # competitors.md, ads.md, DESIGN.md, products.json · memory.md, uploads.json, brief-templates.md
+          sources/       # what research collected: reviews.csv, pages/, ads/, posts.md, competitors/, files/
           media/         # the searchable media library (catalog-media)
         outputs/         # one folder per ad (naming: write-prompt) · json/ records (tools/record-ad.mjs) · index.md · batches/
     workspaces/Shared/Library/   # the public shared library (music, SFX, references): anyone pulls it,
@@ -83,13 +66,16 @@ workspace's R2 bucket when it has one (see Operating principles).
     skills/   # one folder per skill: skills/<name>/SKILL.md
     tools/    # scripts; each documents its usage (--help)
     studio/   # the local web app: Board · Media · Workflow (node studio/dev.mjs)
-    .env      # per-workspace keys (<WS>_…; see .env.example). The user pastes keys into the file, never
-              # into chat; read them from disk only and never echo them.
+    .env      # per-workspace keys (<WS>_…; see .env.example). Other than the kie key at setup, the user
+              # pastes keys into the file, not chat. Read keys from disk only and never echo them.
 
 ## Skills
 
-To make an ad, settle the ad type first (ask if it isn't given), open Studio on the ad's Workflow
-page without asking (**open-studio**; the user watches each step land there and edits there), then follow its workflow:
+To make an ad: settle the ad type (ask if it isn't given), give the ad its ID and folder
+(`<ID>_New_<Format>` until the concept is picked; naming: **write-prompt**) and its record, and open
+Studio on its Workflow page without asking (**open-studio**; the user watches each step land there,
+research included, and edits there). Then reply with the plan: the steps in order, what you'll ask them,
+and that they can watch it in Studio. Then follow its workflow:
 
 - **make-image-ad** — image ads
 - **make-ai-podcast** — podcast video ads
@@ -99,9 +85,10 @@ page without asking (**open-studio**; the user watches each step land there and 
 
 Scripts need no workflow: **write-copy**.
 
-Every workflow starts by loading the brand context: the product's `-research.md`, `-personas.md`
-and `-angles.md`, and the brand's `inputs/DESIGN.md` and `inputs/memory.md`; if research or
-DESIGN.md is missing or thin, run **research-brand** first. Once the ad has an ID, title the
+Every workflow starts by loading the brand context from `inputs/`: `brand.md`, the product's
+`products/<product>.md`, `-personas.md` and `-angles.md`, `customers.md`, `DESIGN.md` and
+`memory.md`, plus `ads.md` and `competitors.md` when ideating concepts; if the research or DESIGN.md
+is missing or thin, run **research-brand** first. Once the ad has an ID, title the
 session `<brand initials> ad <ID> – <concept> (<format>)` (e.g. `AC ad 11 – Up to 40% off
 (static)`; a session that makes more than one ad keeps every ID, `AC ad 11 + 12 – …`). The session works
 only on those ads: when a request points at another (its Studio page, its folder, a tool saying another
@@ -114,10 +101,12 @@ leaves in Studio reaches you.
 
 Steps (each owns its procedure and rules):
 
+- **ADPK setup:** set-up-adpk (install, the kie key, the welcome)
 - **Brand setup:** pull-reviews, research-brand, ideate-personas-angles, pull-fonts
 - **Media library:** pull-media, catalog-media, search-media
 - **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, write-prompt,
-  generate-voice, add-music, generate-sfx, review-ugc-footage, caption-video, edit-video, recut-shorts
+  write-image-prompt, write-video-prompt, generate-voice, add-music, generate-sfx, review-ugc-footage,
+  caption-video, edit-video, recut-shorts
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
 
 ## Operating principles
@@ -138,7 +127,8 @@ Steps (each owns its procedure and rules):
   runs as a tracked background command with a log; a killed render loses a paid task.
 - **Brand data syncs through R2 when the workspace has R2 keys** (teams need it; solo is optional).
   Pull before working a brand (`node tools/sync-brand.mjs --pull workspaces/<WS>/<Brand>`;
-  `--originals` adds heavy media; `--brands <WS>` lists brands) and push when done (`--push`). Push
+  `--originals` adds heavy media, which tools otherwise download one by one when they read it;
+  `--brands <WS>` lists brands) and push when done (`--push`). Push
   never deletes: after renaming or deleting a folder, clear the old one with `--remove <brand dir>
   <relpath>`. R2 is last-write-wins, so pull before you edit; pull never touches an ad being edited
   here. Without R2 keys, everything stays local.

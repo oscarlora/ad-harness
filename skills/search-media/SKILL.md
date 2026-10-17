@@ -7,9 +7,9 @@ description: Find and use media from a brand's library — by meaning in any lan
 
 The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). For reference
 photos, footage, music or sounds, search the brand's library and the public **shared library**
-(assets for every brand) first, before hunting raw folders or generating. Pull the shared library if
-it isn't local (AGENTS.md, First-time setup) and search it the same way with
-`--media workspaces/Shared/Library/inputs/media`.
+(assets for every brand) first, before hunting raw folders or generating. Search it the same way with
+`--media workspaces/Shared/Library/inputs/media` (setup pulls its catalog; each file downloads when a
+tool uses it).
 
 ## Agent search — retrieve, then judge
 

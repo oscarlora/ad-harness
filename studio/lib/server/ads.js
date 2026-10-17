@@ -7,7 +7,7 @@ import { isSeparator, tableCells } from '../markdown.js';
 import { repoRoot } from './root.js';
 import { catalogLib } from './tools.js';
 
-// ---- persona details (the table in inputs/<product>-personas.md) ----
+// ---- persona details (the table in inputs/products/<product>-personas.md) ----
 // Table names ("The Morning Routine") vs record slugs ("MorningRoutine"): drop "The ", compare alphanumerics, digits as words.
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 const norm = (s) => String(s || '').toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
@@ -27,10 +27,10 @@ function parsePersonaTable(md) {
 
 function personas(brandDirAbs) {
   const out = [];
-  const inputs = join(brandDirAbs, 'inputs');
+  const dir = join(brandDirAbs, 'inputs', 'products');
   try {
-    for (const f of readdirSync(inputs).filter((f) => /-personas\.md$/i.test(f))) {
-      try { out.push(...parsePersonaTable(readFileSync(join(inputs, f), 'utf8'))); } catch {}
+    for (const f of readdirSync(dir).filter((f) => /-personas\.md$/i.test(f))) {
+      try { out.push(...parsePersonaTable(readFileSync(join(dir, f), 'utf8'))); } catch {}
     }
   } catch {}
   return out;

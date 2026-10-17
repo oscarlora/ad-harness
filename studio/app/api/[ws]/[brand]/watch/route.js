@@ -1,4 +1,5 @@
-// Live refresh: SSE `change` events from a recursive fs.watch of outputs/ and inputs/media/_catalog/: the first
+// Live refresh: SSE `change` events from a recursive fs.watch of outputs/ and inputs/media/_catalog/, plus inputs/
+// and inputs/products/ (the brand's research, not the media below it): the first
 // change at once, the rest of a burst once it settles.
 // The heartbeat keeps proxies from closing an idle connection.
 import { existsSync, watch } from 'node:fs';
@@ -13,7 +14,8 @@ const open = new Set();
 for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { for (const end of open) end(); });
 
 export const GET = brandRoute((req, ctx) => {
-  const dirs = [join(ctx.dir, 'outputs'), join(ctx.dir, 'inputs', 'media', '_catalog')].filter((d) => existsSync(d));
+  const dirs = [[join(ctx.dir, 'outputs'), true], [join(ctx.dir, 'inputs', 'media', '_catalog'), true], [join(ctx.dir, 'inputs'), false], [join(ctx.dir, 'inputs', 'products'), false]]
+    .filter(([d]) => existsSync(d));
 
   const encoder = new TextEncoder();
   let cleanup = () => {};
@@ -36,9 +38,9 @@ export const GET = brandRoute((req, ctx) => {
       };
       open.add(cleanup);
       send(`: watching ${dirs.length} dir(s)\n\n`);
-      for (const dir of dirs) {
+      for (const [dir, recursive] of dirs) {
         try {
-          const w = watch(dir, { recursive: true }, () => {
+          const w = watch(dir, { recursive }, () => {
             // The first change goes out at once (an edit shows immediately); a burst after it collapses into one.
             if (Date.now() - lastSent > DEBOUNCE_MS) return fire();
             clearTimeout(debounce);

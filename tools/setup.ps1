@@ -1,5 +1,5 @@
 ﻿# setup.ps1 — Windows twin of setup.sh, idempotent, no keys: Node LTS via winget when missing, npm deps,
-# whisper.cpp, the shared library and the git hooks, then the next step (the kie key). Works in Windows PowerShell 5.1 and PowerShell 7.
+# whisper.cpp, the shared library's catalog and the git hooks, then the next step (the kie key). Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
 
@@ -48,7 +48,7 @@ if (Test-NodeOk) {
 
 # ── npm deps (media search embeddings, Vercel AI Gateway, the video export) — again whenever package.json changed ──
 $fresh = { param($dir) (Test-Path "$dir\node_modules\.package-lock.json") -and ((Get-Item "$dir\node_modules\.package-lock.json").LastWriteTime -gt (Get-Item "$dir\package.json").LastWriteTime) }
-foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio app', 'Studio app'))) {
+foreach ($d in @(@('.', "ADPK's tools", "ADPK's tools"), @('studio', 'the studio app', 'Studio app'))) {
   if (-not (& $fresh $d[0])) {
     Write-Host "  Installing $($d[1])..."
     $log = npm ci --prefix $d[0] --no-fund --no-audit 2>&1
@@ -57,9 +57,9 @@ foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio
   Ok "$($d[2]) ready"
 }
 
-node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) { Ok 'Shared library ready (music, sound effects, references)' }
-else { Warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry." }
+node tools/sync-brand.mjs --pull workspaces/Shared/Library 2>&1 | Out-Null   # catalog only; files download when used
+if ($LASTEXITCODE -eq 0) { Ok 'Shared library ready (music, sound effects, references; each file downloads when used)' }
+else { Warn "Couldn't reach the shared library (music, sound effects): run this setup again later to retry." }
 
 # ── git hooks: block commits that mention a client workspace or brand (the repo is public) ──
 if (Has 'git') { git config core.hooksPath .githooks 2>&1 | Out-Null }
@@ -89,8 +89,8 @@ if (-not (& $hasWhisper)) {
 
 Write-Host ''
 if (Select-String -Path '.env' -Pattern '^[A-Za-z0-9_]+_KIE_API_KEY=.+' -Quiet -ErrorAction SilentlyContinue) {
-  Ok "The kit is ready in $((Get-Location).Path)."
+  Ok "ADPK is ready in $((Get-Location).Path)."
 } else {
-  Write-Host "The kit is installed in $((Get-Location).Path). One step left: open your AI agent in that folder and say"
+  Write-Host "ADPK is installed in $((Get-Location).Path). One step left: open your AI agent in that folder and say"
   Write-Host '"Finish setting up ADPK". It helps you add your kie.ai key, the one key you need to start.'
 }

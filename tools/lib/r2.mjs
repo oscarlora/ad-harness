@@ -1,6 +1,9 @@
 // r2.mjs — Cloudflare R2 client with AWS SigV4 signing, zero deps. One bucket per workspace.
 import { createHash, createHmac } from 'node:crypto';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { basename, dirname, relative, resolve } from 'node:path';
+import { brandDirFrom, inferBrand, inferWorkspace, loadEnv } from './catalog.mjs';
 
 const sha256hex = (d) => createHash('sha256').update(d).digest('hex');
 const hmac = (key, d) => createHmac('sha256', key).update(d).digest();
@@ -163,3 +166,22 @@ export function r2Public(env, workspace) {
   };
 }
 
+
+// Media originals missing here (a light pull) download from their workspace's bucket when a tool
+// needs them; anything else, or a workspace without a bucket, is left as it is.
+export async function fetchMissing(paths) {
+  for (const p of [paths].flat().filter(Boolean)) {
+    const abs = resolve(String(p));
+    if (/^https?:\/\//i.test(String(p)) || existsSync(abs)) continue;
+    const brand = inferBrand(abs);
+    const rel = brand && relative(brandDirFrom(abs), abs).replace(/\\/g, '/');
+    if (!rel?.startsWith('inputs/media/')) continue;
+    const env = loadEnv(), ws = inferWorkspace(abs);
+    const r2 = r2FromEnv(env, ws) || r2Public(env, ws);
+    const buf = r2 && await r2.get(`${brand}/${rel}`).catch(() => null);
+    if (!buf) continue;
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, buf);
+    console.error(`downloaded ${basename(abs)} from the cloud`);
+  }
+}

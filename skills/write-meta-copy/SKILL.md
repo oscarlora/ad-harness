@@ -6,8 +6,7 @@ description: Write the Meta ad's in-platform text — the headline and primary t
 # Write Meta copy
 
 The text that runs in Meta Ads Manager, not on the creative. Writing rules and claims follow
-**write-copy**; this owns the Meta formats. Pull wording from the product's `-research.md` Reviews
-analysis.
+**write-copy**; this owns the Meta formats. Pull wording from `customers.md`.
 
 ## Headline
 
@@ -20,7 +19,7 @@ A call to action, 3 to 6 words. Start with a verb and carry a concrete benefit, 
   the hook; never open with the brand name or warm-up words.
 - **Format**: one sentence per line, blank line between (`\n\n`).
 - **Deliver all three lengths** and recommend one by the persona's awareness stage
-  (`-personas.md`): product- and most-aware → short; unaware and problem-aware → long.
+  (`products/<product>-personas.md`): product- and most-aware → short; unaware and problem-aware → long.
 
 **Short (~50 words)** — hook → one proof line → the offer → a call to action.
 

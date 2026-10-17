@@ -1,19 +1,19 @@
 ---
 name: ideate-personas-angles
-description: Build and grow a product's personas (the specific people its ads target) and angles (the ways its ads sell to them). Seeds at least 5 of each during research and adds new ones on demand while making ads. Use when onboarding a product, when asked to create or expand personas or angles, or when an ad needs one that doesn't exist yet. Owns the definitions of a persona, an angle and the awareness stages.
+description: Build and grow a product's personas (the specific people its ads target) and angles (the ways its ads sell to them). Seeds 3 of each during research and adds new ones on demand while making ads. Use when onboarding a product, when asked to create or expand personas or angles, or when an ad needs one that doesn't exist yet. Owns the definitions of a persona, an angle and the awareness stages.
 ---
 
 # Ideate personas and angles
 
-Each lives in a table beside the product's research: `[product]-personas.md` and
-`[product]-angles.md`. **Seed ≥5 of each during research**, then append the chosen one whenever an
-ad calls for a new one.
+Each lives in a table beside the product's file: `inputs/products/<product>-personas.md` and
+`<product>-angles.md`. **Seed 3 of each during research**, then append the chosen one whenever an ad
+calls for a new one.
 
 **Awareness stages:** unaware · problem-aware · solution-aware · product-aware · most-aware.
 
 ## Personas
 
-One specific person an ad targets, grounded in the product's reviews and market, never "everyone".
+One specific person an ad targets, grounded in `customers.md` and the market (`brand.md`), never "everyone".
 
 | name | age | gender | awareness stage | physical pain | emotional pain | desired outcome | objection |
 
@@ -38,7 +38,7 @@ wrong); who they are (their identity or moment of life); head-to-head (versus th
 or a competitor gap. **One ad communicates one angle.** Sharpen each into a claim (e.g. "the
 product has no X → red is the new X").
 
-When the angle is how the product works, take it from the research doc's "Why it works"
+When the angle is how the product works, take it from the product file's "Why it works"
 (**research-brand**).
 
 | angle | what it is + why it's relevant | fits |

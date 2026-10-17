@@ -11,6 +11,7 @@ import { catalogPaths, readRecords, readRecord, mergeRecord, readRoster, parseAr
 import { videoPass, videoMeta, workDir, heavy } from './lib/media-probe.mjs';
 import { requireKeys, filePart, generateJSON, spendText, ANALYSIS_MODEL, INLINE_MAX } from './lib/analyze.mjs';
 import { buildPrompt, buildSchema } from './lib/analysis-prompt.mjs';
+import { fetchMissing } from './lib/r2.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary, alignWords, loops, LONG } from './lib/transcribe.mjs';
 
 const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MODEL} on kie.ai and fill their records
@@ -56,7 +57,8 @@ async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
   const temps = [];
 
   try {
-    if (type !== 'image' && !existsSync(original)) throw new Error(`original missing: ${rec.file.name} (pull it with sync-brand --pull --originals)`);
+    if (type !== 'image') await fetchMissing(original);
+    if (type !== 'image' && !existsSync(original)) throw new Error(`original missing: ${rec.file.name}, here and in the cloud`);
     const duration = rec.file.duration ?? (type === 'image' ? null : +ffprobeJson(original).format?.duration || null);
     const patch = { id, status: 'cataloged' };
     let pic = null, snd = null, track = null, picModel = null;

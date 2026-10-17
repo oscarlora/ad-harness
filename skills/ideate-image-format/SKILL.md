@@ -1,6 +1,6 @@
 ---
 name: ideate-image-format
-description: Ideate an image ad's format and design — pick the image type (photo- vs graphic-centric), set the mandatory background + product + hook, add layers, lay out the composition in bands, then decide colors, fonts, hierarchy and legibility. Image ads only; built from the layer toolkit, not a fixed list. Use when choosing an ad's format, or when an ad looks off-brand, hard to read or cluttered. Feeds write-prompt's Composition and Design sections.
+description: Ideate an image ad's format and design — pick the image type (photo- vs graphic-centric), set the mandatory background + product + hook, add layers, lay out the composition in bands, then decide colors, fonts, hierarchy and legibility. Image ads only; built from the layer toolkit, not a fixed list. Use when choosing an ad's format, or when an ad looks off-brand, hard to read or cluttered. Feeds write-image-prompt's Composition and Design sections.
 ---
 
 # Ideate image format
@@ -73,7 +73,7 @@ format, use it.
 
 On-brand (`inputs/DESIGN.md`), instantly scannable, legible at thumbnail size. Decide per ad, and
 state the concrete choices (hex colors, fonts, hierarchy order, legibility treatments) for
-**write-prompt**'s Design section:
+**write-image-prompt**'s Design section:
 
 - **Colors** — start from the product and packaging colors; an on-brand or near-on-brand
   background that gives the product strong contrast, never one that flattens it.

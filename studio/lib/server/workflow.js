@@ -1,7 +1,7 @@
 // Workflow data: each ad's progress through its format's steps, inferred from its outputs/ folder and record.
 // Returned paths are brand-relative (POSIX), for the /file route.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { mediaType } from '../client/api.js';
 import { blockKind, inSections, isSeparator, parseDoc, tableCells } from '../markdown.js';
 import { adFolders } from './ads.js';
@@ -327,6 +327,16 @@ function withStates(steps) {
   return steps.map((s, i) => ({ ...s, state: s.done ? 'done' : i === last + 1 ? 'current' : 'todo' }));
 }
 
+// Every ad starts with the brand's research (research-brand): done once the brand has it, or the ad is past it.
+const RESEARCH = ['brand.md', 'customers.md', 'competitors.md', 'ads.md', 'DESIGN.md'];
+function researchStep(brandDirAbs, past) {
+  const inputs = join(brandDirAbs, 'inputs');
+  const list = (sub) => { try { return readdirSync(join(inputs, sub)).filter((n) => n.endsWith('.md')).sort().map((n) => (sub ? `${sub}/${n}` : n)); } catch { return []; } };
+  const rels = [...RESEARCH.filter((n) => list('').includes(n)), ...list('products')];
+  const files = rels.map((r) => ({ rel: r, p: `inputs/${r}`, v: Math.round(statSync(join(inputs, r)).mtimeMs), type: 'md' }));
+  return { key: 'research', label: 'Research', done: past || rels.includes('brand.md'), panel: files.length ? { files: present(files, files) } : {} };
+}
+
 function adWorkflow(brandDirAbs, folder) {
   const head = parseFolder(folder);
   const files = inventory(brandDirAbs, folder);
@@ -350,7 +360,7 @@ function adWorkflow(brandDirAbs, folder) {
     const count = open ? `${open} note${open === 1 ? '' : 's'}` : review ? `${review} to review` : last.count;
     Object.assign(last, { done: true, count, panel: { editor: true } });
   }
-  return { ...head, status: rec?.status || '', steps: withStates(steps), storyboard, footage, edit, comments: docNotes(dir) };
+  return { ...head, status: rec?.status || '', steps: withStates([researchStep(brandDirAbs, steps.some((s) => s.done)), ...steps]), storyboard, footage, edit, comments: docNotes(dir) };
 }
 
 // The ad list: newest (highest id) first, each with its current step.
@@ -363,6 +373,7 @@ export function workflowList(brandDirAbs) {
   return { ads: ads.sort((a, b) => b.id - a.id || a.folder.localeCompare(b.folder)) };
 }
 
-export function workflowDetail(brandDirAbs, folder) {
-  return adDir(brandDirAbs, folder) ? adWorkflow(brandDirAbs, folder) : null;
+export function workflowDetail(brandDirAbs, ad) {
+  const dir = adDir(brandDirAbs, ad);
+  return dir ? adWorkflow(brandDirAbs, basename(dir)) : null;
 }

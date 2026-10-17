@@ -43,8 +43,8 @@ The **concept** is product + persona + angle + format. Then copy, then design.
 4. **Format** — image type + layer layout (**ideate-image-format**).
 5. **Copy** — hook, plus subline and tertiary if the format uses them (**write-copy**).
 6. **Design** — colors, fonts, hierarchy, legibility (**ideate-image-format**, Design).
-7. **Prompt** — compose the structured prompt in the chat, not in a file (**write-prompt**).
-8. **Show, then generate** — show the full ad as a **table in the chat**, every parameter **including the prompt**. Then render (**write-prompt**).
+7. **Prompt** — compose the structured prompt in the chat, not in a file (**write-image-prompt**).
+8. **Show, then generate** — show the full ad as a **table in the chat**, every parameter **including the prompt**. Then render (**write-image-prompt**).
 9. **Approve** — on the user's yes, move the render to `final/` (**write-prompt**, filename
    convention).
 10. **Story version** — every static is made 4:5 first; once a 4:5 is approved, make its 9:16 Story

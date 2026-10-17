@@ -81,7 +81,7 @@ flag what's off to the user.
 
 ## 6. Clips
 
-MiniMax H3 (**write-prompt**, Video models), 3–6 minutes a clip. Group whole shots into chunks of
+MiniMax H3 (**write-video-prompt**, Video models), 3–6 minutes a clip. Group whole shots into chunks of
 up to 15 s (never split a shot), pass their frames in order, and run every chunk at once (long renders:
 AGENTS.md):
 
@@ -89,7 +89,7 @@ AGENTS.md):
       --image <ad>/frames/frame-01.png --image <ad>/frames/frame-02.png --image <ad>/frames/frame-03.png \
       --aspect 16:9 --duration <chunk seconds, rounded up> --out <ad>/clips/chunk-01.mp4 --timeout 1500
 
-The prompt, in MiniMax's layout (**write-prompt**, Writing for each model), says:
+The prompt, in MiniMax's layout (**write-video-prompt**), says:
 
 - Images 1…N are the slides, reproduced exactly, each filling the 16:9 frame edge to edge (no bars),
   shown in order with hard cuts at the given seconds; the last runs to the end.
