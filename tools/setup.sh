@@ -7,6 +7,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
 #        … | bash -s -- <folder>     to install somewhere other than ~/ad-production-kit
 #        bash tools/setup.sh         inside the kit
+#        ADPK_BRANCH=<branch>        before bash: install that branch (to test it before merging)
 # Everything sits in functions run by the last line, so a piped download runs only once it's complete.
 set -u
 
@@ -64,7 +65,7 @@ get_kit() {
     fail "$(pretty "$dir") already exists and isn't the kit." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
   else
     need_git
-    git clone -q "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download the kit." "$offline"
+    git clone -q -b "${ADPK_BRANCH:-main}" "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download the kit." "$offline"
     ok "Downloaded the kit to $(pretty "$dir")"
   fi
   cd "$dir" || fail "Couldn't open $(pretty "$dir")."
