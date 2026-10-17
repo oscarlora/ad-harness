@@ -1,8 +1,16 @@
 # The All-in-One Ad Production Kit (ADPK)
 
 Everything you need to make Meta ads with Claude, Codex or any AI agent: skills and tools to go from
-idea to ready-to-launch ad. Creative strategists, copywriters, video editors, designers and business
-owners use it on their own or as a team.
+idea to ready-to-launch ad.
+
+This is for people who make ads:
+- Creative strategists
+- copywriters
+- video editors
+- designers
+- business owners
+- etc
+And can be used on your own or in collaboration.
 
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
 7+ years, 2,000 ads and $20M+ in ad spend.
