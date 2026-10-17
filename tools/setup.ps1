@@ -1,5 +1,5 @@
-﻿# setup.ps1 — Windows twin of setup.sh, idempotent: Node LTS via winget when missing, npm deps,
-# whisper.cpp and the git hooks, then a health check. Works in Windows PowerShell 5.1 and PowerShell 7.
+﻿# setup.ps1 — Windows twin of setup.sh, idempotent, no keys: Node LTS via winget when missing, npm deps,
+# whisper.cpp, the shared library and the git hooks, then the next step (the kie key). Works in Windows PowerShell 5.1 and PowerShell 7.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\setup.ps1
 
@@ -8,7 +8,12 @@ Set-Location (Split-Path -Parent $PSScriptRoot)   # repo root (this script lives
 
 function Ok($msg)   { Write-Host '  ' -NoNewline; Write-Host ([char]0x2713) -ForegroundColor Green  -NoNewline; Write-Host " $msg" }
 function Warn($msg) { Write-Host '  ' -NoNewline; Write-Host ([char]0x2022) -ForegroundColor Yellow -NoNewline; Write-Host " $msg" }
-function Bad($msg)  { Write-Host '  ' -NoNewline; Write-Host ([char]0x2717) -ForegroundColor Red    -NoNewline; Write-Host " $msg" }
+# Bad <problem> [details]: print, then stop.
+function Bad($msg, $details = @()) {
+  Write-Host '  ' -NoNewline; Write-Host ([char]0x2717) -ForegroundColor Red -NoNewline; Write-Host " $msg"
+  $details | ForEach-Object { Write-Host "      $_" }
+  Write-Host "`nSetup stopped. Once that's fixed, run it again."; exit 1
+}
 function Has($name) { return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
 Write-Host 'Ad Production Kit setup'
@@ -25,11 +30,10 @@ function Test-NodeOk {
 }
 
 if (Test-NodeOk) {
-  Ok "Node $(& node -v) present"
+  Ok "Node $(& node -v) ready"
 } else {
   if (-not (Has 'winget')) {
-    Bad 'winget is not available on this machine — install Node 22.15+ from https://nodejs.org, then re-run this script.'
-    exit 1
+    Bad 'winget is not available on this machine: install Node 22.15+ from https://nodejs.org'
   }
   Write-Host '  Installing Node LTS with winget...'
   winget install --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements | Out-Null
@@ -38,45 +42,27 @@ if (Test-NodeOk) {
   if (Test-NodeOk) {
     Ok "Installed Node $(& node -v) (open a new terminal if other windows can't find node)"
   } else {
-    Bad 'Node install failed — install Node 22.15+ from https://nodejs.org, then re-run this script.'
-    exit 1
+    Bad 'Node install failed: install Node 22.15+ from https://nodejs.org'
   }
 }
 
 # ── npm deps (media search embeddings, Vercel AI Gateway, the video export) — again whenever package.json changed ──
 $fresh = { param($dir) (Test-Path "$dir\node_modules\.package-lock.json") -and ((Get-Item "$dir\node_modules\.package-lock.json").LastWriteTime -gt (Get-Item "$dir\package.json").LastWriteTime) }
-if (& $fresh '.') {
-  Ok 'npm deps present'
-} else {
-  npm install --no-fund --no-audit 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Ok 'npm deps installed' }
-  else { Warn "npm install failed — semantic media search, the video export and the Vercel AI Gateway won't work until it succeeds" }
-}
-
-# ── git hooks ─────────────────────────────────────────────────────────────────
-if ((Test-Path '.githooks') -and (Has 'git')) {
-  git rev-parse --is-inside-work-tree 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) {
-    git config core.hooksPath .githooks
-    if ($LASTEXITCODE -eq 0) { Ok 'git hooks on (blocks commits that mention a client workspace or brand)' }
+foreach ($d in @(@('.', "the kit's tools", 'Kit tools'), @('studio', 'the studio app', 'Studio app'))) {
+  if (-not (& $fresh $d[0])) {
+    Write-Host "  Installing $($d[1])..."
+    $log = npm ci --prefix $d[0] --no-fund --no-audit 2>&1
+    if ($LASTEXITCODE -ne 0) { Bad "Couldn't install $($d[1]): check your internet connection." ($log | Select-Object -Last 8) }
   }
+  Ok "$($d[2]) ready"
 }
 
-# ── studio app deps ───────────────────────────────────────────────────────────
-if ((Test-Path 'studio\package.json') -and -not (& $fresh 'studio')) {
-  npm install --prefix studio --no-fund --no-audit 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Ok 'studio app deps installed' }
-  else { Warn "npm install for studio failed — the studio app won't run until it succeeds" }
-}
+node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) { Ok 'Shared library ready (music, sound effects, references)' }
+else { Warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry." }
 
-# ── video export browser: an installed Chrome or Edge, else Playwright's Chromium ──
-node -e "import('playwright-core').then(async({chromium})=>{for(const channel of['chrome','msedge','chromium'])try{await(await chromium.launch({channel})).close();process.exit(0)}catch{}process.exit(1)})" 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) { Ok 'video export browser present' }
-else {
-  npx --no-install playwright-core install --no-shell chromium 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Ok 'Chromium installed for video export' }
-  else { Warn 'Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium' }
-}
+# ── git hooks: block commits that mention a client workspace or brand (the repo is public) ──
+if (Has 'git') { git config core.hooksPath .githooks 2>&1 | Out-Null }
 
 # ── whisper.cpp (word timings for captions): the CPU build from its GitHub releases into ~\.local\bin,
 # where the tools look. Its model downloads on first use.
@@ -98,32 +84,13 @@ if (-not (& $hasWhisper)) {
     Get-ChildItem $tmp -Recurse -Include 'whisper-cli.exe', 'whisper.dll', 'ggml*.dll' | Copy-Item -Destination $localBin -Force
     Remove-Item $tmp -Recurse -Force
   } catch { }
+  if (& $hasWhisper) { Ok 'whisper.cpp ready (captions)' } else { Warn "whisper.cpp didn't install (captions need it): run this setup again later to retry." }
 }
 
-# ── Health check ──────────────────────────────────────────────────────────────
-Write-Host 'Health check'
-if (Test-Path '.env') {
-  Ok '.env present'
+Write-Host ''
+if (Select-String -Path '.env' -Pattern '^[A-Za-z0-9_]+_KIE_API_KEY=.+' -Quiet -ErrorAction SilentlyContinue) {
+  Ok "The kit is ready in $((Get-Location).Path)."
 } else {
-  Bad '.env missing — copy .env.example to .env and add your keys'
+  Write-Host "The kit is installed in $((Get-Location).Path). One step left: open your AI agent in that folder and say"
+  Write-Host '"Finish setting up ADPK". It helps you add your kie.ai key, the one key you need to start.'
 }
-
-# Required on Windows: images catalog through ffmpeg too (no sips).
-if (Has 'ffmpeg')   { Ok 'ffmpeg present' }   else { Bad 'ffmpeg missing (needed for media cataloging): winget install Gyan.FFmpeg' }
-if (& $hasWhisper) { Ok 'whisper-cli present' } else { Warn "whisper-cli missing (word timings for captions): re-run this setup, or unzip $asset from github.com/ggml-org/whisper.cpp/releases into ~\.local\bin" }
-if (Has 'yt-dlp')   { Ok 'yt-dlp present' }   else { Warn 'yt-dlp missing (optional — URL/social pulls): winget install yt-dlp.yt-dlp' }
-
-# Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
-# The bare "python" on Windows can be the Microsoft Store stub, so check that it actually runs.
-$pyv = ''
-try { $pyv = (& python --version 2>&1 | Out-String).Trim() } catch { }
-if ($LASTEXITCODE -eq 0 -and $pyv -match '^Python 3') {
-  Ok "$pyv present"
-  python -c 'import PIL' 2>&1 | Out-Null
-  if ($LASTEXITCODE -eq 0) { Ok 'Pillow present' }
-  else { Warn 'Pillow missing (needed for pull-fonts.py): pip install pillow' }
-} else {
-  Warn 'Python missing (needed for pull-fonts.py and edit-song.py): winget install Python.Python.3.12   (then: pip install pillow)'
-}
-
-Write-Host 'Done.'

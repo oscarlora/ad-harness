@@ -1,170 +1,234 @@
 #!/bin/bash
-# setup.sh — machine setup, idempotent, no admin password or Homebrew. Installs Node, ffmpeg 8 and
-# whisper.cpp under ~/.local when missing, npm deps and the git hooks, then prints a health check.
+# setup.sh — install and first-run setup on macOS and Linux: idempotent, no admin password, no keys.
+# Downloads the kit when run outside it, installs Node (and on macOS ffmpeg 8 and whisper.cpp) under
+# ~/.local when missing, the npm deps, the shared library and the git hooks, then the next step
+# (the kie key: AGENTS.md, First-time setup). Any failure stops it with a plain-language fix. Updates: AGENTS.md.
 #
-# Usage: bash tools/setup.sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash
+#        … | bash -s -- <folder>     to install somewhere other than ~/ad-production-kit
+#        bash tools/setup.sh         inside the kit
+#        ADPK_BRANCH=<branch>        before bash: install that branch (to test it before merging)
+# Everything sits in functions run by the last line, so a piped download runs only once it's complete.
 set -u
-cd "$(dirname "$0")/.."
+
+REPO_URL=https://github.com/oscarlora/ad-production-kit
+INSTALL_CMD="curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash"
+SELF=${BASH_SOURCE[0]:-}
+LOG=$(mktemp "${TMPDIR:-/tmp}/ad-production-kit-setup.XXXXXX")
+trap 'rm -f "$LOG"' EXIT
+PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
 
 ok()   { printf "  \033[32m✓\033[0m %s\n" "$1"; }
 warn() { printf "  \033[33m•\033[0m %s\n" "$1"; }
-bad()  { printf "  \033[31m✗\033[0m %s\n" "$1"; }
+# fail [-l] <problem> [fix lines…]: print (-l: and the tail of $LOG), then stop.
+fail() {
+  local log=0; [ "$1" = -l ] && { log=1; shift; }
+  printf "  \033[31m✗\033[0m %s\n" "$1"; shift
+  for line in "$@"; do printf "    %s\n" "$line"; done
+  [ "$log" = 1 ] && [ -s "$LOG" ] && { echo "    What went wrong:"; tail -n 8 "$LOG" | sed 's/^/      /'; }
+  printf "\nSetup stopped. Once that's fixed, run the same command again: it picks up where it left off.\n"
+  exit 1
+}
+pretty() { case "$1" in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }
+is_kit() { grep -qs '"name": "ad-production-kit-tools"' "$1/package.json"; }
+sha256() { { command -v sha256sum >/dev/null && sha256sum "$1" || shasum -a 256 "$1"; } | cut -d' ' -f1; }
+progress() { [ -t 2 ] && echo --progress-bar || echo -sS; }
+offline="Check your internet connection."
 
-# One PATH line in ~/.zprofile makes new terminals see the local installs (Node + ~/.local/bin).
-PATH_LINE='export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"'
-ensure_path_line() {
-  grep -qsF "$PATH_LINE" "$HOME/.zprofile" 2>/dev/null && return 0
-  { echo "$PATH_LINE" >> "$HOME/.zprofile"; } 2>/dev/null && return 0
-  warn "couldn't update ~/.zprofile — add this line to ~/.zprofile yourself: $PATH_LINE"
-  return 1
+# ── git (downloads the kit and its updates) ─────────────────────────────────
+need_git() {
+  if [ "$(uname)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
+    xcode-select --install >/dev/null 2>&1
+    echo "  A window asks to install Apple's command line tools (they include git): click Install."
+    echo "  Setup carries on by itself once they're installed (a few minutes)…"
+    local waited=0
+    until xcode-select -p >/dev/null 2>&1; do
+      sleep 5; waited=$((waited + 5))
+      [ "$waited" -ge 3600 ] && fail "Apple's command line tools didn't finish installing." \
+        "Install them with: xcode-select --install"
+    done
+    ok "Installed Apple's command line tools"
+  fi
+  command -v git >/dev/null 2>&1 || fail "git is missing (it downloads the kit and its updates)." \
+    "Install it: sudo apt install git (Ubuntu, Debian) or sudo dnf install git (Fedora)."
 }
 
-echo "Ad Production Kit setup"
-
-# ── Node (>= 22.15; installs latest v24 LTS locally when missing or older) ───
-export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"   # pick up previous local installs
-NEED_NODE=1
-if command -v node >/dev/null 2>&1; then
-  NODE_OK=$(node -p 'const [a, b] = process.versions.node.split(".").map(Number); a > 22 || (a === 22 && b >= 15) ? 1 : 0' 2>/dev/null || echo 0)
-  [ "$NODE_OK" = 1 ] && { ok "Node $(node -v) present"; NEED_NODE=0; }
-fi
-if [ "$NEED_NODE" = 1 ]; then
-  ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=x64
-  if [ "$ARCH" != "arm64" ] && [ "$ARCH" != "x64" ]; then
-    bad "Unsupported architecture: $ARCH"; exit 1
+# ── the kit itself: this checkout, or a clone into the chosen folder ────────
+get_kit() {
+  if [ -f "$SELF" ] && is_kit "$(dirname "$SELF")/.."; then
+    cd "$(dirname "$SELF")/.." && return
   fi
-  echo "  Installing Node LTS to ~/.local/node (no admin password needed)…"
-  TARBALL=$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt 2>/dev/null \
-    | grep -oE "node-v24\.[0-9]+\.[0-9]+-darwin-${ARCH}\.tar\.gz" | head -1)
-  if [ -z "${TARBALL:-}" ]; then
-    bad "Could not resolve the Node download (no internet?). Install Node 22.15+ from https://nodejs.org and re-run."
-    exit 1
+  local dir=${1:-$HOME/ad-production-kit}
+  if is_kit "$dir"; then
+    ok "The kit is in $(pretty "$dir")"
+  elif [ -e "$dir" ]; then
+    fail "$(pretty "$dir") already exists and isn't the kit." "Pick another folder: $INSTALL_CMD -s -- ~/another-folder"
+  else
+    need_git
+    git clone -q -b "${ADPK_BRANCH:-main}" "$REPO_URL" "$dir" </dev/null >"$LOG" 2>&1 || fail -l "Couldn't download the kit." "$offline"
+    ok "Downloaded the kit to $(pretty "$dir")"
   fi
-  curl -fL --progress-bar "https://nodejs.org/dist/latest-v24.x/$TARBALL" -o /tmp/ad-production-kit-node.tar.gz || {
-    bad "Node download failed. Install Node 22.15+ from https://nodejs.org and re-run."; exit 1; }
-  rm -rf "$HOME/.local/node" && mkdir -p "$HOME/.local/node"
-  tar -xzf /tmp/ad-production-kit-node.tar.gz -C "$HOME/.local/node" --strip-components 1
-  rm -f /tmp/ad-production-kit-node.tar.gz
-  ensure_path_line && NOTE=" (PATH set in ~/.zprofile)" || NOTE=""
-  ok "Installed Node $(node -v)$NOTE"
-fi
+  cd "$dir" || fail "Couldn't open $(pretty "$dir")."
+}
 
-# ── npm deps (media search embeddings, Vercel AI Gateway, the video export) — again whenever package.json changed ──
-if [ -d node_modules ] && [ node_modules/.package-lock.json -nt package.json ]; then
-  ok "npm deps present"
-else
-  npm install --no-fund --no-audit >/dev/null 2>&1 \
-    && ok "npm deps installed" \
-    || warn "npm install failed — semantic media search, the video export and the Vercel AI Gateway won't work until it succeeds"
-fi
+# ── Node 22.15+ (else the latest v24 under ~/.local/node) ───────────────────
+node_ok() {
+  command -v npm >/dev/null 2>&1 && node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 15) ? 0 : 1)' >/dev/null 2>&1
+}
+install_node() {
+  if node_ok; then ok "Node $(node -v) ready"; return; fi
+  local os arch base=https://nodejs.org/dist/latest-v24.x tmp line name
+  local manual="Install Node 22.15 or newer yourself: https://nodejs.org/en/download"
+  case "$(uname -s)" in
+    Darwin) os=darwin ;;
+    Linux)  os=linux ;;
+    *) fail "This setup runs on macOS and Linux." "On Windows, ask your AI agent to set up the kit (see the README)." ;;
+  esac
+  case "$(uname -m)" in
+    x86_64 | amd64)  arch=x64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) fail "Node has no ready-made build for this processor ($(uname -m))." "$manual" ;;
+  esac
+  [ "$os" = linux ] && ls /lib/ld-musl-* >/dev/null 2>&1 \
+    && fail "This Linux (musl, e.g. Alpine) can't run Node's ready-made build." "$manual"
+  echo "  Installing Node to ~/.local/node (no admin password needed)…"
+  line=$(curl -fsSL "$base/SHASUMS256.txt" 2>>"$LOG" | grep -E "  node-v24\.[0-9]+\.[0-9]+-$os-$arch\.tar\.gz$" | head -1)
+  [ -n "$line" ] || fail -l "Couldn't reach nodejs.org to download Node." "$offline"
+  name=${line##* }
+  tmp=$(mktemp -d)
+  curl -fL "$(progress)" "$base/$name" -o "$tmp/$name" 2>>"$LOG" || fail -l "The Node download failed." "$offline"
+  [ "$(sha256 "$tmp/$name")" = "${line%% *}" ] || fail "The Node download arrived damaged." "$offline"
+  tar -xzf "$tmp/$name" -C "$tmp" 2>>"$LOG" || fail -l "Couldn't unpack Node." "$manual"
+  "$tmp/${name%.tar.gz}/bin/node" -v >"$LOG" 2>&1 \
+    || fail -l "Node's $os-$arch build doesn't run on this computer." "$manual"
+  rm -rf "$HOME/.local/node" && mkdir -p "$HOME/.local" && mv "$tmp/${name%.tar.gz}" "$HOME/.local/node"
+  rm -rf "$tmp"; hash -r
+  node_ok || fail "Node installed but doesn't run." "$manual"
+  ok "Installed Node $(node -v)"
+}
 
-# ── git hooks ────────────────────────────────────────────────────────────────
-if [ -d .githooks ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git config core.hooksPath .githooks && ok "git hooks on (blocks commits that mention a client workspace or brand)"
-fi
+# ── PATH: new terminals find ~/.local installs through the user's own shell startup files ──
+add_to_path() {
+  local files f line=$PATH_LINE added=""
+  case "$(basename "${SHELL:-}")" in
+    zsh)  files=".zprofile .zshrc" ;;
+    bash) files=".bashrc .profile"; [ -f "$HOME/.bash_profile" ] && files=".bashrc .bash_profile" ;;
+    fish) files=".config/fish/conf.d/ad-production-kit.fish"; line='fish_add_path -g ~/.local/node/bin ~/.local/bin' ;;
+    *)    files=".profile" ;;
+  esac
+  for f in $files; do
+    grep -qsF "$line" "$HOME/$f" && continue
+    if mkdir -p "$(dirname "$HOME/$f")" && echo "$line" >>"$HOME/$f"; then added="$added ~/$f"
+    else warn "Couldn't update ~/$f: add this line to it yourself: $line"; fi
+  done
+  [ -n "$added" ] && ok "Added the kit's tools to your PATH (${added# })"
+  return 0
+}
 
-# ── studio app deps ──────────────────────────────────────────────────────────
-if [ -f studio/package.json ] && ! [ studio/node_modules/.package-lock.json -nt studio/package.json ]; then
-  npm install --prefix studio --no-fund --no-audit >/dev/null 2>&1 \
-    && ok "studio app deps installed" \
-    || warn "npm install for studio failed — the studio app won't run until it succeeds"
-fi
+# ── npm deps: again whenever package.json changed ───────────────────────────
+npm_deps() {  # <folder> <what it installs> <name>
+  if ! [ "$1/node_modules/.package-lock.json" -nt "$1/package.json" ]; then
+    echo "  Installing $2…"
+    npm ci --prefix "$1" --no-fund --no-audit </dev/null >"$LOG" 2>&1 \
+      || fail -l "Couldn't install $2." "$offline"
+  fi
+  ok "$3 ready"
+}
 
-# ── video export browser: an installed Chrome or Edge, else Playwright's Chromium ──
-if node -e "import('playwright-core').then(async({chromium})=>{for(const channel of['chrome','msedge','chromium'])try{await(await chromium.launch({channel})).close();process.exit(0)}catch{}process.exit(1)})" >/dev/null 2>&1; then
-  ok "video export browser present"
-else
-  npx --no-install playwright-core install --no-shell chromium >/dev/null 2>&1 \
-    && ok "Chromium installed for video export" \
-    || warn "Chromium install failed (video export needs it): install Google Chrome, or run: npx playwright-core install chromium"
-fi
-
-# ── ffmpeg 8+ (macOS static builds from ffmpeg.martin-riedl.de, linked by ffmpeg.org) ──
-# Linux skips this and gets the health-check hint instead.
-FF_MAJ=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE 'version [nN]?[0-9]+' | grep -oE '[0-9]+' | head -1)
-if [ "$(uname)" = "Darwin" ] && [ "${FF_MAJ:-0}" -lt 8 ]; then
-  echo "  Installing ffmpeg 8 + ffprobe to ~/.local/bin (no admin password needed)…"
-  FF_ARCH=$(uname -m); [ "$FF_ARCH" = "x86_64" ] && FF_ARCH=amd64
-  # Resolve the versioned download directory. The redirect endpoint answers GET only (HEAD and
-  # .sha256 paths 404 there), so follow it once and fetch everything from the resolved dir.
-  FF_DIR=$(curl -s -o /dev/null -w '%{redirect_url}' "https://ffmpeg.martin-riedl.de/redirect/latest/macos/${FF_ARCH}/release/ffmpeg.zip")
-  FF_DIR=${FF_DIR%/ffmpeg.zip}
-  FF_TMP=$(mktemp -d); FF_OK=1
-  for FF_BIN in ffmpeg ffprobe; do
-    if [ -n "$FF_DIR" ] \
-      && curl -fL --progress-bar "$FF_DIR/$FF_BIN.zip" -o "$FF_TMP/$FF_BIN.zip" \
-      && curl -fsSL "$FF_DIR/$FF_BIN.zip.sha256" -o "$FF_TMP/$FF_BIN.zip.sha256" \
-      && (cd "$FF_TMP" && shasum -a 256 -c "$FF_BIN.zip.sha256" >/dev/null 2>&1) \
-      && unzip -oq "$FF_TMP/$FF_BIN.zip" -d "$FF_TMP" \
-      && [ -f "$FF_TMP/$FF_BIN" ] \
+# ── ffmpeg 8+ on macOS (static builds from ffmpeg.martin-riedl.de, linked by ffmpeg.org) ──
+# Elsewhere the media tools say how to get it when first used (tools/lib/catalog.mjs).
+install_ffmpeg() {
+  local maj
+  maj=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE 'version [nN]?[0-9]+' | grep -oE '[0-9]+' | head -1)
+  [ "$(uname)" = Darwin ] && [ "${maj:-0}" -lt 8 ] || return 0
+  echo "  Installing ffmpeg 8 (video and audio) to ~/.local/bin…"
+  local arch dir tmp bin old all=1
+  arch=$(uname -m); [ "$arch" = x86_64 ] && arch=amd64
+  # The redirect endpoint answers GET only (HEAD and .sha256 paths 404 there), so follow it once
+  # and fetch everything from the resolved versioned dir.
+  dir=$(curl -s -o /dev/null -w '%{redirect_url}' "https://ffmpeg.martin-riedl.de/redirect/latest/macos/$arch/release/ffmpeg.zip")
+  dir=${dir%/ffmpeg.zip}
+  tmp=$(mktemp -d)
+  for bin in ffmpeg ffprobe; do
+    if [ -n "$dir" ] \
+      && curl -fL "$(progress)" "$dir/$bin.zip" -o "$tmp/$bin.zip" \
+      && curl -fsSL "$dir/$bin.zip.sha256" -o "$tmp/$bin.zip.sha256" \
+      && (cd "$tmp" && shasum -a 256 -c "$bin.zip.sha256" >/dev/null 2>&1) \
+      && unzip -oq "$tmp/$bin.zip" -d "$tmp" \
+      && "$tmp/$bin" -version >/dev/null 2>&1 \
       && mkdir -p "$HOME/.local/bin"; then
-      if [ -x "$HOME/.local/bin/$FF_BIN" ]; then   # keep the binary being replaced as e.g. ffmpeg-7.1.bak
-        FF_OLD=$("$HOME/.local/bin/$FF_BIN" -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
-        mv "$HOME/.local/bin/$FF_BIN" "$HOME/.local/bin/$FF_BIN-${FF_OLD:-old}.bak"
+      if [ -x "$HOME/.local/bin/$bin" ]; then   # keep the binary being replaced as e.g. ffmpeg-7.1.bak
+        old=$("$HOME/.local/bin/$bin" -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
+        mv "$HOME/.local/bin/$bin" "$HOME/.local/bin/$bin-${old:-old}.bak"
       fi
-      mv "$FF_TMP/$FF_BIN" "$HOME/.local/bin/$FF_BIN"
-      chmod +x "$HOME/.local/bin/$FF_BIN"
-      xattr -d com.apple.quarantine "$HOME/.local/bin/$FF_BIN" 2>/dev/null || true
+      mv "$tmp/$bin" "$HOME/.local/bin/$bin"
+      chmod +x "$HOME/.local/bin/$bin"
+      xattr -d com.apple.quarantine "$HOME/.local/bin/$bin" 2>/dev/null || true
     else
-      FF_OK=0
+      all=0
     fi
   done
-  rm -rf "$FF_TMP"; hash -r
-  if [ "$FF_OK" = 1 ]; then
-    ensure_path_line
-    ok "Installed ffmpeg $("$HOME/.local/bin/ffmpeg" -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1) to ~/.local/bin"
+  rm -rf "$tmp"; hash -r
+  if [ "$all" = 1 ]; then
+    ok "Installed ffmpeg $("$HOME/.local/bin/ffmpeg" -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)"
   else
-    warn "ffmpeg install didn't finish — video/audio tools need it; re-run setup to retry, or brew install ffmpeg"
+    warn "ffmpeg didn't install (video and audio tools need it): run this setup again later to retry."
   fi
-fi
+}
 
-# ── whisper.cpp (word timings for captions): Homebrew's when present, else built from source into
-# ~/.local/bin with a throwaway CMake (Xcode Command Line Tools compile it). Its model downloads on first use.
-if [ "$(uname)" = "Darwin" ] && ! command -v whisper-cli >/dev/null 2>&1; then
-  if command -v brew >/dev/null 2>&1; then
-    brew install whisper-cpp >/dev/null 2>&1
+# ── whisper.cpp on macOS (word timings for captions): Homebrew's when present, else built from
+# source into ~/.local/bin with a throwaway CMake (Apple's command line tools compile it). Its model
+# downloads on first use; elsewhere the caption tools say how to get it.
+install_whisper() {
+  [ "$(uname)" = Darwin ] && ! command -v whisper-cli >/dev/null 2>&1 || return 0
+  if command -v brew >/dev/null 2>&1 && brew install whisper-cpp >"$LOG" 2>&1; then
+    ok "Installed whisper.cpp (captions)"; return
+  fi
+  need_git
+  echo "  Building whisper.cpp (captions) into ~/.local/bin, about a minute…"
+  local tmp cm_url tag cm
+  tmp=$(mktemp -d)
+  cm_url=$(curl -fsSL https://api.github.com/repos/Kitware/CMake/releases/latest | grep -oE 'https://[^"]+-macos-universal\.tar\.gz' | head -1)
+  tag=$(curl -fsSL https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest | grep -oE '"tag_name": *"v[0-9.]+"' | grep -oE 'v[0-9.]+')
+  if [ -n "$cm_url" ] && [ -n "$tag" ] \
+    && curl -fsSL "$cm_url" | tar -xz -C "$tmp" \
+    && curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/$tag.tar.gz" | tar -xz -C "$tmp"; then
+    cm=$(echo "$tmp"/cmake-*/CMake.app/Contents/bin/cmake)
+    "$cm" -S "$(echo "$tmp"/whisper.cpp-*)" -B "$tmp/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+        -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF >"$LOG" 2>&1 \
+      && "$cm" --build "$tmp/build" -j --config Release --target whisper-cli >"$LOG" 2>&1 \
+      && mkdir -p "$HOME/.local/bin" && mv "$tmp/build/bin/whisper-cli" "$HOME/.local/bin/"
+  fi
+  rm -rf "$tmp"; hash -r
+  command -v whisper-cli >/dev/null 2>&1 && ok "Built whisper.cpp (captions)" \
+    || warn "whisper.cpp didn't build (captions need it): run this setup again later to retry."
+}
+
+main() {
+  echo "Ad Production Kit setup"
+  command -v curl >/dev/null 2>&1 || fail "curl is missing (it downloads what the kit needs)." \
+    "Install it: sudo apt install curl (Ubuntu, Debian) or sudo dnf install curl (Fedora)."
+  get_kit "$@"
+  export PATH="$HOME/.local/node/bin:$HOME/.local/bin:$PATH"
+  install_node
+  install_ffmpeg
+  install_whisper
+  case "$(command -v node) $(command -v ffmpeg) $(command -v whisper-cli)" in *"$HOME/.local/"*) add_to_path ;; esac
+  npm_deps . "the kit's tools" "Kit tools"
+  npm_deps studio "the studio app" "Studio app"
+  node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals </dev/null >"$LOG" 2>&1 \
+    && ok "Shared library ready (music, sound effects, references)" \
+    || warn "Couldn't download the shared library (music, sound effects): run this setup again later to retry."
+  # Blocks commits that mention a client workspace or brand (the repo is public).
+  git config core.hooksPath .githooks 2>/dev/null
+  echo
+  if grep -qsE '^[A-Za-z0-9_]+_KIE_API_KEY=.+' .env; then
+    ok "The kit is ready in $(pretty "$PWD")."
   else
-    echo "  Building whisper.cpp into ~/.local/bin (about a minute)…"
-    W_TMP=$(mktemp -d)
-    CM_URL=$(curl -fsSL https://api.github.com/repos/Kitware/CMake/releases/latest | grep -oE 'https://[^"]+-macos-universal\.tar\.gz' | head -1)
-    W_TAG=$(curl -fsSL https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest | grep -oE '"tag_name": *"v[0-9.]+"' | grep -oE 'v[0-9.]+')
-    if [ -n "$CM_URL" ] && [ -n "$W_TAG" ] \
-      && curl -fsSL "$CM_URL" | tar -xz -C "$W_TMP" \
-      && curl -fsSL "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/$W_TAG.tar.gz" | tar -xz -C "$W_TMP"; then
-      CM=$(echo "$W_TMP"/cmake-*/CMake.app/Contents/bin/cmake)
-      "$CM" -S "$(echo "$W_TMP"/whisper.cpp-*)" -B "$W_TMP/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-          -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF >/dev/null 2>&1 \
-        && "$CM" --build "$W_TMP/build" -j --config Release --target whisper-cli >/dev/null 2>&1 \
-        && mkdir -p "$HOME/.local/bin" && mv "$W_TMP/build/bin/whisper-cli" "$HOME/.local/bin/" && ensure_path_line
-    fi
-    rm -rf "$W_TMP"
+    printf "The kit is installed in %s. One step left: open your AI agent in that folder and say\n" "$(pretty "$PWD")"
+    printf "\"Finish setting up ADPK\". It helps you add your kie.ai key, the one key you need to start.\n"
   fi
-fi
+  return 0
+}
 
-# ── Health check ─────────────────────────────────────────────────────────────
-echo "Health check"
-if [ -f .env ]; then
-  ok ".env present"
-else
-  bad ".env missing — copy .env.example to .env and add your keys"
-fi
-FF_V=$(ffmpeg -version 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
-if [ -z "$FF_V" ]; then
-  warn "ffmpeg missing (video/audio work): on Linux install it with your package manager, or drop a static build into ~/.local/bin (media tools already look there)"
-elif [ "${FF_V%%.*}" -ge 8 ]; then
-  ok "ffmpeg $FF_V present"
-else
-  warn "ffmpeg $FF_V is older than 8 — video tools may misbehave; on macOS re-run this setup, on Linux update it with your package manager"
-fi
-command -v whisper-cli >/dev/null 2>&1 && ok "whisper-cli present" || warn "whisper-cli missing (word timings for captions): on macOS re-run this setup (it needs the Xcode Command Line Tools: xcode-select --install), on Linux build whisper.cpp from github.com/ggml-org/whisper.cpp into ~/.local/bin"
-command -v yt-dlp  >/dev/null 2>&1 && ok "yt-dlp present"  || warn "yt-dlp missing (optional — URL/social pulls): brew install yt-dlp, or drop a static build into ~/.local/bin (media tools already look there)"
-# Python (pull-fonts.py, edit-song.py) + Pillow (pull-fonts.py).
-if PYV=$(python3 --version 2>&1) && [[ "$PYV" == "Python 3"* ]]; then
-  ok "$PYV present"
-  python3 -c 'import PIL' >/dev/null 2>&1 && ok "Pillow present" \
-    || warn "Pillow missing (needed for pull-fonts.py): python3 -m pip install --user pillow"
-else
-  warn "Python 3 missing (needed for pull-fonts.py and edit-song.py): install it from https://www.python.org, then: python3 -m pip install --user pillow"
-fi
-
-echo "Done."
+main "$@"

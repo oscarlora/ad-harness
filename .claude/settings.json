@@ -12,7 +12,9 @@
       "Bash(git status:*)",
       "Bash(git log:*)",
       "Bash(git diff:*)",
-      "Bash(git reset --hard origin/main)"
+      "Bash(git reset --hard origin/main)",
+      "Bash(ffmpeg:*)",
+      "Bash(ffprobe:*)"
     ]
   }
 }

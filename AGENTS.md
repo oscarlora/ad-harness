@@ -3,6 +3,27 @@
 You make Meta ads (image and video) for ecommerce brands, working with whoever runs them: someone
 making their own ads, an in-house team, or an agency.
 
+## First-time setup
+
+When the user asks to set up ADPK (e.g. from its GitHub link), or to finish setting it up:
+
+1. **Install,** unless you already run in the kit's folder: on macOS or Linux,
+   `curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash`
+   (into `~/ad-production-kit`; `… | bash -s -- <folder>` for a folder they pick). On Windows, clone
+   the repo (`winget install Git.Git` if git is missing) and run
+   `powershell -ExecutionPolicy Bypass -File tools\setup.ps1`. If it stops, it says why and how to fix
+   it: apply the fix (the user does what only they can, such as clicking Install) and run it again.
+2. **The kie key, before anything else:** ask what to call their workspace (their company, or their
+   own name when solo), create `workspaces/<WS>/`, and give `.env` (from `.env.example`) a
+   `<WS>_KIE_API_KEY=` line. Open the file for them and send them to https://kie.ai/api-key; they paste
+   the key into the file, never into chat. Go on once `node tools/check-keys.mjs <WS>` says it works.
+3. **Welcome:** show `tools/welcome.txt` word for word. If you're not running in the kit's folder,
+   ask them to reopen the agent there so it loads these rules.
+
+Everything else waits until a step needs it: R2 (a team needs it to share brands; solo is optional),
+Drive and Notion keys, and ffmpeg 8, Pillow, yt-dlp and the export browser (the tool that needs one
+says how to get it).
+
 ## Changing ADPK
 
 Every file here — skills, docs, code, comments — is as short and plain as it can be while still working.
@@ -98,19 +119,6 @@ Steps (each owns its procedure and rules):
 - **Making:** plan-batch, ideate-image-format, write-copy, write-meta-copy, write-prompt,
   generate-voice, add-music, generate-sfx, review-ugc-footage, caption-video, edit-video, recut-shorts
 - **Review and upload:** open-studio, pull-comments, save-brand-memory, write-handoff, upload-ads
-
-## First-time setup
-
-When the user asks to set up ADPK from its GitHub link:
-
-1. Clone it into a folder they pick (default `~/ad-production-kit`). If git is missing: on macOS run
-   `xcode-select --install` and have them click Install; on Windows, `winget install Git.Git`.
-2. Run setup (`bash tools/setup.sh`, or `tools\setup.ps1` on Windows) and fix what its health
-   check flags.
-3. Copy `.env.example` to `.env`, open it for them, and say which keys to add and where to get
-   them. A kie key is all they need to start; a team also needs R2.
-4. Pull the shared library: `node tools/sync-brand.mjs --pull workspaces/Shared/Library --originals`.
-5. Ask them to reopen the agent in the `ad-production-kit` folder, so it loads these rules.
 
 ## Operating principles
 

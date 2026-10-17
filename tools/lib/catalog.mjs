@@ -23,7 +23,6 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------- external binaries ----------
 // Extend PATH once so spawned tools find binaries in ~/.local/bin and brew dirs too.
 process.env.PATH = [process.env.PATH || '', join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].join(delimiter);
-export const SETUP_HINT = 'run bash tools/setup.sh (Windows: tools\\setup.ps1)';
 
 // Scans PATH ourselves (Windows has no /bin/sh) and tries <name>.exe there, since spawn() won't
 // append it without a shell.
@@ -42,13 +41,29 @@ export function findBin(name) {
 }
 export const have = (name) => !!findBin(name);
 
+// Setup doesn't check ffmpeg (only media work needs it), so the first ffmpeg/ffprobe call notes
+// once when it's missing or older than 8.
+export const FFMPEG_FIX = { darwin: 'run: bash tools/setup.sh', win32: 'run: winget install Gyan.FFmpeg' }[process.platform]
+  || 'put an ffmpeg 8 static build (https://ffmpeg.org/download.html) in ~/.local/bin';
+let ffmpegNoted = false;
+function noteFfmpeg(bin) {
+  if (ffmpegNoted || (bin !== 'ffmpeg' && bin !== 'ffprobe')) return;
+  ffmpegNoted = true;
+  const path = findBin('ffmpeg');
+  const major = path && Number(spawnSync(path, ['-version'], { encoding: 'utf8' }).stdout?.match(/version n?(\d+)/)?.[1]);
+  if (!path) console.error(`Note: ffmpeg isn't installed, and video and audio work needs it. To get it, ${FFMPEG_FIX}`);
+  else if (major < 8) console.error(`Note: ffmpeg ${major} is older than 8, so video work may misbehave. To update, ${FFMPEG_FIX}`);
+}
+
 export function run(bin, args, { allowFail = false, binary = false, cwd } = {}) {
+  noteFfmpeg(bin);
   const r = spawnSync(findBin(bin) || bin, args, { encoding: binary ? 'buffer' : 'utf8', maxBuffer: 1 << 30, cwd });
   if (r.status !== 0 && !allowFail) throw new Error(`${bin} ${args.join(' ')} failed: ${r.stderr || r.error}`);
   return r;
 }
 // run() without blocking the event loop: { status, stdout, stderr }.
 export function runAsync(bin, args, { allowFail = false, cwd } = {}) {
+  noteFfmpeg(bin);
   return new Promise((res, rej) => {
     const p = spawn(findBin(bin) || bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';

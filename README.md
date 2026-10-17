@@ -16,6 +16,28 @@ And can be used on your own or in collaboration.
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
 7+ years, 2,000 ads and $20M+ in ad spend.
 
+## Get started
+
+1. Install an AI agent (Claude, Codex, Cursor…) and pick its model:
+   - **Claude:** Opus 5.5, medium (the repo sets it for Claude Code)
+   - **OpenAI:** GPT-6.1 Sol, medium
+   - **xAI:** Grok 4.7, default effort
+   - **Meta:** Muse Wonder, default effort
+2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*, and
+   click **Allow** when it asks to run the install. No admin password needed.
+3. When it asks, get a [kie.ai key](https://kie.ai/api-key) and paste it into the file the agent opens.
+   It's the one key you need to start.
+
+Then say *"Make an image ad for &lt;your brand's website&gt;"*.
+
+Rather use Terminal? On macOS or Linux, paste
+`curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash`,
+then open your agent in `~/ad-production-kit` and say *"Finish setting up ADPK"*.
+
+Later, only if you need them ([.env.example](.env.example)): a
+[Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket so a team shares brands, and
+Google Drive or Notion for uploads. ADPK runs on macOS, Windows and Linux.
+
 ## What you can do with it
 
 - **Image ads:** static ads with high product fidelity.
@@ -60,28 +82,6 @@ Teams share brands through cloud storage:
 - At the end of your work: *"Push Acme"*. The sync warns before overwriting someone's newer work.
 - Share each workspace's `.env` block through a password vault, and propose ADPK changes as a
   pull request.
-
-## How to set it up
-
-1. Install an AI agent (Claude Code, Codex, Cursor…) and pick its model:
-   - **Claude:** Opus 5.5, medium (the repo sets it for Claude Code)
-   - **OpenAI:** GPT-6.1 Sol, medium
-   - **xAI:** Grok 4.7, default effort
-   - **Meta:** Muse Wonder, default effort
-2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*
-
-The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your
-keys ([.env.example](.env.example)):
-
-- **Generation and media analysis:** a [kie.ai](https://kie.ai) key. Search and caption timing run on your
-  computer.
-- **Cloud storage (teams; optional solo):** a
-  [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) bucket the team and their
-  agents pull from and push to.
-- **Uploads (optional):** Google Drive, Notion.
-
-Videos are edited in ADPK's own editor and exported through Chrome, Edge, or a Chromium that
-setup installs. It runs on macOS, Windows and Linux.
 
 ## How it's organized
 

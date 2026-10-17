@@ -361,11 +361,20 @@ async function browser() {
   let pw;
   try { pw = await import('playwright-core'); } catch { die('playwright-core missing — run: bash tools/setup.sh'); }
   const opts = { headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--enable-gpu', '--ignore-gpu-blocklist'] };
-  // An installed Chrome or Edge first (they carry H.264/AAC), else the Chromium setup installs.
-  for (const channel of ['chrome', 'msedge', 'chromium']) {
-    try { return await pw.chromium.launch({ ...opts, channel }); } catch {}
+  // An installed Chrome or Edge first (they carry H.264/AAC), else Playwright's Chromium, downloaded on the first export.
+  const launch = async () => {
+    for (const channel of ['chrome', 'msedge', 'chromium']) {
+      try { return await pw.chromium.launch({ ...opts, channel }); } catch {}
+    }
+    return null;
+  };
+  let b = await launch();
+  if (!b) {
+    console.error('No Chrome or Edge found: downloading Chromium for the export (once)…');
+    run(process.execPath, [join(import.meta.dirname, '..', 'node_modules', 'playwright-core', 'cli.js'), 'install', '--no-shell', 'chromium'], { allowFail: true });
+    b = await launch();
   }
-  die('no browser for the export: install Google Chrome, or run: npx playwright-core install chromium');
+  return b || die(`no browser for the export: install Google Chrome${process.platform === 'linux' ? ', or run: sudo npx playwright-core install-deps chromium' : ''}`);
 }
 
 // Serve the plan's brand folder and the shared library + the engine page; collect the output; resolve when
@@ -450,7 +459,7 @@ async function exportCmd(p) {
     const meta = ffprobeJson(out);
     const rel = relative(dirname(p), out).split(sep).join('/');
     setStatus(p, { state: 'done', out: rel, seconds: round((Date.now() - t0) / 1000) });
-    console.error(`done      ${round(+meta.format.duration)}s in ${round((Date.now() - t0) / 1000)}s`);
+    console.error(`done      ${meta.format ? `${round(+meta.format.duration)}s ` : ''}in ${round((Date.now() - t0) / 1000)}s`);
     console.log('Saved: ' + out);
   } catch (e) {
     setStatus(p, { state: 'failed', error: String(e.message || e) });
