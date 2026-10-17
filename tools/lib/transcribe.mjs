@@ -14,7 +14,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir, homedir, availableParallelism } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { have, run, ffprobeJson, readRoster, inferBrand, loudness, round, SETUP_HINT } from './catalog.mjs';
+import { have, run, ffprobeJson, readRoster, inferBrand, loudness, round, FFMPEG_FIX } from './catalog.mjs';
 import { generateJSON, filePart, ANALYSIS_MODEL, INLINE_MAX } from './analyze.mjs';
 import { buildAudioPrompt, buildAudioSchema, buildMergePrompt, buildMergeSchema } from './analysis-prompt.mjs';
 
@@ -24,7 +24,7 @@ const SILENT_DB = -50; // a track whose loudest peak is below this is silence (d
 // Mono 16 kHz mp3 in a temp dir: { path, dir, silent, duration }, or null without audio. `made` = an
 // mp3 the probe already extracted. Caller removes `dir`.
 export function audioTrack(src, made = null) {
-  if (!have('ffmpeg')) throw new Error(`ffmpeg is required for audio — ${SETUP_HINT}`);
+  if (!have('ffmpeg')) throw new Error(`ffmpeg is required for audio. To get it, ${FFMPEG_FIX}`);
   const p = ffprobeJson(src);
   if (!(p.streams || []).some((s) => s.codec_type === 'audio')) return null;
   const dir = made && existsSync(made) ? dirname(made) : mkdtempSync(join(tmpdir(), 'track-'));
@@ -256,7 +256,7 @@ async function whisperModel() {
 // ended (punctuation tokens hold the pauses), or at whisper's own token start when that is later and
 // still before the end.
 async function whisperWords(wav, language) {
-  if (!have('whisper-cli')) throw new Error(`whisper-cli is missing — ${SETUP_HINT}`);
+  if (!have('whisper-cli')) throw new Error(`whisper-cli is missing (word timings for captions): run setup again (bash tools/setup.sh; Windows: tools\\setup.ps1; Linux: build it from github.com/ggml-org/whisper.cpp into ~/.local/bin)`);
   const out = join(dirname(wav), 'words');
   run('whisper-cli', ['-m', await whisperModel(), '-f', wav, '-l', language || 'auto', '-ojf', '-of', out, '-np', '-nfa', '--dtw', 'large.v3.turbo', '-t', String(Math.min(8, availableParallelism()))]);
   return tokenWords(JSON.parse(readFileSync(`${out}.json`, 'utf8')).transcription.flatMap((s) => s.tokens));
