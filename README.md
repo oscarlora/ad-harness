@@ -16,46 +16,6 @@ And can be used on your own or in collaboration.
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
 7+ years, 2,000 ads and $20M+ in ad spend.
 
-## How to set it up
-
-ADPK works inside your AI agent: you talk to the agent, and it uses ADPK to make your ads.
-
-1. **Open your AI agent.**
-   - Claude: the **Code** tab of the [Claude app](https://claude.ai/download).
-   - ChatGPT: the **Codex** tab of the [ChatGPT app](https://openai.com/chatgpt/download).
-   - For others, it's the respective agent chat.
-2. **Send it this message:** *Install https://github.com/oscarlora/ad-production-kit*
-
-   Click **Allow** when it asks to run the install. On a Mac, if a window asks to install Apple's
-   command line tools, click **Install**.
-3. **Get your kie.ai key and paste it in the chat when the agent asks.** [kie.ai](https://kie.ai) is
-   the one service ADPK needs: through a single account it runs every AI model ADPK uses to make
-   images, video, voices, music and sound effects. You pay as you go, with credits.
-   1. Sign up at [kie.ai](https://kie.ai).
-   2. Add credits on its billing page.
-   3. Open [API Keys](https://kie.ai/api-key), create a key and copy it.
-
-Then say *"Let's make an ad for &lt;your brand's website&gt;"* or whatever you want to do.
-
-*For the AI agent:* install with
-`curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash`
-(on Windows, clone this repo and run `tools\setup.ps1`), then follow
-[`skills/set-up-adpk/SKILL.md`](skills/set-up-adpk/SKILL.md) in the downloaded folder.
-
-**Good to know**
-
-- **Model:** on Claude, Opus 5.5 at medium effort (ADPK sets it for you); on ChatGPT, GPT-6.1 Sol at
-  medium. For any other agent, use its top model at its recommended effort.
-- **What the install adds:** ADPK itself, Node (runs ADPK's tools), ffmpeg (video and audio
-  processing), whisper.cpp (word timings for captions), git (on a Mac, through Apple's command line
-  tools), and the catalog of a shared library of music, sound effects and references (each file
-  downloads when an ad uses it). Everything but git goes in your user folder, with no admin
-  password.
-- **Optional, for teams or cloud storage:** a [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/)
-  bucket keeps your brand files in the cloud and lets a team share them. Without it, everything stays
-  on your computer. Google Drive and Notion uploads are optional too.
-- ADPK runs on macOS, Windows and Linux.
-
 ## What you can do with it
 
 - **Image ads:** static ads with high product fidelity.
@@ -102,6 +62,46 @@ Teams share brands through cloud storage:
 - At the end of your work: *"Push Acme"*. The sync warns before overwriting someone's newer work.
 - Share each workspace's `.env` block through a password vault, and propose ADPK changes as a
   pull request.
+
+## How to set it up
+
+ADPK works inside your AI agent: you talk to the agent, and it uses ADPK to make your ads.
+
+1. **Open your AI agent.**
+   - Claude: the **Code** tab of the [Claude app](https://claude.ai/download).
+   - ChatGPT: the **Codex** tab of the [ChatGPT app](https://openai.com/chatgpt/download).
+   - For others, it's the respective agent chat.
+2. **Send it this message:** *Install https://github.com/oscarlora/ad-production-kit*
+
+   Click **Allow** when it asks to run the install. On a Mac, if a window asks to install Apple's
+   command line tools, click **Install**.
+3. **Get your kie.ai key and paste it in the chat when the agent asks.** [kie.ai](https://kie.ai) is
+   the one service ADPK needs: through a single account it runs every AI model ADPK uses to make
+   images, video, voices, music and sound effects. You pay as you go, with credits.
+   1. Sign up at [kie.ai](https://kie.ai).
+   2. Add credits on its billing page.
+   3. Open [API Keys](https://kie.ai/api-key), create a key and copy it.
+
+Then say *"Let's make an ad for &lt;your brand's website&gt;"* or whatever you want to do.
+
+*For the AI agent:* install with
+`curl -fsSL https://raw.githubusercontent.com/oscarlora/ad-production-kit/main/tools/setup.sh | bash`
+(on Windows, clone this repo and run `tools\setup.ps1`), then follow
+[`skills/set-up-adpk/SKILL.md`](skills/set-up-adpk/SKILL.md) in the downloaded folder.
+
+**Good to know**
+
+- **Model:** on Claude, Opus 5.5 at medium effort (ADPK sets it for you); on ChatGPT, GPT-6.1 Sol at
+  medium. For any other agent, use its top model at its recommended effort.
+- **What the install adds:** ADPK itself, Node (runs ADPK's tools), ffmpeg (video and audio
+  processing), whisper.cpp (word timings for captions), git (on a Mac, through Apple's command line
+  tools), and the catalog of a shared library of music, sound effects and references (each file
+  downloads when an ad uses it). Everything but git goes in your user folder, with no admin
+  password.
+- **Optional, for teams or cloud storage:** a [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/)
+  bucket keeps your brand files in the cloud and lets a team share them. Without it, everything stays
+  on your computer. Google Drive and Notion uploads are optional too.
+- ADPK runs on macOS, Windows and Linux.
 
 ## How it's organized
 
