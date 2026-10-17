@@ -1,14 +1,14 @@
 'use client';
 // A media file's waveform. Peaks come from _catalog/peaks/<id>.json; a deterministic placeholder draws when absent.
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { fileUrl, mediaPath } from '../../lib/client/api.js';
+import { mediaUrl } from '../../lib/client/api.js';
 
 const cache = new Map();
 
 function loadPeaks(ws, brand, id) {
   const key = `${ws}/${brand}/${id}`;
   if (!cache.has(key)) {
-    cache.set(key, fetch(fileUrl(ws, brand, mediaPath(`_catalog/peaks/${id}.json`)))
+    cache.set(key, fetch(mediaUrl(ws, brand, `_catalog/peaks/${id}.json`))
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []));
   }

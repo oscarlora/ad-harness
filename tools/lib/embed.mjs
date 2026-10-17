@@ -1,9 +1,10 @@
 // embed.mjs — local text embeddings for media search: EmbeddingGemma 2 (text model only, q4, CPU) via
 // transformers.js. No key; the model (~210 MB) downloads once to ~/.cache/adpk/huggingface.
 // transformers.js loads lazily, so keyword-only search needs no npm deps.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { catalogPaths } from './catalog.mjs';
 
 export const EMBED_MODEL = 'embeddinggemma-2-q4';
 const REPO = 'onnx-community/embeddinggemma-2-ONNX';
@@ -40,6 +41,13 @@ export async function embed(texts) {
     batch.forEach((n, k) => { out[n] = Float32Array.from(e.data.subarray(k * d, (k + 1) * d)); });
   }
   return out;
+}
+
+// _catalog/vectors.json ({ model, items }, embed-media.mjs), or null when missing or from another model.
+export function readVectors(media) {
+  const p = catalogPaths(media).vectors;
+  if (!existsSync(p)) return null;
+  try { const v = JSON.parse(readFileSync(p, 'utf8')); return v.model === EMBED_MODEL ? v : null; } catch { return null; }
 }
 
 // Vectors travel as base64 float32 inside _catalog/vectors.json (768 dims ≈ 4 KB each).

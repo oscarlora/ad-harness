@@ -3,16 +3,17 @@
 // Media loads lazily: a frame as it nears view, a clip only once played.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { fileUrl } from '../../lib/client/api.js';
+import { when } from '../../lib/client/format.js';
 import { isTyping } from '../../lib/client/hooks.js';
 import { IcCal, IcCamera, IcChip, IcClock, IcCut, IcEye, IcFile, IcFilm, IcFrame, IcGrid, IcImage, IcLeft, IcMotion, IcPlay, IcQuote, IcRight, IcServer, IcSound, IcSpark, IcText, IcX } from '../icons.js';
-import { when } from '../BrandPage.js';
 import Markdown, { Inline } from './Markdown.js';
 import Player from '../Player.js';
 
-const MODEL = { s25: 'Seedance 2.5', minimax: 'MiniMax', mini: 'Seedance Mini', orig: 'First take', preview: 'Preview' };
+// A take's chip: its letter suffix (clip-01-b → Take B; none → Take A), else its model.
+const takeLabel = (c) => (c.model === 'orig' ? 'Take A' : /^[a-z]$/i.test(c.model) ? `Take ${c.model.toUpperCase()}` : c.model === 'preview' ? 'Preview' : c.gen?.model || c.model);
 
-// Seedance 2.5 leads when present; a preview (clip + voice + music mix) is never the default.
-const defaultTake = (clips) => clips.find((c) => c.model === 's25') || clips.find((c) => c.model !== 'preview') || clips[0];
+// The newest take leads; a preview (clip + voice + music mix) is never the default.
+const defaultTake = (clips) => clips.find((c) => c.model !== 'preview') || clips[0];
 
 const PROVIDER = { kie: 'kie.ai', gateway: 'AI Gateway' };
 const span = (ns) => (ns.length > 1 ? `${Math.min(...ns)}–${Math.max(...ns)}` : '');
@@ -118,7 +119,7 @@ function ShotMedia({ ws, brand, shot, take, onTake, ratio, onRatio }) {
         <div className="chips sb-takes" role="group" aria-label="Clip takes">
           {shot.clips.map((c) => (
             <button key={c.p} type="button" className="chip" aria-pressed={c === take} onClick={() => { onTake(c.model); setPlaying(true); }}>
-              {MODEL[c.model] || c.model}
+              {takeLabel(c)}
             </button>
           ))}
         </div>

@@ -10,18 +10,19 @@ Fetch media into a local cache for **catalog-media**. Sources:
 - **Local / upload** — a folder or file on disk. Non-media and `_catalog/` are skipped.
 - **Google Drive** — a folder (subfolders included) or file link/id. Uses the workspace's Drive creds
   (share the client folder with that account); without them, the public link works when shared
-  "anyone with the link" (Google Docs/Vids skipped). With `--brand`, a folder pull skips files already
-  in the brand's `drive-sources.json`.
-- **Air.inc** — a board share link (`app.air.inc/a/<id>/b/<board>`), no key; sub-boards included.
+  "anyone with the link" (Google Docs/Vids skipped). With `--brand`, a folder pull downloads only
+  files new or changed since the last one (the brand's `drive-sources.json`).
+- **Air.inc** — a board share link (`app.air.inc/a/<id>`, or `…/b/<board>`), no key; sub-boards included.
 - **URL** — a direct media file, or a YouTube/social link via `yt-dlp`.
-- **Dropbox / OneDrive** — not wired; download and pass the folder as a local source.
+- **New service** (Dropbox, WeTransfer, Frame.io…) — the first time one is used, wire it: open the
+  link in the in-app browser, find in its network requests how it lists files and serves originals,
+  and add a `pull<Service>` to `tools/pull-media.mjs` on `pullAir`'s pattern (no key for a public
+  share link, originals not previews, subfolders, `--dry-run`), route its links, add it to this list,
+  and test it on that link. Then every later link from it just works. Off the maintainer's machine, the change is a PR (AGENTS.md).
 
 ```
-node tools/pull-media.mjs --source "<link|path>" --out <cache dir> [--workspace <WS>] [--brand <dir>] [--dry-run]
+node tools/pull-media.mjs --source "<link|path>" --out <cache dir>
 ```
 
-The workspace is inferred from `--out` or `--brand`, or pass `--workspace`. `--dry-run` lists what a
-Drive or Air pull would download.
-
-`catalog-media.mjs` calls this for links on its own; run it by hand only to gather reference assets
+Flags: `--help`. `catalog-media.mjs` calls this for links on its own; run it by hand only to gather reference assets
 without cataloging them. Only pull what the source serves.

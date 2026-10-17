@@ -10,9 +10,7 @@ TTS** on kie. Three or more speakers: generate each pair or voice separately and
 
 ## Design the voice
 
-Pick a prebuilt voice per speaker — `voice_name:` in the `--voices-file` block or
-`--voice-name Kore,Puck` in speaker order (default Kore, then Puck); the `description` becomes the
-style of each of that speaker's lines. Describe:
+Pick a prebuilt voice per speaker (`--help`), then describe it:
 
 - where the speaker grew up and their accent, first and outright, with two or three concrete
   features of that accent (otherwise the model guesses from the name, face or setting);

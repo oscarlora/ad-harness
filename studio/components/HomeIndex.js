@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { brandUrl } from '../lib/client/api.js';
 import { TABS, tabOr } from './BrandPage.js';
-import { groupByWorkspace, LAST_KEY } from './Switcher.js';
+import { groupByWorkspace, LAST_KEY, useBrands } from './Switcher.js';
 
-export default function HomeIndex({ brands, error }) {
+export default function HomeIndex() {
+  const { brands, error } = useBrands();
   const router = useRouter();
   const [ready, setReady] = useState(false);
 

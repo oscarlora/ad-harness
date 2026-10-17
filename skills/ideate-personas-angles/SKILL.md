@@ -33,14 +33,13 @@ New options differ in awareness stage, pain, or life situation.
 Any way to sell the product to a persona — a feature, benefit, technical detail, market fact,
 offer, season, or cultural moment; the problem itself and why it keeps happening; how the product
 works; proof (results, counts, a standout review); the real culprit (what the customer has been
-wrongly blaming, or the fix that's been letting her down); against the grain (the usual advice is
-wrong); who she is (her identity or moment of life); head-to-head (versus the named alternative);
+wrongly blaming, or the fix that's been letting them down); against the grain (the usual advice is
+wrong); who they are (their identity or moment of life); head-to-head (versus the named alternative);
 or a competitor gap. **One ad communicates one angle.** Sharpen each into a claim (e.g. "the
 product has no X → red is the new X").
 
-When the angle is how the product works, state it as two short sentences — why the problem keeps
-happening, and why this product fixes exactly that (source: the research doc's "Why it works"). If a
-customer couldn't retell both after one read, simplify or drop it.
+When the angle is how the product works, take it from the research doc's "Why it works"
+(**research-brand**).
 
 | angle | what it is + why it's relevant | fits |
 

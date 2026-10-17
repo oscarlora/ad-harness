@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-// analyze-media.mjs — describe each cataloged file with ANALYSIS_MODEL (products, people, OCR, tags,
-// speech), fill its record, and rename the original to <id>_<descriptor>.<ext>.
-// Image: one picture call. Video: a picture call on a silent proxy and a sound call on its track, in
-// parallel. Audio: one sound call. Reads inputs/products.json and _catalog/people.json.
-import { existsSync, renameSync, rmSync } from 'node:fs';
+// analyze-media.mjs — analyze each cataloged file with ANALYSIS_MODEL (the analysis, products, people,
+// transcript), fill its record, and rename the original to <id>_<descriptor>.<ext>.
+// One call per file: an image; a video's proxy with its sound (its track gets its own sound call past
+// LONG s, or when the speech looped); an audio file's track. Local Whisper then replaces the transcript's words and timings (lib/transcribe.mjs, alignWords).
+// Reads inputs/products.json and _catalog/people.json.
+import { existsSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { catalogPaths, readRecords, readRecord, mergeRecord, readRoster, parseArgs, mediaDirFrom, inferBrand, slugify, ffprobeJson, round, usage } from './lib/catalog.mjs';
+import { catalogPaths, readRecords, readRecord, mergeRecord, readRoster, parseArgs, mediaDirFrom, inferBrand, slugify, ffprobeJson, round, run, have, usage } from './lib/catalog.mjs';
 import { videoPass, videoMeta, workDir, heavy } from './lib/media-probe.mjs';
-import { requireKeys, filePart, generateJSON, spendText, ANALYSIS_MODEL } from './lib/analyze.mjs';
+import { requireKeys, filePart, generateJSON, spendText, ANALYSIS_MODEL, INLINE_MAX } from './lib/analyze.mjs';
 import { buildPrompt, buildSchema } from './lib/analysis-prompt.mjs';
-import { audioTrack, transcribeAudio, toTranscript, vocabulary } from './lib/transcribe.mjs';
+import { audioTrack, transcribeAudio, toTranscript, vocabulary, alignWords, loops, LONG } from './lib/transcribe.mjs';
 
 const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MODEL} on kie.ai and fill their records
 (key: <WS>_KIE_API_KEY; optional fallback when kie fails: <WS>_AI_GATEWAY_API_KEY)
@@ -19,13 +20,16 @@ const HELP = `analyze-media.mjs — describe cataloged media with ${ANALYSIS_MOD
     --all    every record not analyzed yet
     --force  redo analyzed ones too`;
 
-// The proxy the probe left in the work dir, else a fresh proxy-only pass.
-async function pictureProxy(src, work) {
-  const made = join(work, 'picture.mp4');
-  if (existsSync(made)) return made;
-  const { proxy } = await heavy(() => videoPass(src, videoMeta(src), { work }));
-  if (!proxy) throw new Error('could not make a picture proxy under the inline limit (trim the clip into parts)');
-  return proxy;
+// The proxy the probe left in the work dir (else a fresh pass), with the sound track muxed in.
+async function videoProxy(src, work, track) {
+  let proxy = join(work, 'picture.mp4');
+  if (!existsSync(proxy)) ({ proxy } = await heavy(() => videoPass(src, videoMeta(src), { work })));
+  if (!proxy) throw new Error('could not make a proxy under the inline limit (trim the clip into parts)');
+  if (!track || track.silent) return proxy;
+  const out = join(work, 'proxy.mp4');
+  run('ffmpeg', ['-y', '-v', 'error', '-i', proxy, '-i', track.path, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '32k', out]);
+  if (statSync(out).size > INLINE_MAX) throw new Error('proxy with sound is over the inline limit (trim the clip into parts)');
+  return out;
 }
 
 const joinSections = (sections) => sections.map((s) => `${s.label}: ${s.text}`).join('\n\n');
@@ -41,6 +45,7 @@ function mergeScenes(detected, got, duration) {
 }
 
 const soundOf = (track, snd) => (!track ? 'No audio track.' : track.silent ? 'Silent — no audible sound.' : snd.sound);
+const timed = (scenes) => scenes.map((s) => `[${s.start}–${s.end}s] ${s.description}`).join('\n\n');
 
 async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
   const paths = catalogPaths(media);
@@ -56,11 +61,9 @@ async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
     const patch = { id, status: 'cataloged' };
     let pic = null, snd = null, track = null, picModel = null;
 
-    // Silent or missing tracks skip the sound call.
     const work = workDir(rec.sha256);
     if (type === 'video') temps.push(work);
     if (type !== 'image') { track = audioTrack(original, type === 'video' ? join(work, 'track.mp3') : null); if (track) temps.push(track.dir); }
-    const sound = async (standalone) => { if (track && !track.silent) snd = await transcribeAudio(keys, track, { brand, vocab, standalone }); };
 
     if (type === 'image') {
       const proxy = join(paths.proxies, `${id}.jpg`);
@@ -68,33 +71,33 @@ async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
       ({ out: pic, model: picModel } = await generateJSON(keys, { parts: [part, { text: buildPrompt('image', { brand, roster }) }], schema: buildSchema('image') }));
     } else if (type === 'video') {
       const detected = cleanScenes(rec.scenes, duration);
-      const proxy = await pictureProxy(original, work);
-      const picture = generateJSON(keys, { parts: [filePart(proxy, 'video/mp4'), { text: buildPrompt('video', { brand, scenes: detected, roster, duration }) }], schema: buildSchema('video') });
-      [{ out: pic, model: picModel }] = await Promise.all([picture, sound(false)]);
+      const proxy = await videoProxy(original, work, track);
+      const sound = !!track && !track.silent, long = duration > LONG;
+      ({ out: pic, model: picModel } = await generateJSON(keys, { parts: [filePart(proxy, 'video/mp4'), { text: buildPrompt('video', { brand, scenes: detected, roster, duration, sound, vocab, transcribe: !long }) }], schema: buildSchema('video') }));
       patch.scenes = mergeScenes(detected, pic.scenes || [], duration);
-    } else {
-      await sound(true);
+      if (sound) snd = long || loops(pic.sentences) ? await transcribeAudio(keys, track, { brand, vocab }) : { ...pic, model: picModel };
+    } else if (track && !track.silent) {
+      snd = await transcribeAudio(keys, track, { brand, vocab, standalone: true });
     }
     if (pic?.unreadable) throw new Error('Gemini could not decode the file');
     // The model that actually answered (the Gateway fallback when kie failed).
-    patch.analysis = { model: [...new Set([picModel, snd?.model].filter(Boolean))].join(' + ') || ANALYSIS_MODEL, at: new Date().toISOString() };
-
-    if (pic) {
-      Object.assign(patch, {
-        products: pic.products || [], people: pic.people || [], unknown_people: pic.unknown_people || [],
-        visual_description: type === 'video'
-          ? patch.scenes.map((s) => `[${s.start}–${s.end}s] ${s.description}`).join('\n\n')
-          : joinSections(pic.sections || []),
-      });
-    }
+    patch.analyzed_by = { model: picModel || snd?.model || ANALYSIS_MODEL, at: new Date().toISOString() };
+    patch.analysis = type === 'video' ? timed(patch.scenes) : type === 'image' ? joinSections(pic.sections || []) : soundOf(track, snd);
+    if (pic) Object.assign(patch, { products: pic.products || [], people: pic.people || [], unknown_people: pic.unknown_people || [] });
+    // undefined drops a stale transcript when the file has no speech. Whisper's words replace Gemini's.
     if (type !== 'image') {
-      patch.audio_description = soundOf(track, snd);
-      // undefined drops a stale transcript when the file has no speech.
-      patch.audio_transcript = (snd && toTranscript(snd, duration)) || undefined;
-      patch.has_speech = !!patch.audio_transcript;
+      patch.transcript = (snd && toTranscript(snd, duration)) || undefined;
+      if (patch.transcript && have('whisper-cli')) patch.transcript = await alignWords({ file: original, transcript: patch.transcript });
+      // Each scene's SPEECH quotes Whisper's words in its range, not Gemini's.
+      const words = patch.transcript?.words || [];
+      if (type === 'video' && words.length) {
+        for (const s of patch.scenes) {
+          const said = words.filter((w) => (w.start + w.end) / 2 >= s.start && (w.start + w.end) / 2 < s.end).map((w) => w.word).join(' ');
+          s.description = s.description.replace(/\bSPEECH\s*(?::|[—–]|-\s)[\s\S]*$/, said ? `SPEECH: "${said}"` : 'SPEECH: none.');
+        }
+        patch.analysis = timed(patch.scenes);
+      }
     }
-    const tags = type === 'audio' ? snd?.tags || ['silence'] : pic.tags;
-    patch.tags = [...new Set((tags || []).map((x) => String(x).toLowerCase().trim()).filter(Boolean))];
 
     const descriptor = (type === 'audio' ? snd?.descriptor || 'silent audio' : pic.descriptor);
     const name = `${id}_${slugify(descriptor)}${extname(rec.file.name).toLowerCase()}`;
@@ -107,7 +110,7 @@ async function analyzeOne({ media, id, keys, roster, brand, vocab }) {
   }
 }
 
-const isAnalyzed = (r) => r.status === 'cataloged' && (r.visual_description || r.audio_description);
+const isAnalyzed = (r) => r.status === 'cataloged' && typeof r.analysis === 'string' && !!r.analysis;
 
 export async function analyzeMany({ media, ids, all, force, concurrency = 4 }) {
   const keys = requireKeys(media);

@@ -11,12 +11,12 @@ export const metadata = {
 };
 
 export default function RootLayout({ children }) {
-  let brands = [];
-  try { brands = listBrands(); } catch {}
+  let brands = [], error = null;
+  try { brands = listBrands(); } catch (e) { error = String(e?.message || e); }
   return (
     <html lang="en" className={inter.variable}>
       <body>
-        <BrandsProvider brands={brands}>
+        <BrandsProvider brands={brands} error={error}>
           <main className="page">{children}</main>
         </BrandsProvider>
       </body>

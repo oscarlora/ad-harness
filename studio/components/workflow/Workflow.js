@@ -1,14 +1,16 @@
 'use client';
 // The Workflow page: the ad list with current steps (no `ad`), or one ad's step bar and artifacts.
 import Link from 'next/link';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { brandUrl, fileUrl, workflowUrl } from '../../lib/client/api.js';
+import { words } from '../../lib/client/format.js';
 import { useBrandData } from '../../lib/client/hooks.js';
-import { Bars, LoadError, words } from '../BrandPage.js';
+import { BarSelect, Bars, byId, formatOptions, LoadError, SORTS, statusOf, statusOptions } from '../BrandPage.js';
 import Editor from '../edit/Editor.js';
-import { IcLeft } from '../icons.js';
+import { IcFilm, IcLeft, IcStatus } from '../icons.js';
 import Player from '../Player.js';
 import ViewerShell from '../ViewerShell.js';
+import Footage from './Footage.js';
 import { Dot, TextDisclosure } from './parts.js';
 import Markdown from './Markdown.js';
 import MdEditor from './MdEditor.js';
@@ -26,41 +28,47 @@ function Lightbox({ ws, brand, images, index, onStep, onClose }) {
   );
 }
 
-// A step's files, rendered by kind; .md files edit in place (view: which parts, see MdEditor).
-function Files({ ws, brand, ad, files, view, notes }) {
+// A step's files, rendered by kind; .md files edit in place (view and script: see MdEditor).
+function Files({ ws, brand, ad, files, view, script, notes }) {
   const [zoom, setZoom] = useState(-1);
   const images = files.filter((f) => f.type === 'image');
   const videos = files.filter((f) => f.type === 'video');
   const step = useCallback((d) => setZoom((i) => (i + d + images.length) % images.length), [images.length]);
   const close = useCallback(() => setZoom(-1), []);
   const name = (f) => <figcaption>{baseName(f.name)}</figcaption>;
+  const mds = files.filter((f) => f.type === 'md');
   return (
     <div className="flow-files">
-      {files.filter((f) => f.type === 'md').map((f) => (
+      {mds.map((f) => (
         <section key={f.p}>
-          {files.length > 1 && <div className="eyebrow">{baseName(f.name)}</div>}
-          <MdEditor ws={ws} brand={brand} ad={ad} file={f} view={view} notes={notes.filter((n) => n.file === f.name)} />
+          {mds.length > 1 && <div className="eyebrow">{baseName(f.name)}</div>}
+          <MdEditor ws={ws} brand={brand} ad={ad} file={f} view={view} script={script} notes={notes.filter((n) => n.file === f.name)} />
         </section>
       ))}
-      {images.length > 0 && (
-        <div className="flow-grid">
-          {images.map((f, i) => (
-            <figure key={f.p} className="flow-tile">
-              <img src={fileUrl(ws, brand, f.p, f.v)} alt={f.name} loading="lazy" onClick={() => setZoom(i)} />
-              {name(f)}
-              {f.prompt && <TextDisclosure ws={ws} brand={brand} label="Prompt" file={f.prompt} />}
-            </figure>
-          ))}
-        </div>
-      )}
-      {videos.length > 0 && (
-        <div className="flow-grid flow-grid--video">
-          {videos.map((f) => (
-            <figure key={f.p} className="flow-tile">
-              <Player src={fileUrl(ws, brand, f.p, f.v)} preload={videos.length > 4 ? 'none' : 'metadata'} label={baseName(f.name)} />
-              {name(f)}
-            </figure>
-          ))}
+      {(images.length > 0 || videos.length > 0) && (
+        // Beside a brief, media lines up with its blocks.
+        <div className={mds.length ? 'flow-media' : 'flow-files'}>
+          {images.length > 0 && (
+            <div className="flow-grid">
+              {images.map((f, i) => (
+                <figure key={f.p} className="flow-tile">
+                  <img src={fileUrl(ws, brand, f.p, f.v)} alt={f.name} loading="lazy" onClick={() => setZoom(i)} />
+                  {name(f)}
+                  {f.prompt && <TextDisclosure ws={ws} brand={brand} label="Prompt" file={f.prompt} />}
+                </figure>
+              ))}
+            </div>
+          )}
+          {videos.length > 0 && (
+            <div className="flow-grid flow-grid--video">
+              {videos.map((f) => (
+                <figure key={f.p} className="flow-tile">
+                  <Player src={fileUrl(ws, brand, f.p, f.v)} preload={videos.length > 4 ? 'none' : 'metadata'} label={baseName(f.name)} />
+                  {name(f)}
+                </figure>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {files.filter((f) => f.type === 'audio').map((f) => (
@@ -80,9 +88,9 @@ function Files({ ws, brand, ad, files, view, notes }) {
 
 function Panel({ ws, brand, step, data }) {
   const pn = step.panel || {};
-  const { storyboard } = data;
+  const { storyboard, footage } = data;
   if (pn.editor) return <section className="flow-panel"><Editor ws={ws} brand={brand} ad={data.folder} edit={data.edit} /></section>;
-  const has = pn.note || pn.md || pn.fields || pn.files || (pn.storyboard && storyboard);
+  const has = pn.note || pn.md || pn.fields || pn.files || (pn.storyboard && storyboard) || (pn.footage && footage);
   return (
     <section className="flow-panel">
       {!has && <p className="flow-note">{step.done ? 'Nothing to show for this step.' : 'Not started.'}</p>}
@@ -94,8 +102,9 @@ function Panel({ ws, brand, step, data }) {
           <div className="v v--pre">{v}</div>
         </div>
       ))}
-      {pn.files && <Files ws={ws} brand={brand} ad={data.folder} files={pn.files} view={pn.view} notes={data.comments || []} />}
+      {pn.files && <Files ws={ws} brand={brand} ad={data.folder} files={pn.files} view={pn.view} script={step.key === 'script'} notes={data.comments || []} />}
       {pn.storyboard && storyboard && <Storyboard ws={ws} brand={brand} sb={storyboard} />}
+      {pn.footage && footage && <Footage ws={ws} brand={brand} ad={data.folder} footage={footage} notes={data.comments || []} />}
     </section>
   );
 }
@@ -113,44 +122,59 @@ function Detail({ ws, brand, ad }) {
   const steps = data?.steps || [];
   const step = steps.find((s) => s.key === sel) || (data && steps.find((s) => s.key === defaultStep(data)));
 
+  const head = (
+    <>
+      <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')} aria-label="All ads" title="All ads"><IcLeft /></Link>
+      {data && <h1 className="flow-title"><span className="flow-title__id">{data.id}</span>{words(data.concept)}</h1>}
+      <nav className="flow-steps" aria-label="Steps">
+        {steps.map((s) => (
+          <button key={s.key} type="button" className="flow-step" data-state={s.state} aria-pressed={s === step} title={STATE[s.state]} onClick={() => setSel(s.key)}>
+            {s.label}
+          </button>
+        ))}
+      </nav>
+    </>
+  );
   return (
     <div>
-      <Bars ws={ws} brand={brand} current="workflow" bottom={false} />
+      <Bars ws={ws} brand={brand} current="workflow" head={head} />
       {error && <LoadError what="this ad" error={error} onRetry={load} />}
-      {!error && data && (
-        <div className="flow-page">
-          <header className="flow-head">
-            <Link className="flow-back" href={brandUrl(ws, brand, 'workflow')} aria-label="All ads" title="All ads"><IcLeft /></Link>
-            <h1><span className="flow-head__id">{data.id}</span>{words(data.concept)}</h1>
-            <nav className="flow-steps" aria-label="Steps">
-              {steps.map((s) => (
-                <button key={s.key} type="button" className="flow-step" data-state={s.state} aria-pressed={s === step} title={STATE[s.state]} onClick={() => setSel(s.key)}>
-                  <Dot state={s.state} />{s.label}{s.count && <small>{s.count}</small>}
-                </button>
-              ))}
-            </nav>
-          </header>
-          {step && <Panel ws={ws} brand={brand} step={step} data={data} />}
-        </div>
-      )}
+      {!error && data && step && <div className="flow-page"><Panel ws={ws} brand={brand} step={step} data={data} /></div>}
     </div>
   );
 }
 
 function List({ ws, brand }) {
   const { data, error, load, updatedAt } = useBrandData(ws, brand, 'workflow');
-  const ads = data?.ads || [];
+  const ads = useMemo(() => data?.ads || [], [data]);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState('');
+  const [format, setFormat] = useState('');
+  const [sort, setSort] = useState('new');
+  const view = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return ads.filter((a) => (!status || statusOf(a) === status) && (!format || a.format === format)
+      && (!needle || [a.id, a.concept, a.format, a.step?.label].join(' ').toLowerCase().replace(/[-_]/g, ' ').includes(needle))).sort(byId(sort));
+  }, [ads, q, status, format, sort]);
   return (
     <div>
-      <Bars ws={ws} brand={brand} current="workflow" count={data ? `${ads.length} ads` : 'Loading'} updatedAt={updatedAt} />
+      <Bars
+        ws={ws} brand={brand} current="workflow" count={data ? `${view.length} of ${ads.length} ads` : 'Loading'} updatedAt={updatedAt}
+        search={<input className="input bar__search" placeholder="Search ads" aria-label="Search concept, format, step" value={q} onChange={(e) => setQ(e.target.value)} />}
+      >
+        <BarSelect label="Status" icon={IcStatus} value={status} onChange={setStatus} options={statusOptions} />
+        <BarSelect label="Format" icon={IcFilm} value={format} onChange={setFormat} options={formatOptions(ads.map((a) => a.format))} />
+        <BarSelect label="Sort" value={sort} onChange={setSort} options={SORTS} />
+      </Bars>
       {error && <LoadError what="ads" error={error} onRetry={load} />}
       {!error && data && ads.length === 0 && <div className="empty-state">No ad folders in <code>outputs/</code> yet.</div>}
-      {!error && ads.length > 0 && (
+      {!error && data && ads.length > 0 && view.length === 0 && <div className="empty-state">No ads match.</div>}
+      {!error && view.length > 0 && (
         <ul className="flow-list">
           <li className="flow-row flow-row--head eyebrow" aria-hidden="true">
             <span>ID</span><span>Concept</span><span>Format</span><span>Progress</span><span>Now</span>
           </li>
-          {ads.map((a) => (
+          {view.map((a) => (
             <li key={a.folder}>
               <Link className="flow-row" href={workflowUrl(ws, brand, a.folder)}>
                 <span className="cell-id">{a.id}</span>

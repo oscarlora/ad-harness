@@ -1,11 +1,8 @@
-// Media data: reads the catalog via tools/lib/catalog.mjs and saves edits via tools/record-media.mjs.
-import { existsSync, writeFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+// Media data: the catalog's records via tools/lib/catalog.mjs, its index via tools/record-media.mjs.
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJson } from './brands.js';
-import { catalogLib } from './tools.js';
-import { repoRoot } from './root.js';
+import { catalogLib, recordMediaTool } from './tools.js';
 
 const mediaDirOf = (brandDirAbs) => join(brandDirAbs, 'inputs', 'media');
 
@@ -25,9 +22,8 @@ export async function mediaRecords(brandDirAbs) {
 
 export async function mediaRecord(brandDirAbs, id) {
   if (!isMediaId(id)) return null;
-  const paths = await mediaPaths(brandDirAbs);
-  const p = join(paths.json, `${id}.json`);
-  return readJson(p, null);
+  const { readRecord } = await catalogLib();
+  return readRecord(await mediaPaths(brandDirAbs), id);
 }
 
 // Adds new names to the known-people ledger (_catalog/people.json).
@@ -39,27 +35,17 @@ export async function addPeople(brandDirAbs, entries) {
   for (const e of entries || []) {
     const name = String(e?.name || '').trim();
     if (!name || have.has(name.toLowerCase())) continue;
-    people.push({ name, description: String(e.description || ''), hints: [] });
+    people.push({ name, description: String(e.description || '') });
     have.add(name.toLowerCase());
     changed = true;
   }
   if (changed) writeFileSync(paths.people, JSON.stringify(people, null, 2) + '\n');
-  return people;
 }
 
-// Merge via the tool (its --merge takes a file), never a reimplementation.
+// A sidebar edit: the patch merged into the record, then the index rebuilt. Returns the record.
 export async function mergeMediaRecord(brandDirAbs, id, patch) {
-  const dir = await mkdtemp(join(tmpdir(), 'studio-patch-'));
-  const patchFile = join(dir, 'patch.json');
-  try {
-    await writeFile(patchFile, JSON.stringify({ id, ...patch }, null, 2));
-    const { runAsync } = await catalogLib();
-    const tool = join(repoRoot(), 'tools', 'record-media.mjs');
-    const media = mediaDirOf(brandDirAbs);
-    await runAsync(process.execPath, [tool, '--media', media, '--merge', patchFile], { cwd: repoRoot() });
-    if (existsSync(media)) await runAsync(process.execPath, [tool, '--index', media], { cwd: repoRoot() }).catch(() => {});
-    return mediaRecord(brandDirAbs, id);
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  const [{ mergeRecord }, { buildIndex }, paths] = await Promise.all([catalogLib(), recordMediaTool(), mediaPaths(brandDirAbs)]);
+  const record = mergeRecord(paths, { id, ...patch });
+  try { buildIndex(paths); } catch {} // the record is saved either way
+  return record;
 }

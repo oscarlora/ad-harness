@@ -14,7 +14,7 @@ calm, built for scanning many ads fast.
 
 - Surfaces: `--bg` content · `--bg-subtle` viewer stage and empty frames · `--fill` segmented-control
   tracks and hover · `--fill-soft` the editor timeline's track bands · `--fill-strong` pressed and timeline clips · `--media-bg` behind media ·
-  `--glass` the translucent white of bars and controls floating over content or media
+  `--glass` the translucent white of bars and controls floating over media
 - Text: `--fg` primary (`--fg-hover` on the primary button) · `--muted-emphasis` body in tables and
   panels · `--muted` labels and meta · `--faint` placeholders, to-do steps, hollow dots, waveforms ·
   `--on-media` text and marks over media
@@ -35,17 +35,16 @@ calm, built for scanning many ads fast.
 
 ## Layout
 
-- Pages pad by `--page-pad` (20px). Every brand page has two translucent bars (`--bar-h`): the
-  navigation bar on top (home / workspace / brand on the left, page tabs on the right) and the control bar fixed at
-  the bottom (the page's count on the left, its search centered, its filters and actions on the right). Navigation
-  never goes in the bottom bar, page controls never in the top one. An ad's page has no control bar: one row
-  under the navigation holds back, ID and name, and the step tabs; its editor keeps the timeline fixed at the
-  bottom, with the preview and notes filling the space above (preview and notes on `--bg-subtle`, the
-  timeline on `--fill`).
+- Pages pad by `--page-pad` (20px). Every brand page has a rail on the left as wide as the top bar is tall
+  (`--bar-h`: the brand picker, then the pages as icons, no text) and one bar on top, both on `--bg-subtle` for the page's own controls: its count on the left, search centered, filters and actions
+  on the right, each filter and the sort a dropdown led by a muted icon, the sort last; Board, Media and the Workflow
+  list share this order (filters "Any …", sort Newest / Oldest). An ad's page puts back, ID and name, and the step tabs (names only) in that bar; its editor keeps the timeline
+  fixed at the bottom, with the preview and notes filling the space above (preview and notes on `--bg-subtle`,
+  the timeline on `--fill`).
 - The Board and the media library are masonry grids: 4 columns from 1200px, 3 from 900, 2 from
   640, else 1; each item keeps its own shape. The Workflow list caps at 64rem, centered; prose caps
   at 46rem.
-- Long text (copy, design, prompts, persona detail) lives in the viewer's side panel, not in lists.
+- Long text (prompts, persona detail, Meta copy) lives in the viewer's side panel, not in lists.
 - Spacing steps of 2, 4, 6, 8, 10, 12, 16, 20, 24, 32px. Grids use `auto-fill`.
 - Under 900px the editor and viewer narrow.
 
@@ -54,6 +53,7 @@ calm, built for scanning many ads fast.
 Mostly flat. Buttons and cards are drawn with `--shadow-border` (a hairline plus a trace of
 shadow), which darkens on hover (`--shadow-border-hover`). Things floating over content — the
 hover preview, the note composer, the toast, play buttons — use `--shadow-float`.
+A masked shape (the open step) uses `--shadow-shape`, a drop-shadow filter.
 Media gets an inset hairline (`--media-outline`) so white images keep their edge. Never a border
 and a shadow on the same element.
 
@@ -68,29 +68,46 @@ and nav buttons. A dashed border means empty or a draft.
 - **Button** `.btn`: white with a shadow border; `--primary` near-black fill; `--mini` small;
   `--icon` square. Presses scale to 0.97. Toggle buttons use `aria-pressed`. Small controls are
   `--control-h-sm` (26px) tall, the rest `--control-h` (32px).
-- **Segmented control** `.tabs` / `.chips`: a `--fill` track; the selected segment is white and
-  raised. Used for page tabs, status filters, clip takes and plan versions.
-- **Step bar** `.flow-steps`: underlined tabs with a progress dot and count.
-- **Markdown editor** `.mde`: rendered markdown; a block or table cell turns into its raw text on click, framed
-  by a hairline (a cell by a 1.5px `--fg` inset). Grips (`--faint`) sit in a margin outside the content and show on hover: left of a block; for a table, the
+- **Segmented control** `.chips`: a `--fill` track; the selected segment is white and
+  raised. Used for clip takes and plan versions.
+- **Rail** `.rail`: the current page's icon is white and raised like a selected segment; the brand picker shows
+  the brand's initials on `--fill` (workspace and brand on hover), one select over it, brands grouped by workspace.
+- **Step bar** `.flow-steps`: the steps in one `--fill` track like a segmented control, a faint chevron between
+  each; the open step is a white arrow with rounded corners pointing on (`--shadow-shape`); steps not started are
+  `--faint`. No status dots.
+- **Markdown editor** `.mde`: rendered markdown, edited as it reads: a clicked block or table cell becomes editable
+  in place (bold, italic, links, lists), framed by a hairline (a cell by a 1.5px `--fg` frame with `--radius-sm`,
+  floating a little past its edges); a labeled line edits as its title and its text; only comments edit as raw text. Grips (`--faint`) sit in a margin outside the content and show on hover: left of a block; for a table, the
   hovered column's in a strip above the header, the hovered row's in a left gutter.
-  A 2px `--fg` line marks where a drag drops. A clicked grip selects its block, row or column (`--fill`) and opens a
-  floating menu (`--shadow-float`), Delete last under a hairline. "New row" shows under a hovered table. Selected text gets a floating Comment button; notes on the text list
-  beside it like the editor's, their quotes marked with `--fill-strong` and an underline.
+  A 2px `--fg` line marks where a drag drops; hovering a grip shades its row or column. A clicked grip selects its block, row or column (`--fill`) and opens a
+  floating menu (`--shadow-float`), Delete last under a hairline. A script table ends with its word count and spoken time
+  (estimated, or the voice take's own length once there is one), each after a muted icon; the hook in that sentence is
+  a bold word that opens a list; one mini button on its
+  right is the voice: Generate voice, then play / pause with the time ("0:12 / 2:09"), Regenerate voice once the script
+  changes; no player controls. Selected text gets a floating Comment button; notes on the text list
+  beside it past a full-height hairline, like the editor's, their quotes marked with `--fill-strong` and an underline.
+- **Footage step** `.ft-*`: a `--fill` verdict box, then one row per scene: its clip (sticky, a dashed empty frame
+  when missing) beside the scene name, a status dot once called, a ticked count, and its checks as shadow-bordered
+  cards, then Approve / Reshoot mini buttons. A card is a check box beside what was asked, over its thread.
+  Result icons (passed, the edit fixes it, reshoot) are `--muted`, never status colors.
+- **Check box** `.check`: 18px, white with a shadow border, `--radius-sm`; ticked, a `--fg` fill with a white tick.
+- **Thread** `.ft-thread`: chat messages, `--radius` with the tail corner `--radius-sm`: the AI and the agent on the
+  left on `--bg-subtle`, the user on the right on `--fill-strong`; a `--faint` Comment link beside the latest.
 - **Input / select** `.input` `.select` `.field`: 32px, 1px `--line` border that darkens on hover.
-  `.select--ghost` drops the border (navigation bar switcher).
 - **Badge** `.badge`: status dot and word. **Pill mark** `.pill-mark`: a `--fill` tag.
 - **Media card** (Board and Media): a media frame at the render's own ratio; name, ID or status show
   on hover over a dark fade. Media cards add select and action buttons on hover.
 - **Media frame** `.media-frame`: media on `--media-bg` with the inset hairline; zooms 2% on hover.
 - **Details** `.param`: side panels list everything as a small muted label over its value, grouped
   by space, never by dividers. Copy buttons show on hover.
-- **Viewer** `.vw`: the media fills the left side (full height or full width) on `--bg-subtle`; the
-  top bar and round prev/next float over it, shown only while the pointer is on the media (always on
-  touch screens); 420px panel on the right. Prev/next wrap around at the ends.
+- **Viewer** `.vw`: on `--bg-subtle`, three rows on the left, nothing floating over the media: a top row of
+  buttons (Close, prev/next, the page's tools), the media (full height or full width), and a player's controls
+  in a row under it, each row past a hairline; 420px panel on the right. Prev/next wrap around at the ends. An ad with several versions gets a
+  segmented V1 · V2 … switch in the top bar (and Feed · Story when a version has both); its card says how many.
 - **Player** `Player.js`: every video and audio uses Studio's own controls, never the browser's:
-  play, time, progress, mute and full screen, each its own floating round or pill control. On video
-  they float at the bottom and show only while the pointer is on the picture; clicking the picture plays or pauses.
+  play, the time and progress in one pill, mute, the guides and full screen, each its own round or pill control.
+  Media blocks in a doc (`compact`) drop mute and the guides. In a viewer they sit in a
+  row under the picture; on an inline video they are a row across its bottom edge, shown only while the pointer is on it. Clicking the picture plays or pauses.
   In the viewers: Space plays / pauses; once a video is started, ← / → step one frame (Shift: 5 s),
   otherwise they and ↑ / ↓ move between files. Library videos mark scene cuts on the progress bar
   (hover shows that moment's frame, time and scene) and show their transcript as captions (toggle);
@@ -100,6 +117,7 @@ and nav buttons. A dashed border means empty or a draft.
 - **Trim panel** `.trim`: a floating panel above the editor's timeline: the clip's picture, its whole source as two
   strips (frames, waveform), and the part it plays as a dark-edged selection over both to drag (edges, or the middle
   to slide); letting go plays the new cut.
+- **Notice** `.notice`: a `--fill` box in a side panel, for something to act on (an unnamed person to name).
 - **Toast** `.toast`: near-black, bottom center, slides up 6px.
 - **Focus**: always visible, `--focus-ring`.
 
@@ -113,7 +131,7 @@ Everything stops under reduced motion.
 ## Do's and Don'ts
 
 - Do use the `:root` variables; add one there before using a new value.
-- Do keep color for status; show selection with the raised segment or the underline.
+- Do keep color for status; show selection with the raised segment.
 - Do put long text in the viewer panel and keep lists to one line per field.
 - Don't add gradients, tints, colored icon backgrounds or a second accent.
 - Don't add a second font, a third radius, or a border plus a shadow.

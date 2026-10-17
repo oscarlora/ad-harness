@@ -1,10 +1,11 @@
 'use client';
 // The media library: masonry grid, filter bar, multi-select actions, video scrub, audio waves, and the viewer.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiBase, fileUrl, getJson, mediaPath, openFile } from '../../lib/client/api.js';
+import { apiBase, getJson, mediaPath, mediaUrl, openFile } from '../../lib/client/api.js';
+import { clock } from '../../lib/client/format.js';
 import { masonry, useBrandData, useColumns } from '../../lib/client/hooks.js';
-import { Bars, clock, LoadError } from '../BrandPage.js';
-import { IcCopy, IcDl, IcFolder, IcFull, IcLink } from '../icons.js';
+import { BarSelect, Bars, LoadError, SORTS } from '../BrandPage.js';
+import { IcCopy, IcDl, IcFile, IcFolder, IcFrame, IcFull, IcLink, IcSpark, IcUser } from '../icons.js';
 import { spriteCell } from '../Player.js';
 import MediaViewer from './MediaViewer.js';
 import { Wave } from './wave.js';
@@ -18,7 +19,7 @@ const ratioOf = (r) => {
 
 function matches(r, filters) {
   if (filters.type && r.file?.type !== filters.type) return false;
-  if (filters.source && r.source?.type !== filters.source) return false;
+  if (filters.source && (r.source?.kind || 'upload') !== filters.source) return false;
   if (filters.orientation && r.file?.orientation !== filters.orientation) return false;
   if (filters.person === '?' ? !(r.unknown_people || []).length : (filters.person && !(r.people || []).includes(filters.person))) return false;
   if (filters.q) {
@@ -27,11 +28,8 @@ function matches(r, filters) {
       r.file?.name,
       (r.products || []).join(' '),
       (r.people || []).join(' '),
-      (r.tags || []).join(' '),
-      r.visual_description,
-      (r.scenes || []).map((s) => s.description).join(' '),
-      r.audio_description,
-      r.audio_transcript?.text,
+      r.analysis,
+      r.transcript?.text,
       (r.unknown_people || []).map((u) => u.description).join(' '),
     ].join(' ').toLowerCase();
     if (!q.split(/\s+/).every((t) => hay.includes(t))) return false;
@@ -41,7 +39,7 @@ function matches(r, filters) {
 
 function Card({ ws, brand, rec, selected, onToggleSel, onOpen, actions }) {
   const t = rec.file?.type;
-  const sprites = t === 'video' && rec.sprites && { ...rec.sprites, url: fileUrl(ws, brand, mediaPath(rec.sprites.sheet)) };
+  const sprites = t === 'video' && rec.sprites && { ...rec.sprites, url: mediaUrl(ws, brand, rec.sprites.sheet) };
   const [x, setX] = useState(0); // the pointer across the card, 0–1, picks the scrub frame
   const pills = [
     ['Open full screen', IcFull, onOpen],
@@ -58,14 +56,14 @@ function Card({ ws, brand, rec, selected, onToggleSel, onOpen, actions }) {
       >
         {t === 'audio'
           ? <Wave ws={ws} brand={brand} id={rec.id} />
-          : <img loading="lazy" src={fileUrl(ws, brand, mediaPath(`_catalog/thumbs/${rec.id}.jpg`))} alt="" />}
+          : <img loading="lazy" src={mediaUrl(ws, brand, `_catalog/thumbs/${rec.id}.jpg`)} alt="" />}
         {sprites && <span className="g-card__scrub" style={spriteCell(sprites, x * (rec.file.duration || 0), rec.file.duration || 0)} />}
         <span className="g-card__meta">
           <span className="nm">{rec.file?.name || ''}</span>
           {rec.file?.duration != null && <span className="dur">{clock(rec.file.duration)}</span>}
         </span>
       </button>
-      <button type="button" className="g-check" aria-pressed={selected} aria-label="Select" onClick={() => onToggleSel(rec.id)} />
+      <button type="button" className="g-check check" aria-pressed={selected} aria-label="Select" onClick={() => onToggleSel(rec.id)} />
       <div className="g-card__pills">
         {pills.map(([title, Icon, fn]) => (
           <button key={title} type="button" className="g-pill" title={title} aria-label={title} onClick={fn}><Icon /></button>
@@ -119,7 +117,7 @@ export default function Gallery({ ws, brand }) {
     },
     download: (rec) => {
       const a = document.createElement('a');
-      a.href = fileUrl(ws, brand, mediaPath(rec.file?.name));
+      a.href = mediaUrl(ws, brand, rec.file?.name);
       a.download = rec.file?.name || '';
       a.click();
     },
@@ -133,6 +131,7 @@ export default function Gallery({ ws, brand }) {
   }), [ws, brand, toast]);
 
   const toggleSel = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const eachSelected = (fn) => [...sel].forEach((id) => { const r = records.find((x) => x.id === id); if (r) fn(r); });
 
   const nav = useCallback((d) => {
     setViewerId((cur) => {
@@ -159,28 +158,17 @@ export default function Gallery({ ws, brand }) {
           <>
             <span className="bar__count">{sel.size} selected</span>
             <button type="button" className="btn" onClick={() => actions.copyRef([...sel])}>Use</button>
-            <button type="button" className="btn" onClick={() => [...sel].forEach((id) => { const r = records.find((x) => x.id === id); if (r) actions.download(r); })}>Download</button>
-            <button type="button" className="btn" onClick={() => [...sel].forEach((id) => { const r = records.find((x) => x.id === id); if (r) actions.open(r, 'reveal'); })}>Reveal</button>
+            <button type="button" className="btn" onClick={() => eachSelected(actions.download)}>Download</button>
+            <button type="button" className="btn" onClick={() => eachSelected((r) => actions.open(r, 'reveal'))}>Reveal</button>
             <button type="button" className="btn" onClick={() => setSel(new Set())}>Clear</button>
           </>
         ) : (
           <>
-            <select className="select" aria-label="Type" value={filters.type} onChange={(e) => setF('type', e.target.value)}>
-              <option value="">All types</option><option value="image">Images</option><option value="video">Videos</option><option value="audio">Audio</option>
-            </select>
-            <select className="select" aria-label="Source" value={filters.source} onChange={(e) => setF('source', e.target.value)}>
-              <option value="">Any source</option><option value="brand">Brand</option><option value="generated">Generated</option><option value="external">External</option>
-            </select>
-            <select className="select" aria-label="Person" value={filters.person} onChange={(e) => setF('person', e.target.value)}>
-              <option value="">Anyone</option><option value="?">Unidentified</option>
-              {persons.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <select className="select" aria-label="Orientation" value={filters.orientation} onChange={(e) => setF('orientation', e.target.value)}>
-              <option value="">Any ratio</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option><option value="square">Square</option>
-            </select>
-            <select className="select" aria-label="Sort" value={filters.sort} onChange={(e) => setF('sort', e.target.value)}>
-              <option value="new">Newest</option><option value="old">Oldest</option>
-            </select>
+            <BarSelect label="Type" icon={IcFile} value={filters.type} onChange={(v) => setF('type', v)} options={[['', 'Any type'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Audio']]} />
+            <BarSelect label="Source" icon={IcSpark} value={filters.source} onChange={(v) => setF('source', v)} options={[['', 'Any source'], ['link', 'Link'], ['upload', 'Upload'], ['generated', 'Generated']]} />
+            <BarSelect label="Person" icon={IcUser} value={filters.person} onChange={(v) => setF('person', v)} options={[['', 'Anyone'], ['?', 'Unidentified'], ...persons.map((p) => [p, p])]} />
+            <BarSelect label="Ratio" icon={IcFrame} value={filters.orientation} onChange={(v) => setF('orientation', v)} options={[['', 'Any ratio'], ['portrait', 'Portrait'], ['landscape', 'Landscape'], ['square', 'Square']]} />
+            <BarSelect label="Sort" value={filters.sort} onChange={(v) => setF('sort', v)} options={SORTS} />
           </>
         )}
       </Bars>

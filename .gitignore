@@ -2,7 +2,7 @@
 .DS_Store
 node_modules/
 
-# Brand context is never committed — it lives in R2 and syncs in via sync-brand.
+# Brand work is never committed: it stays local, or syncs to the workspace's R2 (sync-brand).
 workspaces/
 
 # Machine-specific Claude Code launch configs (brand/port entries differ per machine).

@@ -1,19 +1,27 @@
 'use client';
-// An ad's markdown file, edited in place: click a block or table cell to edit its markdown (Enter in a cell is a
-// line break, Esc is done); drag the grips to reorder blocks, table rows and columns. Each change saves to disk
+// An ad's markdown file, edited in place: click a block or table cell to edit it as it reads (rich.js; a comment as
+// raw text; a "**Label:** text" block in a step's view as its title and its text) (Enter in a cell splits
+// it into a new row below, and in a text block into a new block; Delete or Backspace in an empty row or block deletes it, and Backspace at its start merges it into the one above;
+// Shift+Enter is a line break, Esc is done); an "![title](path)" block is an image, audio or video (path
+// relative to the ad folder). Drag the grips to reorder blocks, table rows and columns. Each change saves to disk
 // at once; changes on disk show live, and a block being typed in keeps the typing. Clicking a grip selects its
-// block, row or column and opens its actions (Delete / Backspace deletes it). Selecting text (or a row's Comment
-// action) leaves a note on it for the agent, as on the video in the Edit step.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { apiBase, postJson } from '../../lib/client/api.js';
-import { isTyping } from '../../lib/client/hooks.js';
-import { Notes } from '../edit/Editor.js';
-import { IcGrip } from '../icons.js';
-import Markdown, { blockKind, Inline, inSections, parseDoc, serializeDoc, tableCells, tableRow } from './Markdown.js';
-import { useFileText } from './parts.js';
+// block, row or column and opens its actions (Delete / Backspace deletes it); several blocks select together (see chosen below). Selecting text (or a row's Comment
+// action) leaves a note on it for the agent, as on the video in the Edit step; so does each edit the user finishes,
+// so the agent brings what depends on it in step.
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { apiBase, editApi, fileUrl, mediaType, postJson } from '../../lib/client/api.js';
+import { clock } from '../../lib/client/format.js';
+import { isTyping, useUndo } from '../../lib/client/hooks.js';
+import { blockKind, inSections, mediaItems, parseDoc, serializeDoc, tableCells, tableRow } from '../../lib/markdown.js';
+import { IcClock, IcGrip, IcPause, IcPlay, IcSound, IcText } from '../icons.js';
+import Player from '../Player.js';
+import Markdown, { Inline } from './Markdown.js';
+import { Compose, Notes, useFileText } from './parts.js';
+import RichText from './rich.js';
 
 const SAVE_MS = 300;
 let lastId = Date.now(); // not 0: a hot reload restarts the count while old ids live on
+let activeEditor = null; // the doc last clicked in, which ⌘A selects all of
 const selecting = () => !!window.getSelection()?.toString().trim();
 
 // Ranges of quote in root's blocks and cells (each line of it on its own: a line break isn't in the text).
@@ -54,18 +62,7 @@ function NoteField({ ask, setAsk, onSave }) {
   if (!ask.writing) {
     return <button type="button" className="btn btn--mini mde__ask" style={style} onMouseDown={(e) => e.preventDefault()} onClick={() => setAsk({ ...ask, writing: true, text: '' })}>Comment</button>;
   }
-  return (
-    <div className="ed__compose mde__compose" style={style}>
-      <textarea
-        autoFocus rows={2} value={ask.text} placeholder="Leave a note for the agent"
-        onChange={(e) => setAsk({ ...ask, text: e.target.value })}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') setAsk(null);
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSave(ask); }
-        }}
-      />
-    </div>
-  );
+  return <Compose className="mde__compose" style={style} placeholder="Leave a note for the agent" value={ask.text} onChange={(text) => setAsk({ ...ask, text })} onSend={(text) => onSave(ask.quote, text)} onClose={() => setAsk(null)} />;
 }
 
 // Remote blocks take the ids of identical local ones, so unchanged blocks stay put.
@@ -107,15 +104,82 @@ function mapCols(src, fn) {
   }).join('\n');
 }
 const blankRow = (lines) => tableRow(Array(Math.max(...lines.map((l) => tableCells(l).length))).fill(''));
+// A script's spoken length: one hook and every non-hook row of its Line column, estimated at the pace its voice take
+// lands at, until a take gives the real length: the voice (app/api/[ws]/[brand]/voice) is asked for 4 words a second
+// and reads about 3.3.
+const PACE = 3.3;
+const rowLabel = (r) => (r[0] || '').replace(/\*/g, '').trim();
+function spoken(rows, hookAt) {
+  const col = rows[0].findIndex((h) => /^line$/i.test(h.replace(/\*/g, '').trim()));
+  if (col < 0) return null;
+  const body = rows.slice(1).filter((r) => !isRule(r));
+  const isHook = (r) => /^hook/i.test(rowLabel(r));
+  const hooks = body.filter(isHook);
+  const lines = [hooks[hookAt] || hooks[0], ...body.filter((r) => !isHook(r))].filter(Boolean)
+    .map((r) => cellText(r[col]).replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const words = lines.flatMap((l) => l.split(' ')).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  const s = Math.round(words / PACE);
+  return { words, lines, time: s < 60 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`, hooks: hooks.map(rowLabel) };
+}
 
-// A textarea that grows with its text and keeps its own draft while focused: a value from outside replaces the
-// draft only when it differs by more than `same` allows (the cell form trims what the user is still typing).
-function Area({ value, onChange, onDone, same = (a, b) => a === b }) {
+// A word in a sentence that opens a list of choices: options [[value, label]]; an invisible select lies over it.
+function Pick({ value, options, onChange, label }) {
+  return (
+    <span className="mde__pick">
+      {options.find(([v]) => v === value)?.[1]}
+      <select value={value} onChange={(e) => onChange(+e.target.value)} aria-label={label}>
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </span>
+  );
+}
+
+// A numbered row label ("**Body 1**", "Hook 2"): [whole, marks, name, number].
+const NUMBERED = /^(\**)(.*?\S)\s+(\d+)\1$/;
+// A new row under lines[r]: when its label is numbered, the new row takes the next number and that name's later rows
+// move up one. Returns the label it took, or ''.
+function insertRow(lines, r, row) {
+  const m = NUMBERED.exec(tableCells(lines[r] || '')[0] || '');
+  lines.splice(r + 1, 0, row);
+  if (!m) return '';
+  const [, marks, name, k] = m;
+  const label = (n) => `${marks}${name} ${n}${marks}`;
+  for (let i = r + 2; i < lines.length; i++) {
+    const x = NUMBERED.exec(tableCells(lines[i])[0] || '');
+    if (x && x[2] === name && +x[3] > +k) lines[i] = setCell(lines[i], 0, 0, label(+x[3] + 1));
+  }
+  lines[r + 1] = setCell(lines[r + 1], 0, 0, label(+k + 1));
+  return `${name} ${+k + 1}`;
+}
+// Removes lines[r]; when its label is numbered, that name's later rows move down one. Returns the label it had, or ''.
+function removeRow(lines, r) {
+  const m = NUMBERED.exec(tableCells(lines[r] || '')[0] || '');
+  lines.splice(r, 1);
+  if (!m) return '';
+  const [, marks, name, k] = m;
+  for (let i = r; i < lines.length; i++) {
+    const x = NUMBERED.exec(tableCells(lines[i])[0] || '');
+    if (x && x[2] === name && +x[3] > +k) lines[i] = setCell(lines[i], 0, 0, `${marks}${name} ${+x[3] - 1}${marks}`);
+  }
+  return `${name} ${k}`;
+}
+// The focused block's or cell's text and where it is: "Hook 2 · Line" for a cell, the block's first words otherwise.
+function spot(blocks, f) {
+  const b = blocks?.find((x) => x.id === f?.id);
+  if (!b) return null;
+  if (f.r == null) return { where: b.src.split('\n')[0].replace(/[*#>]/g, '').trim().slice(0, 60), text: b.src };
+  const name = (r, c) => cellAt(b.src, r, c).replace(/\*/g, '').trim();
+  return { where: `${name(f.r, 0)} · ${name(0, f.c)}`, text: cellText(cellAt(b.src, f.r, f.c)) };
+}
+
+// A comment's raw text: a textarea that grows with its text and keeps its own draft while focused (a value from
+// outside replaces the draft only when it differs by more than `same` allows).
+function Area({ value, onChange, onDone, start, same = (a, b) => a === b }) {
   const [draft, setDraft] = useState(value);
   const ref = useRef(null);
   useEffect(() => { setDraft((d) => (same(d, value) ? d : value)); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => { const el = ref.current; el.style.height = '0'; el.style.height = `${el.scrollHeight}px`; }, [draft]);
-  useEffect(() => { const el = ref.current; el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, []);
+  useEffect(() => { const el = ref.current, at = start ? 0 : el.value.length; el.focus(); el.setSelectionRange(at, at); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <textarea
       ref={ref} className="mde__area" value={draft} rows={1} spellCheck
@@ -128,7 +192,7 @@ function Area({ value, onChange, onDone, same = (a, b) => a === b }) {
 
 // Grips: grip(payload) renders a handle that drags to reorder (onto zone(kind, at, axis, onDrop) targets) and,
 // clicked, selects payload { kind, from } and opens menuFor(payload): [[label, action]], Delete last.
-function useGrips(menuFor) {
+function useGrips(menuFor, onPick) {
   const drag = useRef(null);
   const [over, setOver] = useState(null);
   const [sel, setSel] = useState(null); // { kind, from, x, y }
@@ -155,6 +219,7 @@ function useGrips(menuFor) {
         onDragEnd={() => { drag.current = null; setOver(null); }}
         onClick={(e) => {
           e.stopPropagation();
+          if (payload.kind === 'block' && onPick?.(payload.from, e.shiftKey)) return;
           const rc = e.currentTarget.getBoundingClientRect();
           setSel(isSel(payload.kind, payload.from) ? null : { ...payload, x: rc.left, y: rc.bottom + 4 });
         }}
@@ -192,36 +257,96 @@ function useGrips(menuFor) {
 }
 
 // A table: grips live outside the grid, shown for the hovered row and column: each column's in the strip above
-// its header, each row's in the left gutter.
-function Table({ b, colRe, focus, setFocus, change, done, grip, zone, isSel }) {
-  const [hover, setHover] = useState({ r: -1, c: -1 });
+// its header, each row's in the left gutter. Hovering a grip lights its row or column.
+function Table({ b, colRe, focus, setFocus, change, done, note, voice, url, grip, zone, isSel }) {
+  const [hover, setHover] = useState({ r: -1, c: -1, grip: false });
   const lines = b.src.split('\n');
   const rows = lines.map(tableCells);
   const n = Math.max(...rows.map((r) => r.length));
   const cols = [...Array(n).keys()].filter((c) => !colRe || colRe.test((rows[0][c] || '').replace(/\*/g, '').trim()));
   const colKind = `col${b.id}`, rowKind = `row${b.id}`;
-  const sameCell = (x, y) => textCell(x).trim() === textCell(y).trim();
   const onOver = (e) => {
     const el = e.target.closest('[data-r], [data-c]');
-    const r = el?.dataset.r != null ? +el.dataset.r : -1, c = el?.dataset.c != null ? +el.dataset.c : -1;
-    if (r !== hover.r || c !== hover.c) setHover({ r, c });
+    const r = el?.dataset.r != null ? +el.dataset.r : -1, c = el?.dataset.c != null ? +el.dataset.c : -1, grip = !!e.target.closest('.mde__grip');
+    if (r !== hover.r || c !== hover.c || grip !== hover.grip) setHover({ r, c, grip });
   };
   const cell = (r, c, Tag) => {
     const editing = focus?.id === b.id && focus.r === r && focus.c === c;
+    const lit = hover.grip && (hover.c < 0 ? hover.r === r : hover.r < 0 && hover.c === c);
     return (
-      <Tag key={c} data-r={r} data-c={c} data-sel={isSel(colKind, c) || undefined} className={editing ? 'mde__cell is-editing' : 'mde__cell'} onClick={() => !editing && !selecting() && setFocus({ id: b.id, r, c })}>
+      <Tag key={c} data-r={r} data-c={c} data-sel={isSel(colKind, c) || undefined} data-lit={lit || undefined} className={editing ? 'mde__cell is-editing' : 'mde__cell'} onClick={(e) => !editing && !selecting() && setFocus({ id: b.id, r, c, at: [e.clientX, e.clientY] })}>
         {editing
-          ? <Area value={cellText(rows[r][c])} same={sameCell} onChange={(v) => change(b.id, (src) => setCell(src, r, c, v))} onDone={done} />
-          : <Inline text={rows[r][c]} />}
+          ? <RichText value={cellText(rows[r][c])} at={focus.at} start={focus.start} onChange={(v) => change(b.id, (src) => setCell(src, r, c, v))} onBlur={done} onEnter={r > 0 ? (before, after) => splitRow(r, c, before, after) : undefined} onEmptyDelete={r > 0 && c > 0 ? () => dropRow(r, c) : undefined} onMergeBack={r > 0 && c > 0 ? (text) => mergeRow(r, c, text) : undefined} offset={focus.offset} />
+          : cellImage(rows[r][c]) ? <img className="mde__cell-img" src={url(cellImage(rows[r][c]))} alt="" loading="lazy" /> : <Inline text={rows[r][c]} />}
       </Tag>
     );
   };
   const moveRow = (from, to, after) => change(b.id, (src) => move(src.split('\n'), from, to, after).join('\n'), true);
   const moveCol = (from, to, after) => change(b.id, (src) => mapCols(src, (cells) => move(cells, from, to, after)), true);
-  const addRow = () => change(b.id, (src) => `${src}\n${blankRow(src.split('\n'))}`, true);
+  const [hookAt, setHookAt] = useState(0);
+  const length = voice && spoken(rows, hookAt);
+  // The script's voice take: one button generates it, then plays and pauses it with the time; a changed script makes
+  // the button regenerate. A take already made for this wording is found on load.
+  const [take, setTake] = useState(null); // { key, src } a take, { key, busy }, { key, error }
+  const [play, setPlay] = useState({ on: false, t: 0, dur: 0 });
+  const audio = useRef(null), playNext = useRef(false); // a take just generated plays once it loads
+  const key = length?.lines.join('\n') || '';
+  const stale = take && take.key !== key;
+  useEffect(() => {
+    if (!key || take?.busy) return undefined;
+    const t = setTimeout(() => voice(length.lines, length.hooks.length > 0, true).then((src) => src && setTake({ key, src }), () => {}), 600);
+    return () => clearTimeout(t);
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onVoice = () => {
+    if (take?.src && !stale) { const a = audio.current; if (a) (a.paused ? a.play() : a.pause()); return; }
+    audio.current?.pause();
+    playNext.current = true;
+    setTake({ key, busy: true });
+    voice(length.lines, length.hooks.length > 0).then((src) => setTake({ key, src }), (e) => setTake({ key, error: String(e.message || e) }));
+  };
+  const label = take?.busy ? 'Generating voice…' : stale || !take?.src ? (take?.src ? 'Regenerate voice' : 'Generate voice')
+    : play.on || play.t ? `${clock(play.t)} / ${clock(play.dur)}` : 'Play voice';
+  // Enter in a body cell: the text after the cursor moves into the same column of a new row below, which takes the
+  // cursor; a numbered row (Body 1) makes it the next one (Body 2) and renumbers, with a note to fix what cites them.
+  const splitRow = (r, c, before, after) => {
+    const from = tableCells(b.src.split('\n')[r])[0].replace(/\*/g, '');
+    after = after.trimStart();
+    change(b.id, (src) => setCell(src, r, c, before.trimEnd()));
+    document.activeElement?.blur(); // finishes this cell (its note) before the new one opens
+    let made = '';
+    change(b.id, (src) => {
+      const l = src.split('\n');
+      made = c > 0 ? insertRow(l, r, setCell(blankRow(l), 0, c, after)) : (l.splice(r + 1, 0, setCell(blankRow(l), 0, c, after)), '');
+      return l.join('\n');
+    }, true);
+    if (made) note(`You split ${from}: the new row is ${made}, and the later ones moved up one. Update what cites their numbers.`, made);
+    setFocus({ id: b.id, r: r + 1, c, start: true });
+  };
+  // Delete or Backspace in an empty cell of a row with nothing else in it (but its label) deletes the row; a numbered
+  // row's later ones move down one, with a note to fix what cites them. The cursor goes to the row above.
+  const dropRow = (r, c) => {
+    if (tableCells(b.src.split('\n')[r]).slice(1).some((x) => x.trim())) return;
+    document.activeElement?.blur();
+    let gone = '';
+    change(b.id, (src) => { const l = src.split('\n'); gone = removeRow(l, r); return l.join('\n'); }, true);
+    if (gone) note(`You deleted ${gone}, and the later ones moved down one. Update what cites their numbers.`, gone);
+    if (r - 1 > 0 && !isRule(rows[r - 1])) setFocus({ id: b.id, r: r - 1, c });
+  };
+  // Backspace at the start of a cell, in a row with nothing else in it (but its label), moves its text onto the end of
+  // the same cell in the row above and deletes the row: Enter's split, undone.
+  const mergeRow = (r, c, text) => {
+    const l = b.src.split('\n');
+    if (r - 1 < 1 || isRule(tableCells(l[r - 1])) || tableCells(l[r]).some((x, i) => i > 0 && i !== c && x.trim())) return;
+    const head = cellText(cellAt(b.src, r - 1, c)).trimEnd(), offset = shownLength(head) + (head ? 1 : 0);
+    document.activeElement?.blur();
+    let gone = '';
+    change(b.id, (src) => { const x = src.split('\n'); x[r - 1] = setCell(x[r - 1], 0, c, head ? `${head} ${text}` : text); gone = removeRow(x, r); return x.join('\n'); }, true);
+    if (gone) note(`You merged ${gone} into the row above, and the later ones moved down one. Update what cites their numbers.`, gone);
+    setFocus({ id: b.id, r: r - 1, c, offset });
+  };
   const show = (on) => on || undefined;
   return (
-    <div className="mde__table" onMouseMove={onOver} onMouseLeave={() => setHover({ r: -1, c: -1 })}>
+    <div className="mde__table" onMouseMove={onOver} onMouseLeave={() => setHover({ r: -1, c: -1, grip: false })}>
       <div className="md__table">
         <table>
           <thead>
@@ -246,62 +371,162 @@ function Table({ b, colRe, focus, setFocus, change, done, grip, zone, isSel }) {
           </tbody>
         </table>
       </div>
-      <button type="button" className="mde__add" onClick={addRow}>New row</button>
+      {length && (
+        <p className="mde__count">
+          <span><IcText />{length.words} words</span>
+          <span>
+            <IcClock />
+            <span>
+              {take?.src && !stale && play.dur ? `${clock(play.dur)} voiced` : `${length.time} estimated`}
+              {length.hooks.length > 0 && <>, with{' '}
+                <Pick value={Math.min(hookAt, length.hooks.length - 1)} options={length.hooks.map((h, i) => [i, h])} onChange={setHookAt} label="Hook" />
+              </>}
+            </span>
+          </span>
+          <button type="button" className="btn btn--mini mde__voice" onClick={onVoice} disabled={take?.busy} aria-label={take?.src && !stale ? (play.on ? 'Pause voice' : 'Play voice') : label}>
+            {take?.src && !stale ? (play.on ? <IcPause /> : <IcPlay />) : <IcSound />}{label}
+          </button>
+          {take?.src && (
+            <audio
+              key={take.src} ref={audio} src={take.src} preload="metadata"
+              onPlay={() => setPlay((p) => ({ ...p, on: true }))} onPause={() => setPlay((p) => ({ ...p, on: false }))}
+              onEnded={() => setPlay((p) => ({ ...p, on: false, t: 0 }))}
+              onTimeUpdate={(e) => { const t = e.currentTarget.currentTime; setPlay((p) => ({ ...p, t })); }}
+              onLoadedMetadata={(e) => { setPlay({ on: false, t: 0, dur: e.currentTarget.duration }); if (playNext.current) { playNext.current = false; e.currentTarget.play().catch(() => {}); } }}
+            />
+          )}
+        </p>
+      )}
+      {take?.error && <p className="mde__error">Could not generate the voice: {take.error}</p>}
     </div>
   );
 }
 
-// In a step's view, a "**Label:** text" block shows as a title over its text.
+// A media block: each "![label](path)" line as its image, audio or video, and nothing else (a title is its own block).
+function Media({ items, url }) {
+  return (
+    <div className="mde__media">
+      {items.map(({ title, path }, i) => (
+        <figure key={i}>
+          {mediaType(path) === 'image' ? <img src={url(path)} alt={title} loading="lazy" />
+            : <Player kind={mediaType(path) === 'audio' ? 'audio' : 'video'} src={url(path)} label={title || path} compact />}
+        </figure>
+      ))}
+    </div>
+  );
+}
+// A table cell holding only an image path in backticks (`references/frames/x.jpg`) shows the image: its path, or null.
+const cellImage = (cell) => { const p = /^`([^`\s]+)`$/.exec(cell)?.[1]; return mediaType(p) === 'image' ? p : null; };
+
+// A title block: one bold line, its text in the block under it.
+const TITLE = /^\*\*[^*\n]+\*\*$/;
+const LIST = /^\s*(?:[-*]|\d+\.)\s/m;
+// Markdown's length as shown (marks and link targets dropped), for where the cursor lands after a merge.
+const shownLength = (md) => md.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*|[*`]|<br\s*\/?>/g, '').length;
+// In a step's view, an older "**Label:** text" block shows as a title over its text, and edits as the two.
 const LABELED = /^\*\*([^*]+?):\*\*\s*([\s\S]*)$/;
 function Titled({ src }) {
   const [, title, text] = LABELED.exec(src);
   return <div className="md mde__titled"><h4>{title}</h4><Markdown text={text} /></div>;
 }
+function TitledEdit({ b, focus, change, done }) {
+  const [, title, text] = LABELED.exec(b.src) || [null, '', b.src];
+  const set = (part) => (v) => change(b.id, (src) => {
+    const [, t, x] = LABELED.exec(src) || [null, title, src];
+    return part === 'label' ? `**${v.replace(/\n/g, ' ').trim() || t}:** ${x}` : `**${t}:** ${v}`;
+  });
+  // Moving between the title and its text keeps the block open.
+  const blur = (e) => { if (!e.currentTarget.parentElement.contains(e.relatedTarget)) done(); };
+  return (
+    <div className="md mde__titled mde__titled--edit">
+      <RichText as="h4" value={title} focus={focus.part === 'label'} at={focus.at} onChange={set('label')} onBlur={blur} />
+      <RichText value={text} focus={focus.part !== 'label'} at={focus.at} onChange={set('text')} onBlur={blur} />
+    </div>
+  );
+}
 
 // file: { name (relative to the ad folder), p, v }. view (else the whole file), as regex sources: only, the section
-// names to show; pick, the blocks among them; cols, a table's columns by header.
-export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
+// names to show; pick, the blocks among them; cols, a table's columns by header. script: its tables with a Line column
+// end with their spoken length and voice.
+export default function MdEditor({ ws, brand, ad, file, view, script, notes = [] }) {
   const only = view?.only && new RegExp(view.only, 'i'), pick = view?.pick && new RegExp(view.pick);
   const colRe = view?.cols && new RegExp(view.cols, 'i');
   const remote = useFileText(ws, brand, file.p, file.v);
+  const url = (path) => fileUrl(ws, brand, `outputs/${ad}/${path}`);
+  const api = editApi(ws, brand, ad);
   const [doc, setDoc] = useState(null);
   const [focus, setFocusState] = useState(null); // { id } a block, { id, r, c } a table cell
   const [error, setError] = useState('');
-  const docRef = useRef(null), focusRef = useRef(null), baseRef = useRef(''), timer = useRef(0), written = useRef([]);
-  const setFocus = (f) => { focusRef.current = f; baseRef.current = docRef.current?.blocks.find((b) => b.id === f?.id)?.src || ''; setFocusState(f); };
+  const docRef = useRef(null), focusRef = useRef(null), baseRef = useRef(''), timer = useRef(0), written = useRef([]), savedV = useRef(0), editRef = useRef(null), synced = useRef(null);
+  const [merged, setMerged] = useState(null); // the file as the server merged it (or found it), to take in
+  const setFocus = (f) => {
+    focusRef.current = f;
+    baseRef.current = docRef.current?.blocks.find((b) => b.id === f?.id)?.src || '';
+    editRef.current = spot(docRef.current?.blocks, f);
+    setFocusState(f);
+  };
 
-  const save = useCallback(() => {
+  const save = () => {
     clearTimeout(timer.current);
     timer.current = 0;
     const text = serializeDoc(docRef.current);
     written.current = [...written.current.slice(-4), text];
     baseRef.current = docRef.current.blocks.find((b) => b.id === focusRef.current?.id)?.src || '';
-    postJson(`${apiBase(ws, brand)}/edit`, { ad, md: { name: file.name, text } }).then(() => setError(''), (e) => setError(String(e.message || e)));
-  }, [ws, brand, ad, file.name]);
+    const base = synced.current;
+    synced.current = text;
+    // r.text: the file merged with, or (409) refused for, a change made meanwhile.
+    const took = (r) => { if (r.text != null) { synced.current = r.text; setMerged({ text: r.text }); } setError(''); };
+    api({ md: { name: file.name, text, base } })
+      .then((r) => { savedV.current = Math.max(savedV.current, r.v || 0); took(r); })
+      .catch((e) => (e.status === 409 ? took(e.data) : setError(String(e.message || e))));
+  };
   const saveRef = useRef(save);
   saveRef.current = save;
   useEffect(() => () => { if (timer.current) saveRef.current(); }, []);
 
-  const put = (next, now) => {
+  // Each change is one undo step; typing in one block stays one step until it's done.
+  const typingStep = useRef(null);
+  const record = useUndo((entry, redo) => {
+    const parsed = parseDoc(redo ? entry.after : entry.before);
+    typingStep.current = null;
+    setFocus(null);
+    put({ ...parsed, blocks: withIds(parsed.blocks, docRef.current?.blocks) }, true, false);
+  });
+  // key: the block being typed in (its changes merge into one step), null for a change of its own, false for none.
+  const put = (next, now, key = null) => {
+    if (key !== false && docRef.current) {
+      const after = serializeDoc(next);
+      if (key != null && typingStep.current?.key === key) typingStep.current.after = after;
+      else {
+        const step = { before: serializeDoc(docRef.current), after, key };
+        record(step);
+        typingStep.current = key != null ? step : null;
+      }
+    }
     docRef.current = next;
     setDoc(next);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => saveRef.current(), now ? 0 : SAVE_MS);
   };
-  const change = (id, fn, now) => put({ ...docRef.current, blocks: docRef.current.blocks.map((b) => (b.id === id ? { ...b, src: fn(b.src) } : b)) }, now);
+  const change = (id, fn, now) => put({ ...docRef.current, blocks: docRef.current.blocks.map((b) => (b.id === id ? { ...b, src: fn(b.src) } : b)) }, now, now ? null : id);
   const moveBlock = (from, to, after) => {
-    const ix = (id) => docRef.current.blocks.findIndex((b) => b.id === id);
-    const blocks = move(docRef.current.blocks, ix(from), ix(to), after).map((b, i) => ({ ...b, gap: i && !b.gap.length ? [''] : b.gap }));
+    const all = docRef.current.blocks, group = chosenRef.current.includes(from) ? chosenRef.current : [from];
+    if (group.includes(to)) return;
+    const moving = all.filter((b) => group.includes(b.id)), rest = all.filter((b) => !group.includes(b.id));
+    const at = rest.findIndex((b) => b.id === to) + (after ? 1 : 0);
+    const blocks = [...rest.slice(0, at), ...moving, ...rest.slice(at)].map((b, i) => ({ ...b, gap: i && !b.gap.length ? [''] : b.gap }));
     put({ ...docRef.current, blocks }, true);
   };
   // A grip's actions; payload kinds: 'block' (from: block id), `row<id>` (from: line), `col<id>` (from: column).
   const menuFor = ({ kind, from }) => {
     const d = docRef.current;
     if (kind === 'block') {
-      const i = d.blocks.findIndex((b) => b.id === from);
+      const group = chosenRef.current.includes(from) ? chosenRef.current : [from];
+      const last = Math.max(...group.map((id) => d.blocks.findIndex((b) => b.id === id)));
+      const copies = d.blocks.filter((b) => group.includes(b.id)).map((b) => ({ src: b.src, gap: [''], id: ++lastId }));
       return [
-        ['Duplicate', () => put({ ...d, blocks: [...d.blocks.slice(0, i + 1), { src: d.blocks[i].src, gap: [''], id: ++lastId }, ...d.blocks.slice(i + 1)] }, true)],
-        ['Delete', () => put({ ...d, blocks: d.blocks.filter((b) => b.id !== from) }, true)],
+        ['Duplicate', () => put({ ...d, blocks: [...d.blocks.slice(0, last + 1), ...copies, ...d.blocks.slice(last + 1)] }, true)],
+        ['Delete', () => { removeChosen(group); }],
       ];
     }
     const id = Number(kind.slice(3));
@@ -322,7 +547,99 @@ export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
       ['Delete column', () => cols((c) => c.filter((_, i) => i !== from))],
     ];
   };
-  const { grip, zone, isSel } = useGrips(menuFor);
+  // Selected blocks: a grip click, Shift+click to extend, a drag from the margin or a text selection across blocks.
+  // ↑ / ↓ move it, Shift+↑ / ↓ extend it, ⌘A (Ctrl+A) takes every block, Delete removes them, ⌘C / ⌘X copy or cut
+  // their markdown, Esc clears; dragging one of them moves them all.
+  const [chosen, setChosenState] = useState([]);
+  const chosenRef = useRef([]), anchorRef = useRef(null), shownRef = useRef([]);
+  const setChosen = (ids) => { chosenRef.current = ids; setChosenState(ids); };
+  const pickRange = (a, b) => {
+    const ids = shownRef.current, i = ids.indexOf(a), j = ids.indexOf(b);
+    if (i < 0 || j < 0) return;
+    anchorRef.current = a;
+    setChosen(ids.slice(Math.min(i, j), Math.max(i, j) + 1));
+  };
+  const removeChosen = (ids) => { put({ ...docRef.current, blocks: docRef.current.blocks.filter((b) => !ids.includes(b.id)) }, true); setChosen([]); };
+  const chosenText = () => docRef.current.blocks.filter((b) => chosenRef.current.includes(b.id)).map((b) => b.src).join('\n\n');
+  // Enter in a text block (not a list) splits it at the cursor: the rest becomes a new block below, which takes the
+  // cursor. Delete or Backspace in an empty block removes it and goes to the block above.
+  const splitBlock = (id, before, after) => {
+    change(id, () => before.trimEnd(), true);
+    document.activeElement?.blur();
+    const d = docRef.current, i = d.blocks.findIndex((b) => b.id === id), nb = { src: after.trimStart(), gap: [''], id: ++lastId };
+    put({ ...d, blocks: [...d.blocks.slice(0, i + 1), nb, ...d.blocks.slice(i + 1)] }, true);
+    setFocus({ id: nb.id, start: true });
+  };
+  const dropBlock = (id) => {
+    const ids = shownRef.current, prev = ids[ids.indexOf(id) - 1];
+    document.activeElement?.blur();
+    put({ ...docRef.current, blocks: docRef.current.blocks.filter((b) => b.id !== id) }, true);
+    const p = docRef.current.blocks.find((b) => b.id === prev);
+    if (p && blockKind(p.src) === 'text') setFocus({ id: prev });
+  };
+  // Backspace at the start of a text block moves its text onto the end of the text block above, which takes the cursor
+  // where they meet.
+  const mergeBlock = (id, text) => {
+    const ids = shownRef.current, prev = docRef.current.blocks.find((b) => b.id === ids[ids.indexOf(id) - 1]);
+    if (!prev || blockKind(prev.src) !== 'text' || LIST.test(prev.src)) return;
+    const head = prev.src.trimEnd(), offset = shownLength(head) + (head ? 1 : 0);
+    document.activeElement?.blur();
+    const d = docRef.current;
+    put({ ...d, blocks: d.blocks.filter((b) => b.id !== id).map((b) => (b.id === prev.id ? { ...b, src: head ? `${head} ${text}` : text } : b)) }, true);
+    setFocus({ id: prev.id, offset });
+  };
+  // A block grip: Shift+click extends the selection; a plain click selects that block (keeping a selection it's in).
+  const onPick = (id, shift) => {
+    if (shift) { pickRange(anchorRef.current ?? id, id); return true; }
+    if (!chosenRef.current.includes(id)) { anchorRef.current = id; setChosen([id]); }
+    return false;
+  };
+  const { grip, zone, isSel } = useGrips(menuFor, onPick);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (isTyping(e) || document.querySelector('.mde__menu')) return;
+      const mod = e.metaKey || e.ctrlKey, ids = shownRef.current, cur = chosenRef.current;
+      if (mod && e.key.toLowerCase() === 'a' && activeEditor === rootRef.current && ids.length) { e.preventDefault(); anchorRef.current = ids[0]; setChosen(ids); return; }
+      if (!cur.length) return;
+      if (e.key === 'Escape') { setChosen([]); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeChosen(cur); return; }
+      if (mod && (e.key.toLowerCase() === 'c' || e.key.toLowerCase() === 'x')) {
+        e.preventDefault();
+        navigator.clipboard?.writeText(chosenText());
+        if (e.key.toLowerCase() === 'x') removeChosen(cur);
+        return;
+      }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const d = e.key === 'ArrowDown' ? 1 : -1, end = ids.indexOf(d > 0 ? cur.at(-1) : cur[0]);
+        const lead = cur[0] === anchorRef.current ? ids.indexOf(cur.at(-1)) : ids.indexOf(cur[0]);
+        if (e.shiftKey) { const to = ids[lead + d]; if (to != null) pickRange(anchorRef.current, to); }
+        else { const to = ids[end + d] ?? ids[end]; anchorRef.current = to; setChosen([to]); }
+      }
+    };
+    const onDown = (e) => {
+      if (rootRef.current?.contains(e.target)) activeEditor = rootRef.current;
+      if (chosenRef.current.length && !e.target.closest('.mde__grip, .mde__menu') && !(e.shiftKey && rootRef.current?.contains(e.target))) setChosen([]);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // A drag that starts in the margin (beside or between blocks) selects the blocks it crosses.
+  const onMarginDown = (e) => {
+    if (e.button !== 0 || e.target.closest('.mde__view, .mde__table, .mde__media, .mde__handle, .mde__rich, .mde__area, a, button')) return;
+    e.preventDefault();
+    const y0 = e.clientY;
+    const els = [...rootRef.current.querySelectorAll(':scope > .mde__block')];
+    const onMove = (m) => {
+      const lo = Math.min(y0, m.clientY), hi = Math.max(y0, m.clientY);
+      const ids = els.filter((el) => { const r = el.getBoundingClientRect(); return r.bottom >= lo && r.top <= hi; }).map((el) => Number(el.dataset.id));
+      if (ids.length) { anchorRef.current = ids[0]; setChosen(ids); }
+    };
+    const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
 
   // Notes: select text for the Comment button; the note field closes on Esc, a save, or a click elsewhere.
   const rootRef = useRef(null);
@@ -334,6 +651,9 @@ export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
       if (e.target.closest?.('.mde__ask, .mde__compose')) return;
       const s = window.getSelection(), quote = s?.toString().trim();
       if (!quote || !rootRef.current?.contains(s.anchorNode)) { setAsk((a) => (a?.writing && a.text ? a : null)); return; }
+      const blockOf = (n) => (n?.nodeType === 1 ? n : n?.parentElement)?.closest('.mde__block');
+      const a = blockOf(s.anchorNode), b = blockOf(s.focusNode);
+      if (a && b && a !== b && rootRef.current.contains(b)) { s.removeAllRanges(); setAsk(null); pickRange(Number(a.dataset.id), Number(b.dataset.id)); return; }
       const r = s.getRangeAt(0).getBoundingClientRect();
       setAsk({ quote: quote.slice(0, 1000), x: r.left, y: r.bottom + 6 });
     };
@@ -342,31 +662,42 @@ export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
     window.addEventListener('scroll', onScroll, true);
     return () => { document.removeEventListener('mouseup', onUp); window.removeEventListener('scroll', onScroll, true); };
   }, []);
-  const noteApi = (body) => postJson(`${apiBase(ws, brand)}/edit`, { ad, ...body }).catch((e) => setError(String(e.message || e)));
-  const saveNote = ({ quote, text }) => {
-    setAsk(null);
+  const noteApi = (body) => api(body).catch((e) => setError(String(e.message || e)));
+  const saveNote = (quote, text) => {
     window.getSelection()?.removeAllRanges();
-    if (text.trim()) noteApi({ note: { file: file.name, quote, text } });
+    noteApi({ note: { file: file.name, quote, text } });
   };
   const pickNote = (n) => {
     setNoteFocus(n.id);
     findRanges(rootRef.current, n.quote || '')[0]?.startContainer.parentElement.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
 
-  // Done with a block: save, and re-split it if it now holds blank lines.
+  // Done with a block: save, re-split it if it now holds blank lines, and note the change for the agent.
   const done = () => {
+    const from = editRef.current, to = spot(docRef.current?.blocks, focusRef.current);
     setFocus(null);
+    if (from && to && from.text.trim() !== to.text.trim()) {
+      noteApi({ note: { file: file.name, quote: to.text.replace(/\*\*/g, ''), text: `You edited ${from.where}`, edit: { where: from.where, from: from.text, to: to.text } } });
+    }
     if (!docRef.current) return;
     const parsed = parseDoc(serializeDoc(docRef.current));
     const next = { ...parsed, blocks: withIds(parsed.blocks, docRef.current.blocks) };
-    if (timer.current) put(next, true);
+    typingStep.current = null;
+    if (timer.current) put(next, true, false);
     else { docRef.current = next; setDoc(next); }
   };
 
   // The file changed on disk (not by this editor): take it, keeping the focused block's unsaved typing.
   useEffect(() => {
-    if (remote == null || written.current.includes(remote)) return;
-    const parsed = parseDoc(remote);
+    // An echo of this editor's own save: its latest, or an older one read before that landed. The same text written
+    // later (an agent's revert) is a real change.
+    if (remote == null || remote === written.current.at(-1) || (written.current.includes(remote) && file.v <= savedV.current)) return;
+    take(remote);
+  }, [remote]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (merged) take(merged.text); }, [merged]); // eslint-disable-line react-hooks/exhaustive-deps
+  function take(text) {
+    synced.current = text;
+    const parsed = parseDoc(text);
     const cur = docRef.current, f = focusRef.current;
     const blocks = withIds(parsed.blocks, cur?.blocks);
     const mine = f && cur?.blocks.find((b) => b.id === f.id);
@@ -380,27 +711,38 @@ export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
         baseRef.current = parsed.blocks[j].src;
       }
     }
+    // A change from outside to the focused block or cell isn't the user's edit: their edit starts from it.
+    const was = spot(cur?.blocks, f), now = spot(blocks, f);
+    if (!timer.current && editRef.current && was && now && was.text !== now.text) editRef.current = { ...editRef.current, text: now.text };
     docRef.current = { ...parsed, blocks };
     setDoc(docRef.current);
-  }, [remote]);
+  }
 
   if (!doc) return <p className="flow-note">Loading</p>;
   const shown = only ? inSections(doc.blocks, only) : null;
-  const blocks = doc.blocks.filter((b, i) => !shown || (shown[i] && (pick ? pick.test(b.src) : blockKind(b.src) !== 'comment')));
+  // In a step's view, a picked title block ("**Message**") brings the text block under it.
+  const picked = (i) => pick.test(doc.blocks[i].src)
+    || (i > 0 && shown[i - 1] && TITLE.test(doc.blocks[i - 1].src) && pick.test(doc.blocks[i - 1].src) && blockKind(doc.blocks[i].src) === 'text');
+  const blocks = doc.blocks.filter((b, i) => !shown || !b.src.trim() || (shown[i] && (pick ? picked(i) : blockKind(b.src) !== 'comment'))); // a new, empty block stays in view
+  shownRef.current = blocks.map((b) => b.id);
   return (
     <div className="mde-doc">
-      <div className="mde" ref={rootRef}>
+      <div className="mde" ref={rootRef} onMouseDown={onMarginDown}>
         {error && <p className="mde__error">Not saved: {error}</p>}
         {!blocks.length && <p className="flow-note">Not in the brief yet.</p>}
         {blocks.map((b) => {
           const kind = blockKind(b.src);
           return (
-            <div key={b.id} className="mde__block" {...zone('block', b.id, 'y', moveBlock)} data-sel={isSel('block', b.id) || undefined}>
+            <div key={b.id} data-id={b.id} className="mde__block" {...zone('block', b.id, 'y', moveBlock)} data-sel={isSel('block', b.id) || chosen.includes(b.id) || undefined}>
               {kind !== 'table' && grip({ kind: 'block', from: b.id })}
-              {kind === 'table' ? <Table b={b} colRe={colRe} focus={focus} setFocus={setFocus} change={change} done={done} grip={grip} zone={zone} isSel={isSel} />
-                : focus?.id === b.id ? <Area value={b.src} same={(x, y) => x.trim() === y.trim()} onChange={(v) => change(b.id, () => v)} onDone={done} />
-                : (
-                  <div className="mde__view" onClick={(e) => { if (!e.target.closest('a') && !selecting()) setFocus({ id: b.id }); }}>
+              {kind === 'media' ? <Media items={mediaItems(b.src)} url={url} />
+                : kind === 'table' ? <Table b={b} colRe={colRe} focus={focus} setFocus={setFocus} change={change} done={done} note={(text, quote) => noteApi({ note: { file: file.name, quote, text } })} voice={script ? (lines, hook, check) => postJson(`${apiBase(ws, brand)}/voice`, { ad, lines, hook, check }).then((r) => r.p && fileUrl(ws, brand, r.p, r.v)) : null} url={url} grip={grip} zone={zone} isSel={isSel} />
+                : focus?.id === b.id ? (
+                  kind === 'comment' ? <Area value={b.src} same={(x, y) => x.trim() === y.trim()} onChange={(v) => change(b.id, () => v)} onDone={done} />
+                    : pick && LABELED.test(b.src) ? <TitledEdit b={b} focus={focus} change={change} done={done} />
+                    : <RichText mode="block" className="md mde__area" value={b.src} at={focus.at} start={focus.start} onChange={(v) => change(b.id, () => v)} onBlur={done} onEnter={LIST.test(b.src) ? undefined : (before, after) => splitBlock(b.id, before, after)} onEmptyDelete={() => dropBlock(b.id)} onMergeBack={(text) => mergeBlock(b.id, text)} offset={focus.offset} />
+                ) : (
+                  <div className="mde__view" onClick={(e) => { if (!e.target.closest('a') && !selecting()) setFocus({ id: b.id, at: [e.clientX, e.clientY], part: e.target.closest('h4') ? 'label' : 'text' }); }}>
                     {kind === 'comment' ? <p className="mde__comment">{b.src.replace(/^\s*<!--\s*|\s*-->\s*$/g, '')}</p>
                       : pick && LABELED.test(b.src) ? <Titled src={b.src} /> : <Markdown text={b.src} />}
                   </div>
@@ -410,8 +752,10 @@ export default function MdEditor({ ws, brand, ad, file, view, notes = [] }) {
         })}
       </div>
       {notes.length > 0 && (
-        <Notes notes={notes} focus={noteFocus} onPick={pickNote} onAction={noteApi} hint="Select text to leave a note."
-          lead={(n) => n.quote && <span className="ed-note__quote">{n.quote}</span>} />
+        <div className="mde-doc__side">
+          <Notes notes={notes} focus={noteFocus} onPick={pickNote} onAction={noteApi} hint="Select text to leave a note."
+            lead={(n) => n.quote && <span className="ed-note__quote">{n.quote}</span>} />
+        </div>
       )}
       {ask && <NoteField ask={ask} setAsk={setAsk} onSave={saveNote} />}
     </div>

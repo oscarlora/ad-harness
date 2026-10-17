@@ -14,17 +14,14 @@ the ad's **Edit** step: preview, timeline, review notes and an Export button. Ch
 
 ## Build
 
-1. **Gather:** clips in `clips/` (a creator's footage checked and prepared by **review-ugc-footage**), voiceover, music (**add-music**), sound effects (**generate-sfx**),
-   product graphics (**search-media**). A higher-tier final needs clips generated at that tier
-   (AGENTS.md, Video). The preview loads a file the moment the document names it: finish new media
+1. **Gather:** clips in `clips/` (a creator's footage in `footage/`, checked by **review-ugc-footage**), voiceover, music (**add-music**), sound effects (**generate-sfx**),
+   product graphics (**search-media**). The preview loads a file the moment the document names it: finish new media
    (write it under a temp name, then rename it) before pointing the document at it.
 2. **Write the document:** tracks top to bottom (hook and text, captions, video, voice, music, SFX),
    every time on the timeline clock. Clips trim with `in`, play at `rate` and get `transition`s.
    Anything that changes over time (zoom, volume, saturation…) takes keyframes.
 3. **Captions:** `captions --words <transcript or song timing>` writes word-timed lines (**caption-video**).
-4. **Check:** `check` (missing files, and black: any moment no track has a picture; export refuses it). `frames --at …` makes a contact sheet when you
-   need to see a moment.
-5. **Show it** right away: point the user to the ad's Edit step in Studio (**open-studio**).
+4. **Check:** `check`, and `frames --at …` when you need to see a moment.
 
 ## Revise: live review
 
@@ -35,9 +32,8 @@ The user leaves notes on the preview (a moment, optionally a box on the frame). 
 they come:
 
 1. `node tools/edit-video.mjs comments outputs/<ad> --wait` as a tracked background command with no
-   time limit: it exits with the open notes (and marks them seen) the moment there is one, each with
-   what was on screen then and a contact sheet of the moments with the marked spots outlined. Notes
-   go only to the session editing the ad; `--take` takes them over from another one.
+   time limit: it exits with the open notes the moment there is one, with a contact sheet of their
+   moments (the rest, and `--take`: `--help`).
 2. Look at the sheet: the box says which word, face or object the note means. Make each change on
    what it's about: a clip's look on the clip (it then starts and ends with it), keyframes only for
    change over time, timed to cuts or word times, never by ear.
@@ -51,6 +47,10 @@ they come:
 5. Start the wait again.
 
 Notes are one file each in `outputs/<ad>/comments/`, in the language the user writes in; reply in it.
+A note on a brief (.md) or `footage.json` has `file` and `quote` (the text it's about) instead of a
+moment; its `--done` takes no `--span` (and on a brief, a `--reply` only when you changed something).
+One from the user's own edit in Studio carries `edit: { where, from, to }`: bring what depends on it
+in step.
 
 ## Pick the style
 
@@ -98,9 +98,8 @@ change to V1's.
   last word, centered and above the badge, the offer coming in once the zoom clears the face.
 - **Color** — `match` grades every clip toward the median look (`--ref` toward one clip); `grade`
   takes exposure, contrast, saturation, temperature, grain, vignette, each keyframable.
-- **Sound** — you choose it: music (**add-music**) and effects (**generate-sfx**), from the shared
-  library first (reference its files in place: `../../../../Shared/Library/inputs/media/<file>`),
-  generated when nothing fits. An effect earns its place by marking something (a
+- **Sound** — you choose it: music (**add-music**) and effects (**generate-sfx**); reference a shared
+  library file in place (`../../../../Shared/Library/inputs/media/<file>`). An effect earns its place by marking something (a
   move, a reveal, a list item), never as decoration. Time each effect from its peak (**generate-sfx**, Place). `duck` dips a track under speech (`--speaker`
   for one voice in a transcript); `moves` lists where the picture moves, for effects on actions.
   A noisy or mumbled voice: **generate-voice** (`isolate`, `patch`).
@@ -130,7 +129,7 @@ The Studio preview is the live edit, so review and revisions never need an expor
 asks or approves the cut. Push to R2 only when the user says the editing is done, and after reopening it, only on their
 next "done". `node tools/edit-video.mjs export outputs/<ad>/edit.json` (or the user's Export button): H.264 + AAC at
 −14 LUFS into `final/<id>_V<n>_…mp4`, about 20 s for 80 s of 1080p; `--out` names it per the brand's
-handoff template if it has one (`inputs/brief-templates.md`). `--scale 0.5` makes a quick draft,
+brief template if it has one. `--scale 0.5` makes a quick draft,
 `--from`/`--to` a section. Never grade your own render; hand over the path.
 
 With R2, final cuts are heavy files a plain push skips: push with

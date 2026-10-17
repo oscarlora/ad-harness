@@ -2,7 +2,7 @@
 // Trim a media clip: drag the selection's edges or middle over the source's frames and waveform; letting go plays
 // the new cut, and Apply writes it to the edit (the server keeps what follows in sync).
 import { useEffect, useRef, useState } from 'react';
-import { clock } from '../BrandPage.js';
+import { clock } from '../../lib/client/format.js';
 import { IcPause, IcPlay } from '../icons.js';
 
 const MIN = 0.1;
@@ -101,7 +101,6 @@ export default function Trim({ clip, src, onApply, onClose }) {
 
   const pct = (t) => `${(len ? t / len : 0) * 100}%`;
   const isVideo = clip.type === 'video';
-  const Media = isVideo ? 'video' : 'audio';
   const changed = Math.abs(sel[0] - clip.in) > 1e-3 || Math.abs(sel[1] - out0) > 1e-3;
   return (
     <div className="trim" role="dialog" aria-label={`Trim ${clip.name || 'clip'}`}>
@@ -112,8 +111,9 @@ export default function Trim({ clip, src, onApply, onClose }) {
         </span>
       </div>
       <div className="trim__body">
-        {isVideo && <Media ref={mediaRef} className="trim__pic" src={src} preload="auto" playsInline muted={!!clip.mute} onLoadedMetadata={(e) => { setLen(e.currentTarget.duration); e.currentTarget.currentTime = sel[0]; }} onTimeUpdate={onTime} />}
-        {!isVideo && <Media ref={mediaRef} src={src} preload="auto" onLoadedMetadata={(e) => setLen(e.currentTarget.duration)} onTimeUpdate={onTime} />}
+        {isVideo
+          ? <video ref={mediaRef} className="trim__pic" src={src} preload="auto" playsInline muted={!!clip.mute} onLoadedMetadata={(e) => { setLen(e.currentTarget.duration); e.currentTarget.currentTime = sel[0]; }} onTimeUpdate={onTime} />
+          : <audio ref={mediaRef} src={src} preload="auto" onLoadedMetadata={(e) => setLen(e.currentTarget.duration)} onTimeUpdate={onTime} />}
         <div className="trim__strip">
           <div className="trim__bar" ref={barRef} data-video={isVideo || undefined}>
             {isVideo && <canvas ref={filmRef} className="trim__film" aria-hidden="true" />}

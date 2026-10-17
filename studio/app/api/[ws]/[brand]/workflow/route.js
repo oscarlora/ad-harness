@@ -2,8 +2,6 @@
 import { brandRoute, jsonRes } from '../../../../../lib/server/http.js';
 import { workflowDetail, workflowList } from '../../../../../lib/server/workflow.js';
 
-export const dynamic = 'force-dynamic';
-
 export const GET = brandRoute((req, ctx) => {
   const ad = new URL(req.url).searchParams.get('ad');
   if (ad == null) return jsonRes(workflowList(ctx.dir));

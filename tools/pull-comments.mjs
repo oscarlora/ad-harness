@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs, findBrandDir, die, usage } from './lib/catalog.mjs';
 import { driveApi, driveForSpec, listChildren, resolveGroupFolder, FOLDER_MIME } from './lib/drive.mjs';
-import { notionClient, resolveBoard, boardQuery, titleOf, plain, allPages } from './lib/notion.mjs';
+import { notionClient, resolveBoard, boardQuery, titleOf, plain, allPages, getSchema, findProp } from './lib/notion.mjs';
 
 const HELP = `pull-comments.mjs — the client's review comments on a batch, from Drive or the Notion Ads Board
 
@@ -136,10 +136,10 @@ async function pullNotion() {
       ? `Multiple boards match "${brand}": ${board.candidates.map(titleOf).join(', ')}. Pass --board <id>, or pin it in inputs/uploads.json.`
       : `No board title contains "${brand}". Pass --board <id>.`);
   }
-  const schema = (await api(`/databases/${board.id}`)).properties || {};
-  const statusProp = Object.keys(schema).find((n) => n.toLowerCase() === 'status') || Object.keys(schema).find((n) => schema[n].type === 'status');
-  const idProp = Object.keys(schema).find((n) => n.toLowerCase() === 'id' && schema[n].type === 'number');
-  const titleProp = Object.keys(schema).find((n) => schema[n].type === 'title');
+  const schema = await getSchema(api, board.id);
+  const statusProp = findProp(schema, 'status') || findProp(schema, null, 'status');
+  const idProp = findProp(schema, 'id', 'number');
+  const titleProp = findProp(schema, null, 'title');
   // the property may be a `status` or a `select`
   const statusVal = (p) => { const v = p.properties?.[statusProp]; return v?.status?.name || v?.select?.name || null; };
 

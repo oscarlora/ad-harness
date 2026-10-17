@@ -10,19 +10,17 @@ loudness. This skill owns the track and the taste.
 
 ## Sourcing
 
-- **You pick it**: search the shared library first (**search-media**), generate when nothing fits.
+- **You pick it**: libraries first (**search-media**), generate when nothing fits.
 - **User-supplied, copyright-free, or generated only.** Never rip a commercial or trending track.
   If the user names one, ask for their licensed file or offer alternatives in the same vibe.
-- **Store it findable.** A track the brand will reuse goes into the media library
+- **Store it findable.** A track the brand will reuse goes into the brand's media library
   (**catalog-media**). A one-off can sit in `outputs/<ad-name>/`.
 - **No track? Ship without** and say so — never block an edit on music.
 
 ## Generating
 
-`tools/generate-music.mjs` renders an instrumental bed on **Suno** (kie.ai) at the length you set
-(`--duration`, default 30 s; takes land within a few seconds of it). Each run gives two takes.
-`--model V6` (default) for detail; `V6_MINI` when speed matters, `V6_WILD` for something bolder —
-same price. A full song: `--vocals`; a sung song ad: **make-ai-song**.
+`tools/generate-music.mjs` (flags: `--help`) renders an instrumental bed at the length you set. A
+sung song ad: **make-ai-song**.
 
 - **Trend research first.** Browse TikTok Creative Center's trending sounds or a licensed library's
   viral charts, then translate the sound's anatomy (tempo, drum palette, bounce, vocal treatment)

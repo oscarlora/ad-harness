@@ -1,16 +1,23 @@
-// An ad's edit: its versions (edit.json, edit-v2.json, …), review notes (comments/<id>.json) and export state.
-// A note on a .md (file, quote: the text it's about) shares comments/ with the video's notes (t, box).
+// An ad's edit: its versions (edit.json, edit-v2.json, …), review notes (comments/<id>.json), export state and .md
+// saves. A note on a .md (file, quote: the text it's about) or on footage.json (quote: the scene) shares comments/
+// with the video's notes (t, box). Each function takes the ad's folder as adDir gives it.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { ORIGIN, compose, endOf, mapTimes, r3 } from '../../engine/doc.js';
-import { readJson } from './brands.js';
+import { readJson, within } from './brands.js';
 import { repoRoot } from './root.js';
 import { catalogLib } from './tools.js';
 
 const PLAN = /^edit(-v\d+)?\.json$/i;
 const NOTE_ID = /^n[a-z0-9]{6,16}$/;
-const adDir = (brandDirAbs, folder) => join(brandDirAbs, 'outputs', folder);
+
+// An ad folder name as the client sends it ("<id>_…", one path segment) → its absolute path, or null when the name is
+// bad or the folder missing.
+export function adDir(brandDirAbs, ad) {
+  const dir = typeof ad === 'string' && /^\d+_[^/\\\0]+$/.test(ad) ? join(brandDirAbs, 'outputs', ad) : null;
+  return dir && existsSync(dir) ? dir : null;
+}
 
 // edit.json is V1, edit-v2.json V2.
 const label = (file) => `V${/^edit-v(\d+)\.json$/i.exec(file)?.[1] || 1}`;
@@ -21,12 +28,11 @@ function readNotes(dir) {
   const cdir = join(dir, 'comments');
   return existsSync(cdir) ? readdirSync(cdir).filter((n) => n.endsWith('.json')).map((n) => readJson(join(cdir, n), null)).filter(Boolean) : [];
 }
-// The notes on the ad's .md files, oldest first.
-export const docNotes = (brandDirAbs, folder) => readNotes(adDir(brandDirAbs, folder)).filter((n) => n.file).sort((a, b) => a.at.localeCompare(b.at));
+// The notes on the ad's .md files and footage.json, oldest first.
+export const docNotes = (dir) => readNotes(dir).filter((n) => n.file).sort((a, b) => a.at.localeCompare(b.at));
 
 // null when the ad has no edit document.
-export function editInfo(brandDirAbs, folder) {
-  const dir = adDir(brandDirAbs, folder);
+export function editInfo(dir) {
   let names = [];
   try { names = readdirSync(dir).filter((n) => PLAN.test(n)); } catch {}
   if (!names.length) return null;
@@ -37,7 +43,7 @@ export function editInfo(brandDirAbs, folder) {
     const d = readJson(join(dir, n), {});
     const docs = [d, d?.base ? readJson(join(dir, d.base), {}) : null];
     const media = Object.fromEntries([...new Set(docs.flatMap((x) => x?.tracks || []).flatMap((t) => t.clips || []).map((c) => c.src).filter(Boolean))].map((src) => [src, mtime(src)]));
-    return { file: n, label: label(n), p: `outputs/${folder}/${n}`, media, v: Math.max(mtime(n), mtime(d?.fx || 'fx.js'), d?.base ? mtime(d.base) : 0, ...Object.values(media)) };
+    return { file: n, label: label(n), p: `outputs/${basename(dir)}/${n}`, media, v: Math.max(mtime(n), mtime(d?.fx || 'fx.js'), d?.base ? mtime(d.base) : 0, ...Object.values(media)) };
   });
   const notes = readNotes(dir).filter((n) => !n.file).sort((a, b) => a.t - b.t);
   let exp = readJson(join(dir, '.export.json'), null);
@@ -45,20 +51,27 @@ export function editInfo(brandDirAbs, folder) {
   return { plans, notes, export: exp };
 }
 
-// note: { id?, t, box?, text, plan } on the video, or { id?, file, quote, text } on a .md (file relative to the ad folder).
-// Returns the saved note.
-export function saveNote(brandDirAbs, folder, note) {
+// note: { id?, t, box?, text, plan } on the video, or { id?, file, quote, text, edit? } on a .md or footage.json (file
+// relative to the ad folder; on footage.json, quote is the scene and check the checklist point it replies on); edit: { where, from, to } is the user's own change to it, so the agent brings what depends on it in step.
+// Another edit of the same spot joins its open note (keeping the first from); one that undoes it removes the note.
+// Returns the saved note (null when removed).
+export function saveNote(dir, note) {
   const t = Number(note?.t), text = String(note?.text || '').trim(), file = note?.file && String(note.file);
-  if (file ? !/^[^/\\\0]+\.md$/i.test(file) || !existsSync(join(adDir(brandDirAbs, folder), file)) : !Number.isFinite(t) || t < 0) throw new Error('a note needs a time or a .md file');
+  if (file ? !/^([^/\\\0]+\.md|footage\.json)$/i.test(file) || !existsSync(join(dir, file)) : !Number.isFinite(t) || t < 0) throw new Error('a note needs a time, a .md file or footage.json');
   if (!text) throw new Error('a note needs text');
-  const id = NOTE_ID.test(note.id || '') ? note.id : `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-  const cdir = join(adDir(brandDirAbs, folder), 'comments');
+  const edit = file && note.edit ? { where: String(note.edit.where || '').slice(0, 200), from: String(note.edit.from ?? ''), to: String(note.edit.to ?? '') } : null;
+  const same = edit && readNotes(dir).find((n) => n.status === 'open' && n.file === file && n.edit?.where === edit.where);
+  if (same) edit.from = same.edit.from;
+  let id = same?.id || note.id;
+  if (!NOTE_ID.test(id || '')) id = `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+  if (same && edit.from.trim() === edit.to.trim()) { removeNote(dir, id); return null; }
+  const cdir = join(dir, 'comments');
   mkdirSync(cdir, { recursive: true });
   const prev = readJson(join(cdir, `${id}.json`), {});
   const at = prev.at || new Date().toISOString();
   const box = Array.isArray(note.box) && note.box.length === 4 && note.box.every((x) => Number.isFinite(x) && x >= 0 && x <= 1) ? note.box.map((x) => +x.toFixed(4)) : null;
   const out = file
-    ? { ...prev, id, file, quote: String(note.quote || prev.quote || '').slice(0, 1000), text, status: 'open', at }
+    ? { ...prev, id, file, quote: String(note.quote || prev.quote || '').slice(0, 1000), text, ...(edit && { edit }), ...(note.check && { check: String(note.check).slice(0, 20) }), status: 'open', at }
     : { ...prev, id, t: +t.toFixed(3), box, text, plan: String(note.plan || prev.plan || 'edit.json'), status: 'open', at };
   delete out.reply;
   writeFileSync(join(cdir, `${id}.json`), JSON.stringify(out, null, 1) + '\n');
@@ -66,25 +79,42 @@ export function saveNote(brandDirAbs, folder, note) {
 }
 
 // The user approves a done note: it leaves the list and stays in the history.
-export function approveNote(brandDirAbs, folder, id) {
+export function approveNote(dir, id) {
   if (!NOTE_ID.test(id || '')) throw new Error('bad note id');
-  const f = join(adDir(brandDirAbs, folder), 'comments', `${id}.json`), note = readJson(f, null);
+  const f = join(dir, 'comments', `${id}.json`), note = readJson(f, null);
   if (!note) throw new Error('no such note');
   writeFileSync(f, JSON.stringify({ ...note, status: 'approved' }, null, 1) + '\n');
 }
 
-export function removeNote(brandDirAbs, folder, id) {
+export function removeNote(dir, id) {
   if (!NOTE_ID.test(id || '')) throw new Error('bad note id');
-  rmSync(join(adDir(brandDirAbs, folder), 'comments', `${id}.json`), { force: true });
+  rmSync(join(dir, 'comments', `${id}.json`), { force: true });
+}
+
+// The user's review of a footage.json scene: ticks ({ <check>: bool }, merged into theirs) and/or decision ('approved'
+// clears a reshoot, 'reshoot' calls one, null clears it), with an optional comment. A call leaves a note on the scene,
+// so the agent's review loop hears it.
+export function decideScene(dir, { scene, ticks, decision, text }) {
+  if (decision != null && decision !== 'approved' && decision !== 'reshoot') throw new Error('bad decision');
+  const f = join(dir, 'footage.json'), doc = readJson(f, null);
+  const key = Object.keys(doc?.clips || {}).find((k) => k.trim().toLowerCase() === String(scene || '').trim().toLowerCase());
+  if (!key) throw new Error('no such scene');
+  const clip = doc.clips[key];
+  if (ticks && typeof ticks === 'object') clip.ticks = { ...clip.ticks, ...Object.fromEntries(Object.entries(ticks).map(([k, v]) => [k, !!v])) };
+  if (decision === 'reshoot') clip.decision = 'reshoot';
+  else if (decision !== undefined) delete clip.decision;
+  writeFileSync(f, JSON.stringify(doc, null, 2) + '\n');
+  if (!decision) return null;
+  const said = String(text || '').trim();
+  return saveNote(dir, { file: 'footage.json', quote: key, text: `${decision === 'approved' ? 'Approved' : 'Reshoot'}${said ? `: ${said}` : ''}` });
 }
 
 // The user trims a media clip in Studio: { plan, id: '<track>.<clip>' (raw indices), in, dur } sets the part of its
 // source it plays. Its start stays put; when its end moves, everything after it slides along if the clip sits in a
 // sequence (the next clip on its track starts where it ended), and a clip of the same name starting at the same
 // time on another track (its voice) gets the same trim. In a hook version, a body clip is trimmed in its base.
-export async function trimClip(brandDirAbs, folder, { plan, id, in: inS, dur }) {
+export async function trimClip(dir, { plan, id, in: inS, dur }) {
   if (!PLAN.test(plan || '')) throw new Error('bad edit document');
-  const dir = adDir(brandDirAbs, folder);
   let f = join(dir, plan), doc = readJson(f, null), [ti, ci] = String(id || '').split('.').map(Number);
   if (doc?.base) {
     const o = compose(doc, readJson(join(dir, doc.base), {})).tracks[ti]?.clips[ci]?.[ORIGIN];
@@ -100,22 +130,50 @@ export async function trimClip(brandDirAbs, folder, { plan, id, in: inS, dur }) 
   const set = (x) => { x.in = r3(inS); x.end = newEnd; delete x.dur; };
   const linked = doc.tracks.flatMap((tr, i) => (i === ti ? [] : tr.clips.filter((x) => x.src && x.name === c.name && Math.abs((x.at ?? 0) - at) < 1e-3)));
   const inSequence = doc.tracks[ti].clips.some((x) => x !== c && Math.abs((x.at ?? 0) - oldEnd) < 0.01);
+  const before = readFileSync(f, 'utf8');
   set(c); linked.forEach(set);
   // Like a cut when it shrinks.
   if (inSequence && delta) mapTimes(doc, (t) => (t >= oldEnd - 1e-3 ? r3(t + delta) : delta < 0 && t > newEnd ? newEnd : t), new Set([c, ...linked]));
-  writeFileSync(f, JSON.stringify(doc, null, 1) + '\n');
+  const after = JSON.stringify(doc, null, 1) + '\n';
+  writeFileSync(f, after);
   (await catalogLib()).markEditing(dir, null);
-  return { delta, rippled: inSequence && !!delta, linked: linked.length };
+  return { delta, rippled: inSequence && !!delta, linked: linked.length, undo: { file: basename(f), before, after } };
+}
+
+// Studio's undo / redo of a trim: { file, text, expect } puts back text when the edit document is still expect.
+export function restoreEdit(dir, { file, text, expect }) {
+  if (!PLAN.test(file || '') || typeof text !== 'string') throw new Error('bad edit document');
+  const f = join(dir, file);
+  if (readFileSync(f, 'utf8') !== expect) throw new Error('the edit changed since; nothing undone');
+  writeFileSync(f, text);
+  return { ok: true };
 }
 
 // Run tools/edit-video.mjs export in the background; its progress lands in .export.json.
-export function startExport(brandDirAbs, folder, plan) {
+export function startExport(dir, plan) {
   if (!PLAN.test(plan || '')) throw new Error('bad edit document');
-  const dir = adDir(brandDirAbs, folder);
   const cur = readJson(join(dir, '.export.json'), null);
   if (cur?.state === 'running' && cur.pid && alive(cur.pid)) throw new Error('An export is already running.');
   const child = spawn(process.execPath, [join(repoRoot(), 'tools', 'edit-video.mjs'), 'export', join(dir, plan)], { cwd: repoRoot(), detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
   writeFileSync(join(dir, '.export.json'), JSON.stringify({ plan, state: 'running', progress: 0, pid: child.pid, at: Date.now() }));
+}
+
+// The markdown editor's save of a .md in the ad folder: { name (relative to the folder), text, base (the file as the
+// editor last had it) }. A change made on disk since is merged in line by line; lines added or removed on both sides
+// can't be lined up, so then it returns { error: 'changed', text: the file } for the editor to apply its typing to.
+// Otherwise { ok, v (the file's version, as the workflow gives it), text (only when merged) }.
+export function saveMd(dir, { name, text, base } = {}) {
+  const abs = resolve(dir, String(name || ''));
+  if (!within(dir, abs) || !/\.md$/i.test(abs) || !existsSync(abs) || typeof text !== 'string') throw new Error('bad file');
+  const cur = readFileSync(abs, 'utf8');
+  let out = text;
+  if (typeof base === 'string' && cur !== base && cur !== text) {
+    const [b, mine, theirs] = [base, text, cur].map((t) => t.split('\n'));
+    if (b.length !== mine.length || b.length !== theirs.length) return { error: 'changed', text: cur };
+    out = mine.map((l, i) => (l !== b[i] ? l : theirs[i])).join('\n');
+  }
+  writeFileSync(abs, out);
+  return { ok: true, v: Math.round(statSync(abs).mtimeMs), ...(out !== text && { text: out }) };
 }

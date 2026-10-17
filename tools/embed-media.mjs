@@ -2,11 +2,10 @@
 // embed-media.mjs — semantic vectors for the media catalog, into _catalog/vectors.json: one for each
 // record's text, one per video scene, made locally (lib/embed.mjs). Run after analyze-media; only
 // changed records are re-embedded, and all of them when the model changed.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { catalogPaths, readRecords, parseArgs, mediaDirFrom, sha256, usage } from './lib/catalog.mjs';
-import { embed, docText, packVec, EMBED_MODEL } from './lib/embed.mjs';
+import { embed, docText, packVec, readVectors, EMBED_MODEL } from './lib/embed.mjs';
 
 const HELP = `embed-media.mjs — semantic vectors for the media catalog (_catalog/vectors.json), made locally
 with ${EMBED_MODEL} (no key; the model downloads once, ~210 MB)
@@ -14,22 +13,13 @@ with ${EMBED_MODEL} (no key; the model downloads once, ~210 MB)
   node tools/embed-media.mjs --media <media dir> [--force]
     --force  re-embed every record, not only changed ones`;
 
-const vectorsPath = (media) => join(catalogPaths(media).catalog, 'vectors.json');
-export function readVectors(media) {
-  const p = vectorsPath(media);
-  if (!existsSync(p)) return null;
-  try { const v = JSON.parse(readFileSync(p, 'utf8')); return v.model === EMBED_MODEL ? v : null; } catch { return null; }
-}
-
 const titleOf = (r) => String(r.file?.name || r.id).replace(/^\d+_/, '').replace(/\.[^.]+$/, '').replace(/-/g, ' ');
 function recordText(r) {
   return [
     r.products?.length && `Products: ${r.products.join(', ')}`,
     r.people?.length && `People: ${r.people.join(', ')}`,
-    r.tags?.length && `Tags: ${r.tags.join(', ')}`,
-    r.visual_description,
-    r.audio_description,
-    r.audio_transcript?.text && `Transcript: ${r.audio_transcript.text}`,
+    r.analysis,
+    r.transcript?.text && `Transcript: ${r.transcript.text}`,
   ].filter(Boolean).join('\n').slice(0, 24000);
 }
 
@@ -55,7 +45,7 @@ export async function embedAll({ media, force = false }) {
     for (const r of todo) store.items[r.id] = { sig: sigOf(r), scenes: [] };
     jobs.forEach((j, n) => { if (j.i == null) store.items[j.id].text = packVec(vecs[n]); else store.items[j.id].scenes[j.i] = packVec(vecs[n]); });
   }
-  writeFileSync(vectorsPath(media), JSON.stringify(store));
+  writeFileSync(catalogPaths(media).vectors, JSON.stringify(store));
   return { embedded: todo.length, total: recs.length };
 }
 

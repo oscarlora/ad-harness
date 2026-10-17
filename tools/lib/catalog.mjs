@@ -1,5 +1,5 @@
-// catalog.mjs — shared helpers: .env, arg parsing, binaries, workspace inference, and the media
-// catalog (hashing, 5-digit ids, paths, records, the record skeleton).
+// catalog.mjs — shared helpers: .env, arg parsing, binaries, downloads, workspace inference, and the
+// media catalog (hashing, paths, records).
 //
 // Layout:
 //   workspaces/<WS>/<Brand>/inputs/media/
@@ -8,20 +8,22 @@
 //     <id>_<descriptor>.<ext>     the media, flat
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, existsSync, mkdirSync, createReadStream, writeFileSync } from 'node:fs';
-import { homedir, hostname } from 'node:os';
+import { readFileSync, readdirSync, existsSync, mkdirSync, createReadStream, createWriteStream, writeFileSync, openSync, readSync, closeSync, rmSync, renameSync, statSync } from 'node:fs';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { join, resolve, basename, extname, delimiter, dirname } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
-export const RESERVED = new Set(['brand', '_catalog']);
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export function die(message, code = 1) { console.error(`ERROR: ${message}`); process.exit(code); }
+export function die(message) { console.error(`ERROR: ${message}`); process.exit(1); }
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- external binaries ----------
 // Extend PATH once so spawned tools find binaries in ~/.local/bin and brew dirs too.
 process.env.PATH = [process.env.PATH || '', join(homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].join(delimiter);
+export const SETUP_HINT = 'run bash tools/setup.sh (Windows: tools\\setup.ps1)';
 
 // Scans PATH ourselves (Windows has no /bin/sh) and tries <name>.exe there, since spawn() won't
 // append it without a shell.
@@ -56,6 +58,18 @@ export function runAsync(bin, args, { allowFail = false, cwd } = {}) {
     p.on('close', (status) => (status !== 0 && !allowFail ? rej(new Error(`${bin} ${args.join(' ')} failed: ${stderr}`)) : res({ status, stdout, stderr })));
   });
 }
+// A file made from `src` once per version of it (path, mtime, size) and `key`, kept in <OS temp>/<cache>:
+// make(tmp) writes it to tmp, renamed into place so concurrent requests never see half a file. → its path.
+export async function cachedFile(src, { cache, key = '', ext }, make) {
+  const st = statSync(src);
+  const out = join(tmpdir(), cache, `${createHash('sha1').update(`${src}|${st.mtimeMs}|${st.size}|${key}`).digest('hex')}.${ext}`);
+  if (existsSync(out)) return out;
+  mkdirSync(dirname(out), { recursive: true });
+  const tmp = `${out.slice(0, -ext.length - 1)}.${process.pid}.${Date.now()}.${ext}`;
+  await make(tmp);
+  renameSync(tmp, out);
+  return out;
+}
 // The command that writes a JPEG (PNG when `out` ends in .png) of an image fit within px on its
 // longest edge, never upscaled: [bin, args] for run()/runAsync(). sips on macOS, ffmpeg elsewhere
 // (even dims for its encoder).
@@ -82,6 +96,14 @@ export function ffprobeJson(file) {
 export function pcm(file, rate) {
   const r = run('ffmpeg', ['-v', 'quiet', '-i', file, '-ac', '1', '-ar', String(rate), '-f', 's16le', '-'], { allowFail: true, binary: true });
   return r.stdout?.length ? new Int16Array(r.stdout.buffer, r.stdout.byteOffset, Math.floor(r.stdout.length / 2)) : null;
+}
+// Loudness of a file's audio in 10 ms frames (dB), or null.
+export function loudness(file) {
+  const samples = pcm(file, 16000);
+  if (!samples) return null;
+  const hop = 160, db = [];
+  for (let i = 0; i + hop <= samples.length; i += hop) { let s = 0; for (let j = i; j < i + hop; j++) s += (samples[j] / 32768) ** 2; db.push(10 * Math.log10(s / hop + 1e-12)); }
+  return db;
 }
 export const round = (n, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
 
@@ -115,9 +137,9 @@ export function typeOf(p) {
 export const isMedia = (p) => typeOf(p) !== null && !basename(p).startsWith('.');
 
 // ---------- .env ----------
-// The repo-root .env (found from this file, so any cwd works), else one in `root`.
-export function loadEnv(root = REPO_ROOT) {
-  for (const f of [...new Set([join(root, '.env'), join(REPO_ROOT, '.env'), resolve('.env')])]) {
+// The repo-root .env (found from this file, so any cwd works), else one in the cwd.
+export function loadEnv() {
+  for (const f of [...new Set([join(REPO_ROOT, '.env'), resolve('.env')])]) {
     if (existsSync(f)) {
       return Object.fromEntries(
         readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => l.includes('=') && !l.trim().startsWith('#'))
@@ -127,10 +149,35 @@ export function loadEnv(root = REPO_ROOT) {
   }
   return {};
 }
-// loadEnv() into process.env, never overriding what the shell already set.
-export function applyEnv() {
-  for (const [k, v] of Object.entries(loadEnv())) if (!(k in process.env)) process.env[k] = v;
+// A workspace's key <WS>_<name>; the shell's environment wins over .env.
+export const wsKey = (ws, name) => ({ ...loadEnv(), ...process.env })[`${ws.toUpperCase()}_${name}`];
+
+// ---------- downloads ----------
+// Up to 3 tries. A web page in place of the file (not shared, quota, virus-scan wall) counts as failure.
+// Returns { bytes, filename } (filename from Content-Disposition).
+export async function downloadFile(url, dest, headers = {}) {
+  mkdirSync(dirname(dest), { recursive: true });
+  let last;
+  for (let i = 1; i <= 3; i++) {
+    try {
+      const r = await fetch(url, { headers });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (/text\/html/i.test(r.headers.get('content-type') || '')) throw new Error('got a web page, not the file');
+      await pipeline(Readable.fromWeb(r.body), createWriteStream(dest));
+      const head = Buffer.alloc(64); const fd = openSync(dest, 'r'); readSync(fd, head, 0, 64, 0); closeSync(fd);
+      if (/^\s*<(!doctype|html)/i.test(head.toString('latin1'))) throw new Error('got a web page, not the file');
+      const cd = r.headers.get('content-disposition') || '';
+      const filename = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/i) || [])[1] || '') || (cd.match(/filename="([^"]+)"/i) || [])[1] || null;
+      return { bytes: statSync(dest).size, filename };
+    } catch (e) { last = e; rmSync(dest, { force: true }); if (i < 3) await sleep(2000 * i); }
+  }
+  throw last;
 }
+
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0', rsquo: '\u2019' };
+// HTML entities (numeric, and the named ones pages use) decoded in one pass.
+export const decodeHtml = (s) => String(s).replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (m, e) => (e[0] !== '#' ? ENTITIES[e.toLowerCase()] ?? m
+  : String.fromCodePoint(/x/i.test(e[1]) ? parseInt(e.slice(2), 16) : +e.slice(1))));
 
 // ---------- editing lock ----------
 // <ad folder>/.editing.json { session, at }: the ad is being edited and not pushed yet. sync-brand's pull leaves the
@@ -141,10 +188,12 @@ export const sessionId = () => process.env.CLAUDE_CODE_SESSION_ID || process.env
 export function readEditing(adDir) {
   try { return JSON.parse(readFileSync(join(adDir, EDITING), 'utf8')); } catch { return null; }
 }
-// Marks the ad as edited by `session` (null: Studio) and returns who holds it: the first session keeps it unless take.
+// Marks the ad as edited by `session` (null: Studio) and returns who holds it: the first session keeps it, its lock
+// untouched, unless take.
 export function markEditing(adDir, session = sessionId(), take = false) {
   const cur = readEditing(adDir)?.session;
   const holder = take || !cur || cur === 'studio' ? session || cur || 'studio' : cur;
+  if (holder === cur && holder !== (session || 'studio')) return holder;
   writeFileSync(join(adDir, EDITING), JSON.stringify({ session: holder, at: new Date().toISOString() }) + '\n');
   return holder;
 }
@@ -212,7 +261,7 @@ export function catalogPaths(p) {
     json: join(catalog, 'json'), thumbs: join(catalog, 'thumbs'), sprites: join(catalog, 'sprites'),
     proxies: join(catalog, 'proxies'), keyframes: join(catalog, 'keyframes'), peaks: join(catalog, 'peaks'),
     index: join(catalog, 'index.md'), people: join(catalog, 'people.json'),
-    driveSources: join(catalog, 'drive-sources.json'),
+    driveSources: join(catalog, 'drive-sources.json'), vectors: join(catalog, 'vectors.json'),
   };
 }
 export function ensureDirs(paths) {
@@ -226,7 +275,6 @@ export async function hashFile(p, algo = 'sha256') { // streamed: videos can be 
   for await (const chunk of createReadStream(p, { highWaterMark: 1 << 22 })) h.update(chunk);
   return h.digest('hex');
 }
-export const padId = (n) => String(n).padStart(5, '0');
 export const slugify = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'untitled';
 
 // ---------- records (one JSON file per item in paths.json; record-media.mjs owns the schema) ----------
@@ -247,18 +295,16 @@ export function writeRecord(paths, rec) {
   writeFileSync(recordFile(paths, rec.id), JSON.stringify(rec, null, 2) + '\n');
   return rec;
 }
-// Shallow merge; file/source/sprites/generation one level deep; a transcript is replaced whole; an
-// undefined key is dropped. Stamps status=cataloged once a description or transcript exists.
+// Shallow merge; file/source/sprites one level deep; a transcript is replaced whole; an undefined key
+// is dropped.
 export function mergeRecord(paths, patch) {
   const id = patch.id;
   if (!id) throw new Error('patch needs an id');
   const cur = readRecord(paths, id) || { id };
   const merged = { ...cur, ...patch };
-  for (const k of ['file', 'source', 'sprites', 'generation']) {
+  for (const k of ['file', 'source', 'sprites']) {
     if (cur[k] && patch[k] && typeof cur[k] === 'object' && !Array.isArray(cur[k])) merged[k] = { ...cur[k], ...patch[k] };
   }
-  const analyzed = merged.visual_description || merged.audio_description || merged.audio_transcript?.text;
-  if (analyzed && merged.status === 'probed') merged.status = 'cataloged';
   return writeRecord(paths, merged);
 }
 
@@ -271,33 +317,6 @@ export function indexMarkdown({ title, noun, from, cols, rows }) {
     `| ${cols.join(' | ')} |`, `|${cols.map(() => '---').join('|')}|`,
     ...rows.map((r) => `| ${r.map(cell).join(' | ')} |`), '',
   ].join('\n');
-}
-
-const orientationOf = (w, h) => (!w || !h ? 'unknown' : w > h ? 'landscape' : w < h ? 'portrait' : 'square');
-const ASPECTS = [[1, 1], [4, 5], [5, 4], [2, 3], [3, 2], [3, 4], [4, 3], [9, 16], [16, 9], [9, 19.5], [1.91, 1]];
-function snapAspect(w, h) {
-  if (!w || !h) return null;
-  const r = w / h;
-  let best = null, bestD = Infinity;
-  for (const [a, b] of ASPECTS) { const d = Math.abs(r - a / b); if (d < bestD) { bestD = d; best = [a, b]; } }
-  return bestD / (w / h) < 0.04 ? `${best[0]}:${best[1]}` : `${Math.round(r * 100) / 100}:1`;
-}
-
-// analyze-media fills visual_description / products / people / tags.
-export function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, width, height, duration, sourceType = 'brand', sourceName = '' }) {
-  const rec = {
-    id, sha256: hash,
-    file: { name, type, mime, bytes },
-    source: { type: sourceType, name: sourceName },
-    products: [], people: [], unknown_people: [], tags: [],
-    visual_description: '',
-    status: 'probed',
-  };
-  if (width) rec.file.width = width;
-  if (height) rec.file.height = height;
-  if (width && height) { rec.file.orientation = orientationOf(width, height); rec.file.aspect = snapAspect(width, height); }
-  if (duration != null) rec.file.duration = duration;
-  return rec;
 }
 
 // --key value, repeated keys → arrays, bare --flag → true. `flags` never take a value, so the next

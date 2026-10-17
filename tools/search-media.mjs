@@ -2,14 +2,13 @@
 // search-media.mjs — search the media catalog: filters narrow, then keyword and vector rankings are
 // fused. A video scene hit returns its time range. Without current vectors, keywords alone (no npm deps).
 import { catalogPaths, readRecords, readRoster, parseArgs, mediaDirFrom, usage } from './lib/catalog.mjs';
-import { embed, queryText, unpackVec, cosine, EMBED_MODEL } from './lib/embed.mjs';
-import { readVectors } from './embed-media.mjs';
+import { embed, queryText, unpackVec, cosine, readVectors, EMBED_MODEL } from './lib/embed.mjs';
 
 const HELP = `search-media.mjs — search a brand's media catalog
 
-  node tools/search-media.mjs --media <media dir> [--query "bowl de pollo visto desde arriba"]
+  node tools/search-media.mjs --media <media dir> [--query "bowl seen from above"]
        [--like <id>] [--type image|video|audio] [--orientation portrait|landscape|square]
-       [--product "Bowl de Pollo"] [--person "Kathe"] [--source brand|generated|external]
+       [--product "Acme Bowl"] [--person "Jane"] [--source generated|link|upload]
        [--keywords-only] [--limit 20] [--json]
     --like <id>      rank by similarity to that asset's description (combine with filters)
     --keywords-only  skip the vector ranking (and loading its local model)
@@ -28,13 +27,11 @@ const lc = (s) => String(s ?? '').toLowerCase();
 const haystacks = (r) => ({
   products: lc((r.products || []).join(' ')),
   people: lc([...(r.people || []), ...(r.unknown_people || []).map((u) => u.description)].join(' ')),
-  tags: lc((r.tags || []).join(' ')),
   name: lc(r.file?.name),
-  vis: lc(r.visual_description) + ' ' + lc((r.scenes || []).map((s) => s.description).join(' ')),
-  audio: lc(r.audio_description) + ' ' + lc(r.audio_transcript?.text),
-  source: lc(r.source?.name),
+  analysis: lc(r.analysis),
+  transcript: lc(r.transcript?.text),
 });
-const WEIGHT = { products: 5, people: 4, tags: 3, name: 3, vis: 1, audio: 1, source: 1 };
+const WEIGHT = { products: 5, people: 4, name: 3, analysis: 1, transcript: 1 };
 
 function keywordRank(rows, tokens) {
   return rows.map((r) => {
@@ -79,7 +76,7 @@ async function search(mediaDir, opts = {}) {
   let rows = recs.filter((r) => {
     if (opts.type && r.file?.type !== opts.type) return false;
     if (opts.orientation && r.file?.orientation !== opts.orientation) return false;
-    if (opts.source && r.source?.type !== opts.source) return false;
+    if (opts.source && r.source?.kind !== opts.source) return false;
     if (opts.product) { const want = expand(opts.product); const have = (r.products || []).map(lc); if (!want.some((w) => have.some((h) => h.includes(w) || w.includes(h)))) return false; }
     if (opts.person) { const w = lc(opts.person); if (!haystacks(r).people.includes(w)) return false; }
     return true;
@@ -102,9 +99,8 @@ async function search(mediaDir, opts = {}) {
   } else {
     ranked = rows.sort((a, b) => String(a.id).localeCompare(String(b.id))).map((r) => ({ r }));
   }
-  const res = ranked.map((x) => ({ ...x.r, _match: x.scene != null && x.r.scenes?.[x.scene] ? { scene: x.scene + 1, start: x.r.scenes[x.scene].start, end: x.r.scenes[x.scene].end } : undefined }));
-  res.mode = mode;
-  return opts.limit ? Object.assign(res.slice(0, opts.limit), { mode }) : res;
+  const res = ranked.slice(0, opts.limit || Infinity).map((x) => ({ ...x.r, _match: x.scene != null && x.r.scenes?.[x.scene] ? { scene: x.scene + 1, start: x.r.scenes[x.scene].start, end: x.r.scenes[x.scene].end } : undefined }));
+  return Object.assign(res, { mode });
 }
 
 const a = parseArgs(process.argv.slice(2), { flags: ['keywords-only', 'json'], help: HELP });
@@ -118,7 +114,7 @@ if (a.json) {
 } else {
   console.log(`${res.length} result${res.length === 1 ? '' : 's'}${opts.query ? ` for "${opts.query}"` : opts.like ? ` like ${opts.like}` : ''} [${res.mode}]:`);
   for (const r of res) {
-    const snip = (r.visual_description || r.audio_description || r.audio_transcript?.text || '').replace(/\s+/g, ' ').slice(0, 90);
+    const snip = (r.analysis || r.transcript?.text || '').replace(/\s+/g, ' ').slice(0, 90);
     console.log(`  ${r.id}  [${r.file?.type}/${r.file?.orientation || '?'}]  ${r.file?.name}${r._match ? `  ▸ scene ${r._match.scene} @ ${r._match.start}–${r._match.end}s` : ''}`);
     if (r.products?.length) console.log(`        products: ${r.products.join(', ')}`);
     if (snip) console.log(`        ${snip}…`);

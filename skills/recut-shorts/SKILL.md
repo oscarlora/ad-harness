@@ -29,15 +29,14 @@ rush the pace.
 
 ## 3. Build
 
-- **A new ad:** its own ID and record (`outputs/json/<ID>.json`), one folder, the cuts as `edit.json`,
-  `edit-v2.json`, `edit-v3.json`. Footage stays in the source ad's folder, referenced in place
-  (`../<source ad>/raw/<file>`).
-- **Pacing:** cut pauses over ~0.35 s down to ~0.12 s; a cut inside a line takes a small scale step
-  (~1.06) so it reads as a punch, not a jump.
+- **A new ad:** its own ID, record and folder, the cuts as `edit.json`, `edit-v2.json`,
+  `edit-v3.json`. Footage stays in the source ad's folder, referenced in place
+  (`../<source ad>/footage/<file>`).
+- **Pacing:** `node tools/edit-video.mjs tighten <edit.json> --gap 0.35 --keep 0.12`; a cut inside a
+  line takes a small scale step (~1.06) so it reads as a punch, not a jump.
 - **Ending:** time the product snap from the last spoken word, never from a clip's start (cutting a
   pause splits the CTA into several clips).
 - **Text and captions:** regroup the captions by phrase and recolor the key words for each cut
   (**caption-video**); the edit-video text rules still apply.
 
-Then show it on the ad's Edit step in Studio (**open-studio**) and take notes the usual way
-(**edit-video**, Revise). Brand memory says whether a brand always gets a recut after a UGC edit.
+Brand memory says whether a brand always gets a recut after a UGC edit.

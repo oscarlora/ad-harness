@@ -56,10 +56,7 @@ for (const name of readdirSync(here).filter((n) => /^\.next-dev-\d+$/.test(n) &&
 }
 
 // Trust the OS certificate store so next/font's download works behind TLS-intercepting proxies.
-// The flag exists from Node 22.15 / 23.8; older Node refuses to start with it.
-const [major, minor] = process.versions.node.split('.').map(Number);
-const hasSystemCa = major > 23 || (major === 23 && minor >= 8) || (major === 22 && minor >= 15);
-if (hasSystemCa && !/--use-system-ca/.test(env.NODE_OPTIONS || '')) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --use-system-ca`.trim();
+if (!/--use-system-ca/.test(env.NODE_OPTIONS || '')) env.NODE_OPTIONS = `${env.NODE_OPTIONS || ''} --use-system-ca`.trim();
 
 const distDir = env.NEXT_DIST_DIR || '.next';
 const stampFile = join(here, distDir, '.source-stamp');

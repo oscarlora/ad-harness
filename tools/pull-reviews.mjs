@@ -10,11 +10,11 @@
 //   3. Verify with one curl; tune page size and pagination until a full pull works.
 //   4. No public feed? Scrape the rendered widget, or write the CSV by hand without an adapter.
 // Then: confirm its SIGNATURES entry, add an id-extractor (like extractOkendoSubscriber) and a
-// pull<Platform> mapping to the shared CSV columns, dispatch it in main, and check the total against
-// the on-page count.
+// pull<Platform> mapping to the shared CSV columns, add it to ADAPTERS, and check the total against
+// the on-page count. Not built yet: Yotpo is keyed by an app_key in the page, Reviews.io by a store token.
 
 import { writeFile } from 'node:fs/promises';
-import { die, parseArgs, usage } from './lib/catalog.mjs';
+import { decodeHtml, die, parseArgs, usage } from './lib/catalog.mjs';
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36';
 const MAX_PAGES = 100;
@@ -149,11 +149,7 @@ async function pullOkendo({ subscriber, productId, limit }) {
 
 // ---------- Stamped adapter ----------
 // No JSON feed: get the public key from getappkey, then parse /widget's rendered HTML per page.
-const htmlText = (s) => (s || '')
-  .replace(/<[^>]+>/g, ' ')
-  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-  .replace(/&quot;/g, '"').replace(/&#0?39;|&rsquo;|&#8217;|&apos;/g, "'").replace(/&nbsp;/g, ' ')
-  .replace(/\s+/g, ' ').trim();
+const htmlText = (s) => decodeHtml((s || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 
 function parseStampedWidget(html) {
   const out = [];
@@ -256,7 +252,7 @@ async function pullLoox({ storeId, limit }) {
 // shortfalls are reported.
 // Sister products share reviews, so every product in /products.json is crawled, covered groups
 // skipped, and rows deduped by uuid. No public incentivized flag: invitation-email reviews get
-// 'store_invitation' in that column.
+// 'store_invitation' in that column (the page's jdgmSettings.coupon_* says whether invites carry a coupon).
 const JM_PER_PAGE = 25;          // 40 pages x 25 = 1000, the full window
 const JM_WINDOW_PAGES = 40;
 const JM_SEARCH_LADDER = ['love', 'great', 'good', 'best', 'recommend', 'amazing', 'quality', 'use',
@@ -435,31 +431,27 @@ if (args['detect-only']) {
 
 if (!platform) die('could not detect a review platform; pass --platform to override');
 
-if (!['okendo', 'stamped', 'judgeme', 'loox'].includes(platform)) {
+// Each built platform: the id it needs (or why it's missing), and its pull.
+const ADAPTERS = {
+  okendo: { needs: [subscriber, 'no subscriber id found; pass --subscriber <uuid>'], name: `Okendo reviews (subscriber ${subscriber})`,
+    pull: () => pullOkendo({ subscriber, productId: args['product-id'], limit }) },
+  stamped: { needs: [stamped, 'could not resolve its public key (no .myshopify.com domain on page?)'], name: `Stamped reviews (sId ${stamped?.sId})`,
+    pull: () => pullStamped({ ...stamped, limit }) },
+  judgeme: { needs: [judgemeDomain, 'no .myshopify.com domain found on page; pass --shop-domain'], name: `Judge.me reviews (shop ${judgemeDomain})`,
+    pull: () => pullJudgeme({ shopDomain: judgemeDomain, store, productId: args['product-id'], limit }) },
+  loox: { needs: [looxStoreId, 'no store id found in the loox.js URL; pass --loox-store <id>'], name: `Loox reviews (store ${looxStoreId})`,
+    pull: () => pullLoox({ storeId: looxStoreId, limit }) },
+};
+const adapter = ADAPTERS[platform];
+if (!adapter) {
   log('');
-  log(`Platform "${platform}" is detected but NOT yet implemented in this tool.`);
-  log('Use the manual approach in the pull-reviews skill, then implement an adapter here.');
+  log(`Platform "${platform}" is detected but has no adapter yet: build one (ADDING AN ADAPTER, at the top of this file), then pull.`);
   process.exit(2);
 }
-
-let rows;
-if (platform === 'stamped') {
-  if (!stamped) die('stamped detected but could not resolve its public key (no .myshopify.com domain on page?)');
-  log(`Pulling Stamped reviews (sId ${stamped.sId})...`);
-  rows = await pullStamped({ ...stamped, limit });
-} else if (platform === 'judgeme') {
-  if (!judgemeDomain) die('judgeme detected but no .myshopify.com domain found on page; pass --shop-domain');
-  log(`Pulling Judge.me reviews (shop ${judgemeDomain})...`);
-  rows = await pullJudgeme({ shopDomain: judgemeDomain, store, productId: args['product-id'], limit });
-} else if (platform === 'loox') {
-  if (!looxStoreId) die('loox detected but no store id found in the loox.js URL; pass --loox-store <id>');
-  log(`Pulling Loox reviews (store ${looxStoreId})...`);
-  rows = await pullLoox({ storeId: looxStoreId, limit });
-} else {
-  if (!subscriber) die('okendo detected but no subscriber id found; pass --subscriber <uuid>');
-  log(`Pulling Okendo reviews (subscriber ${subscriber})...`);
-  rows = await pullOkendo({ subscriber, productId: args['product-id'], limit });
-}
+const [found, missing] = adapter.needs;
+if (!found) die(`${platform} detected but ${missing}`);
+log(`Pulling ${adapter.name}...`);
+const rows = await adapter.pull();
 if (!rows.length) die('no reviews returned');
 
 // newest first, then number 1..N

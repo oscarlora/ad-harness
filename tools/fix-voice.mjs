@@ -4,8 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { applyEnv, die, inferWorkspace, parseArgs, round, run, sleep, usage } from './lib/catalog.mjs';
-applyEnv();
+import { die, inferWorkspace, parseArgs, round, run, sleep, usage, wsKey } from './lib/catalog.mjs';
 
 const HELP = `fix-voice.mjs — clean a speaker's voice and re-say mumbled words (ElevenLabs).
 
@@ -32,7 +31,7 @@ const FINISH = 'highpass=f=90,equalizer=f=300:t=q:w=1:g=-2.5,equalizer=f=3500:t=
 
 function key(p) {
   const ws = inferWorkspace(p) || die(`can't tell the workspace from ${p} (expected workspaces/<WS>/...)`);
-  return process.env[`${ws.toUpperCase()}_ELEVENLABS_API_KEY`] || die(`${ws.toUpperCase()}_ELEVENLABS_API_KEY missing in .env`);
+  return wsKey(ws, 'ELEVENLABS_API_KEY') || die(`${ws.toUpperCase()}_ELEVENLABS_API_KEY missing in .env`);
 }
 const nameOf = (f) => basename(f, extname(f));
 const db = (x) => 10 ** (x / 20);

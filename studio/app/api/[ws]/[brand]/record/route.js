@@ -1,9 +1,7 @@
-// Save media-record edits via tools/record-media.mjs; new people go to _catalog/people.json.
+// Saves a media record's sidebar edits (lib/server/media.js); new people go to _catalog/people.json.
 // Body: { id, patch, addPeople?: [{ name, description }] }
 import { brandPost, jsonRes } from '../../../../../lib/server/http.js';
 import { addPeople, isMediaId, mergeMediaRecord } from '../../../../../lib/server/media.js';
-
-export const dynamic = 'force-dynamic';
 
 export const POST = brandPost(async (req, ctx) => {
   const body = await req.json().catch(() => ({}));

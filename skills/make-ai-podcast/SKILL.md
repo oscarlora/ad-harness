@@ -11,15 +11,8 @@ a base image first. Any length, any language: longer just means more clips (step
 
 ## 1. Research
 
-Load the brand context (AGENTS.md) and any client brief in `inputs/`. Work from the research doc
-itself; don't re-summarize it into a brief, since paraphrase overstates claims.
-
-The gate: the user signs off the product (and doc), the persona + angle (picked in step 2), the
-**2–4 claims** this ad carries, and the product's **unique mechanism**. A claim not in the doc doesn't
-go in the script.
-
-**Confirm the mechanism, never infer it.** Take it from the brief, the client, or an explicit line in
-the doc — never stitch one together from features and benefits.
+Load the brand context (AGENTS.md) and any client brief in `inputs/`, then pass **write-copy**'s
+claims gate (the persona and angle come from step 2).
 
 ## 2. Concept
 
@@ -38,8 +31,7 @@ Per speaker: age, ethnicity, look, outfit, and a **detailed voice design** (chec
 **generate-voice**).
 
 Make the voices **clearly contrasting** (a low, warm alto against a bright, airy mezzo): Seedance
-builds the voices from this text, and similar descriptions blur into one voice. This block gets
-pasted verbatim into every video prompt.
+builds the voices from this text, and similar descriptions blur into one voice.
 
 ## 4. Set
 
@@ -101,30 +93,13 @@ prompt and reroll.
 
 Write a very casual, speech-like conversation from the signed-off claims and the research doc's
 customer language. Cover these **beats**, merged or reordered as feels natural: the hook exchange ·
-the problem in the guest's lived words · what she tried that didn't work · what actually works, said
+the problem in the guest's lived words · what they tried that didn't work · what actually works, said
 simply and hedged like a layperson · the result, with a number and a timeframe (signed-off claims
-only) · the after, a scene from her week now · the product, named naturally near the end.
+only) · the after, a scene from their week now · the product, named naturally near the end.
 
-Options each open on a different beat (the result, the problem, what she tried). Agree the target length with the user. Label every line with the speaker's
-name and role: `MAYA (HOST):`, `CHLOE (GUEST):`. Writing and claim rules live in **write-copy**; load
-it. The podcast-specific dialogue craft:
-
-- **Open mid-conversation at the most gripping point.** No greetings, no introductions, no "welcome
-  to the show". The first line is the hook, often the host reacting to the strongest true claim
-  ("Two weeks? Come on.").
-- **One sentence = one shot.** Keep lines short.
-- **Speech-like flow, never punchy:** no ad-copy staccato — contractions, fillers, a false start, the
-  odd trailing-off (dialogue may use the fillers write-copy bans elsewhere). If it sounds written,
-  loosen it.
-- **Interruptions:** end a line with a trailing "-" to cut a speaker off and let the other barge in.
-- **Hedge vs. certainty:** unsure about mechanisms ("don't quote me on the science, but…"), certain
-  about her own experience.
-- **Echoes:** the host repeats a fragment back ("two weeks?", "every night?") — the one place a
-  clipped fragment belongs.
-- **Product out of frame:** the product graphic goes on in the edit; write the dialogue so nothing
-  needs to be shown.
-- **On-screen text vs. spoken word:** captions and overlays follow the brand's text conventions; the
-  spoken line can use the natural word.
+Options each open on a different beat (the result, the problem, what they tried). Agree the target
+length with the user. Writing, claim and dialogue rules live in **write-copy**; load it. The product
+graphic goes on in the edit: write the dialogue so nothing needs to be shown.
 
 ## 8. Video prompts
 
@@ -139,30 +114,32 @@ open the next mid-sentence with that speaker already talking and moving.
 Make each prompt **fully self-contained**: restate every character, the set, and which reference
 image is which; never reference another clip.
 
-Structure each prompt with these labeled blocks:
+Lay each prompt out in Seedance's syntax (**write-prompt**, Writing for each model), with these
+labeled blocks:
 
 - **TASK** — bring lines X–Y to life, vertical 9:16. Use each character's base image exactly as
   their keyframe: do not redraw, restyle, recrop, relight, or change the set, wardrobe, faces, or
-  composition. Keep the camera fully locked — no pans, zooms, push-ins, tilts, or shake. Only the
+  composition. Locked-off camera, static the whole clip. Only the
   person on screen moves, in micro-movements: a natural blink rate, collarbone breathing, head
   moves of a centimeter or two, small low hand moves — nothing theatrical. Simple hard straight cuts
-  between lines, one person on screen at a time; each cut lands exactly on the incoming speaker's
-  first word, with that speaker already in subtle motion (mid-breath, mid-nod). Cut only when the
+  between lines, one person on screen at a time; each cut lands on the second the incoming line
+  starts, with that speaker already in subtle motion (mid-breath, mid-nod). Cut only when the
   other person actually speaks (a genuine question or interjection); reactions stay off screen.
   Consecutive lines from the same speaker run as one continuous locked shot, never a jump cut.
-- **AUDIO** — no music. Only the voices plus natural sound (soft breaths before and after lines, a
+- **AUDIO** — the audio policy, then the voices plus natural sound (soft breaths before and after lines, a
   chair creak, fabric near the mic); room tone runs unbroken across every cut. Brisk pacing, no dead
   air — each line begins on the tail of the previous one. Hold each voice exactly consistent.
 - **VOICES** — step 3's voice-design block, **verbatim and identical in every clip**, saying which
-  character is which. Identical wording keeps the voices from drifting between clips.
+  character is which.
 - **SHOTS** — per line: who is on screen, their exact expression and gesture, and the exact spoken
-  line. **Anchor each beat to a word**: the palm turns up on "gave away", the eyes drop on "bored of
-  it". Expressions move **with** the words and relax as the line ends — never hold, grow, or freeze a
+  line, timed in seconds (`3-6s:`) with the line as `MAYA's line (amused): {…}`. **Anchor each beat
+  to a second**, never to a word: the palm turns up at 4s, the
+  eyes drop at 5s. Expressions move **with** the words and relax as the line ends — never hold, grow, or freeze a
   smile after a line; end every shot mid-energy. State once that **no gesture, sound, or expression
   repeats anywhere in the clip**. Cue interruptions (cut off mid-word) with the barging-in voice
-  starting a beat before the cut — the one exception to the cut-on-first-word rule.
+  starting a beat before the cut — the one exception to cutting where the line starts.
 - **REACTIONS** — for **both** people: whoever is off screen reacts under the other's lines (a soft
-  "mhm", a small laugh, a breath, a chair creak), each named to the exact word it lands on. Write it
+  "mhm", a small laugh, a breath, a chair creak), each at the second it lands on. Write it
   rich; never skip it.
 
 Keep prompts tight, per **write-prompt**'s "How a model reads a prompt". Spend the words on the
@@ -177,14 +154,13 @@ node tools/generate-video.mjs \
   --prompt-file <clip>.txt \
   --image <host-base>.png --image <guest-base>.png \
   --model seedance-2.5 \
-  --aspect 9:16 --resolution 480p --duration <within the model's cap> \
+  --aspect 9:16 --duration <within the model's cap> \
   --out workspaces/<WS>/<Brand>/outputs/<ad-name>/clips/<clip>.mp4 --timeout 600
 ```
 
 - `--image`: the base image of each character who speaks in that clip.
-- Sound stays on (no `--no-audio`); the prompt says no music.
+- Sound stays on (no `--no-audio`); the audio policy rules out music.
 - **Always pass `--model seedance-2.5`**.
-- Resolution: AGENTS.md, Video.
 - Check each clip silently with `ffprobe` (duration, streams, audio present); no frame pulls unless
   the user asks.
 
@@ -197,9 +173,7 @@ The clips carry no music and no on-screen product; both go in during the edit. T
   wanted (**caption-video**, **add-music**).
 - **Hand off to an editor:** **write-handoff** (Editor handoff).
 
-The ad's record (AGENTS.md) holds the concept, script, clip prompts + params and the final output.
-Index refresh and R2 push: AGENTS.md; a final cut rendered here needs `--originals` (**edit-video**,
-Export).
+Record, index and R2 push: AGENTS.md (a final cut rendered here: **edit-video**, Export).
 
 ## Naming
 

@@ -47,8 +47,7 @@ Written to `inputs/`.
   tried before (what they liked, what let them down); end with the exact recurring words and
   phrases customers use for the problem and the product.
 
-**`[product]-personas.md`** and **`[product]-angles.md`** — ≥5 of each to start
-(**ideate-personas-angles**).
+**`[product]-personas.md`** and **`[product]-angles.md`** — seeded by **ideate-personas-angles**.
 
 **`DESIGN.md`** (brand-level) — the brand's look and feel, which every image, video and doc follows,
 in the DESIGN.md format (github.com/google-labs-code/design.md). Exact values go in the front
@@ -75,5 +74,5 @@ omitted: [rounded, spacing]
 - **Motion & Video** — pacing, transitions, caption look.
 - **Do's and Don'ts**.
 
-**`products.json`** (brand-level) — one entry per SKU:
-`{ "name": canonical full name (no abbreviations), "aliases": ["ASG", …], "look": "packaging colors, wrapper text, shape, distinguishing marks" }`. Read by **catalog-media** and **search-media**. When a name is said differently than it's spelled, use `{ "products": [...], "vocabulary": ["Acme (said \"Ack-mee\")"] }`. When known people (founder, recurring creators) are obvious, also seed `inputs/media/_catalog/people.json` — `{ "name", "description" }`, the description being stable physical traits (age range, build, skin tone, hair, face).
+**`products.json`** (brand-level), plus `inputs/media/_catalog/people.json` when known people (founder,
+recurring creators) are obvious — format: **catalog-media**.

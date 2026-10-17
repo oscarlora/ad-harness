@@ -32,14 +32,8 @@ const HELP = `sync-brand.mjs — mirror a brand to/from its workspace's R2 bucke
 
 const CUSTOM = '_custom';
 
-function walk(dir, out = []) {
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const fp = join(dir, e.name);
-    if (e.isDirectory()) walk(fp, out); else out.push(fp);
-  }
-  return out;
-}
+const walk = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true, withFileTypes: true }) : [])
+  .filter((e) => !e.isDirectory()).map((e) => join(e.parentPath, e.name));
 
 const isCatalog = (rel) => rel.includes('/_catalog/');
 const isBrandKit = (rel) => rel.startsWith('inputs/media/brand/');
@@ -245,6 +239,7 @@ async function remove(path, ref) {
 }
 
 async function presign(path, ref, expires) {
+  if (!ref) usage(HELP);
   const { r2, scopes } = requireR2(path, true);
   const brand = scopes.find((s) => s.kind === 'brand');
   if (!brand) { console.error('--presign takes a brand dir'); process.exit(1); }
@@ -340,6 +335,6 @@ if (!path) usage(HELP);
 if (a.pull) await pull(path, !!a.originals, !!a.force);
 else if (a.push) await push(path, !!a.originals, !!a.force);
 else if (a.remove) await remove(path, a.remove === true ? a._[1] : a._[0]);
-else if (a.presign) await presign(path, a._[0] || (a.presign !== true ? a.presign : null), a.expires ? +a.expires : 3600);
+else if (a.presign) await presign(path, a.presign === true ? a._[1] : a._[0], a.expires ? +a.expires : 3600);
 else if (a.status) await status(path);
 else usage(HELP);

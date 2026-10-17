@@ -16,7 +16,8 @@ A song uses its Suno timing file (`<out>.timing.json` from `tools/edit-song.py`,
 
 - Words run on the **timeline clock**: a voiceover placed at 0 already is; otherwise transcribe an
   export of the cut.
-- Word times come from local Whisper (`whisper-cli`, installed by setup). **No kie key** for the
+- Words and their times come from local Whisper (`whisper-cli`, installed by setup); they replace
+  Gemini's transcript text. **No kie key** for the
   transcript (the tool exits with a SKIP)? Use line-level timing: find the speech bounds
   with `ffmpeg`'s `silencedetect`, spread the script's lines across them as caption lines without
   word times, and tell the user the timings are approximate.
@@ -38,7 +39,7 @@ Then fix by hand:
 
 ## 3. Style
 
-- **Default:** Inter Bold, white with a black outline, lower-center (`y` about 1250 on 1920);
+- **Default:** Inter Bold, white with a black outline, lower-center (center `y` about 1150 on 1920);
   deviate only with a reason. Any Google font by name (`Archivo Black` for a heavier look).
 - **Karaoke / lyric:** `active` styles the word being said (`color`, `scale` 1.2–1.3), `upcoming`
   the words still to come (`opacity` 0.5; 0 reveals them word by word); `enter: "pop"` per line.

@@ -111,9 +111,10 @@ export class Media {
     return this.images.get(key);
   }
 
-  // Decoded sound of a file (an audio file or a video's track), shared by preview and export.
-  sound(src, ctx) {
-    const key = this.url(src);
+  // Decoded sound of a file (an audio file or a video's track), shared by preview and export. At a rate other
+  // than 1 it's the server's pitch-kept copy at that speed (tempo=), so source time t sits at t / rate.
+  sound(src, ctx, rate = 1) {
+    const u = this.url(src), key = rate === 1 ? u : `${u}${u.includes('?') ? '&' : '?'}tempo=${rate}`;
     if (!this.audio.has(key)) {
       const p = (async () => {
         const r = await fetch(key);

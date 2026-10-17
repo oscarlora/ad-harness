@@ -1,38 +1,71 @@
 ---
 name: review-ugc-footage
-description: Review a creator's delivered UGC footage against the script before editing — ingest it, confirm every scene is there, each line says the scripted message, framing fits the safe zones and the product reads right, then give the user an approve-or-reshoot verdict, prepare the clips and lay out a review cut per hook, B-roll on its lines, in Studio. Use when a creator sends their footage (an Air, Drive or folder link) or the user asks whether a delivery is good to approve.
+description: Review a creator's delivered UGC footage against the script before editing — download it, transcribe each clip and check every scene is there, says the scripted message, fits the safe zones and shows the product right, lay it out on the ad's Footage step in Studio with an approve-or-reshoot verdict, then on approval go straight to the edit and catalog the approved clips. Use when a creator sends their footage (an Air, Drive or folder link) or the user asks whether a delivery is good to approve.
 ---
 
 # Review UGC footage
 
-## 1. Ingest
+Nothing is cataloged or uploaded before the user approves; only the transcripts are paid for.
 
-Run **catalog-media** on the delivery link (`--source-type brand`, `--source-name "Ad <ID> <concept>
-creator footage"`). Each record keeps the clip's original file name (the scene, e.g. `Body 3`) and a
-transcript; map every scene to its record.
+## 1. Download
+
+```
+node tools/pull-media.mjs --source "<delivery link>" --out workspaces/<WS>/<Brand>/outputs/<ad>/footage
+```
+
+Straight from the link (Air short links work); no dry run. Files keep the creator's names (`Body 3.mov`).
+A reshot take replaces the old one: delete the old file.
 
 ## 2. Check against the script
 
-Read the ad's brief (`outputs/<ad>/<ID>_V1_….md`) and check each scene:
+Per clip, all clips at once: `node tools/transcribe-media.mjs --in "<clip>" --words` (writes
+`<clip>.transcript.json` beside it), a sheet of its start, middle and end frames (ffmpeg) with the 4:5
+crop and the Reels UI zone drawn (zones in **edit-video**, Text), and its levels (`ffmpeg -af
+volumedetect`). Then read the brief (`outputs/<ad>/<ID>_V1_….md`): every hook, body line, CTA and
+B-roll needs a clip. Run every clip through the checklist, the same one Studio shows:
 
-- **All there:** every hook, body line, CTA and B-roll in the brief has a clip.
-- **Lines:** each says the scripted line or the same message in the creator's words; flag a changed
-  meaning, a missing claim, or a claim that isn't in the script.
-- **Framing:** a contact sheet of each clip (start, middle, end) with the safe area drawn — face and
-  product inside the 4:5 crop and above the Reels UI (zones in **edit-video**, Text).
-- **Product:** the label reads the right way round (front cameras mirror it) and in focus.
-- **Start and end:** no line cut off at the start (listen for a missing first word; transcribe
-  with `tools/transcribe-media.mjs --words`), no line said twice across clips.
+1. **line** — says the scripted line, or the same message in the creator's words. Fails on a changed
+   meaning, a missing or added claim, a line cut off at the start, or one said twice across clips.
+2. **action** — does the scripted action, or one that reads the same.
+3. **framing** — face and product inside the 4:5 crop, above the Reels buttons; the label reads the
+   right way round (front cameras mirror it) and in focus.
+4. **audio** — clear and easy to understand: every word transcribed, no clipping (max under 0 dB), no
+   noise over the voice.
+5. **file name** — named after the scene, as the brief asks. Studio checks this one.
 
-Give the user a short verdict — good to approve, or what needs a reshoot — with each issue and its
-fix. Don't edit before they answer.
+## 3. Verdict
 
-## 3. Prepare the clips
+Write `outputs/<ad>/footage.json`; Studio shows it on the ad's **Footage** step:
 
-Copy each clip into `outputs/<ad>/clips/` named by scene (`hook1.mp4`, `body01.mp4`, `cta.mp4`) and
-transcribe it with `--words`. Check every product shot, B-roll and end card included, on a frame
-where the label faces the camera. If any label is mirrored, flip **every** clip of that camera
-(`ffmpeg -vf hflip`), so the creator never jumps sides between cuts.
+```json
+{
+  "clips": {
+    "Hook 1": {
+      "file": "footage/Hook 1.mov",
+      "transcript": "footage/Hook 1.transcript.json",
+      "checks": {
+        "line": { "ok": false, "note": "Said “most women”, which overclaims. Reshoot.", "reshoot": true },
+        "action": { "ok": true }, "framing": { "ok": true }, "audio": { "ok": true }
+      }
+    }
+  }
+}
+```
+
+Keys are the brief's Scene names (`Hook 1`, `Body 3`, `B-roll 2`); paths are relative to the ad
+folder. A note is the check's short verdict, naming every difference, not repeating what was asked:
+
+- A failed check gets a note; add `reshoot: true` when the edit can't fix it.
+- A passed check that differs gets a note ending "Still works." One that matches needs none.
+
+In chat: good to approve, or which scenes need a reshoot.
+
+The user comments on each check (a comment's `quote` is the scene, `check` the point), ticks or
+unticks it, Approves a scene (ticks all) or calls a Reshoot (a scene note reading `Approved` or
+`Reshoot: <what to change>`), all through **edit-video**'s review loop. Act on each comment (e.g. keep
+a line in the edit), set that check's tick in `ticks` when the comment settles it ("this is ok" →
+`true`), and reply; leave the check's note as it is. List the reshoots for the creator, with any file to rename.
+Don't edit before every scene is approved, or the user says yes in chat.
 
 Fixes the edit can make, so they need no reshoot:
 
@@ -41,13 +74,19 @@ Fixes the edit can make, so they need no reshoot:
 - **Repeats and filler openers** ("Let me explain" twice, a stray "Okay"): cut.
 - **A missing, clipped or mumbled word:** the creator's cloned voice re-says it (`tools/fix-voice.mjs patch`,
   **generate-voice**) over B-roll, or over their own face when it's only a word or two.
+- **A mirrored label:** flip **every** clip of that camera in place (`ffmpeg -vf hflip` into a temp
+  file, then replace the clip), so the creator never jumps sides between cuts.
 
-## 4. Review cut
+## 4. Edit
 
-One edit document (**edit-video**) per hook: `edit.json` with Hook 1, then hook versions on it
-(`edit-v2.json` with Hook 2, and so on), plus one for each alternate the brief gives a hook (e.g. its B-roll). Each is a Video
-track with the hook, the bodies and the CTA back to back, every talking clip from its first word to
-its last with the fixes above applied, and a muted B-roll track above it with each shot over the
-line the brief's storyboard gives it (two shots on one line split it at a word near the middle).
-No text, captions or music. Show it in Studio and wait for the user's go. Then build the real edit on it in **edit-video** (plain style
-unless the brief asks for more).
+Then build the edit in **edit-video** straight away: one document per hook (`edit.json` with Hook 1, hook versions on it for the
+others), from the files in `footage.json` (`tighten` reuses their transcripts), with the fixes above,
+what the user's comments asked for, and the brief's storyboard (style: **edit-video**, Pick the style).
+
+## 5. Catalog
+
+Add the footage to the media library as a tracked background command, while you edit:
+
+```
+node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> --source workspaces/<WS>/<Brand>/outputs/<ad>/footage
+```

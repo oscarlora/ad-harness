@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { inferWorkspace, parseArgs, findBrandDir, die, markSent, mimeOf, typeOf, usage } from './lib/catalog.mjs';
-import { notionClient, resolveBoard as findBoard, boardQuery, titleOf, allPages } from './lib/notion.mjs';
+import { notionClient, resolveBoard, boardQuery, titleOf, allPages, getSchema, findProp } from './lib/notion.mjs';
 
 const HELP = `upload-to-notion.mjs — upsert one ad/idea (matched by Name) on a brand's Notion Ads Board
 
@@ -24,11 +24,6 @@ if (!positional.length) usage(HELP);
 const isNextId = positional[0] === 'next-id';
 const { headers: H, api } = notionClient(isNextId ? positional[1] : positional[0] && inferWorkspace(positional[0]));
 const rt = (s) => [{ type: 'text', text: { content: String(s) } }];
-const resolveBoard = (q) => findBoard(api, q);
-
-const getSchema = async (dbId) => (await api(`/databases/${dbId}`)).properties || {};
-const titlePropName = (schema) => Object.entries(schema).find(([, d]) => d.type === 'title')?.[0];
-const findByType = (schema, name, type) => Object.entries(schema).find(([n, d]) => n.toLowerCase() === name && (!type || d.type === type))?.[0];
 
 // logical fields → candidate board-property names (case-insensitive)
 const FIELDS = [
@@ -75,10 +70,10 @@ if (isNextId) {
   const [, workspace, ...rest] = positional;
   const name = rest.join(' ');
   if (!name) usage(HELP);
-  const b = await resolveBoard(boardQuery({ brand: name }, findBrandDir(workspace, name)));
+  const b = await resolveBoard(api, boardQuery({ brand: name }, findBrandDir(workspace, name)));
   if (!b.id) die(`Could not uniquely match a board for "${name}". Candidates: ${b.candidates.map(titleOf).join(', ') || '(none)'}. Pin it in inputs/uploads.json (run --list on a spec).`);
-  const schema = await getSchema(b.id);
-  const idProp = findByType(schema, 'id', 'number') || 'ID';
+  const schema = await getSchema(api, b.id);
+  const idProp = findProp(schema, 'id', 'number') || 'ID';
   console.log(maxOf(await usedIds(b.id, idProp)) + 1);
   process.exit(0);
 }
@@ -91,7 +86,7 @@ if (typeof spec.id === 'string' && spec.id !== 'auto') {
   spec.id = Number(spec.id);
 }
 const query = boardQuery(spec, specPath);
-const board = await resolveBoard(query);
+const board = await resolveBoard(api, query);
 
 // --- list mode ---
 if (LIST) {
@@ -100,7 +95,7 @@ if (LIST) {
   for (const d of board.candidates) {
     const mark = d.id === board.id ? '* ' : '  ';
     console.log(`${mark}${titleOf(d)}  (${d.id})`);
-    const schema = d.properties || (await api(`/databases/${d.id}`)).properties || {};
+    const schema = d.properties || await getSchema(api, d.id);
     for (const [n, def] of Object.entries(schema)) console.log(`      - ${n} (${def.type})`);
   }
   console.log(board.id
@@ -116,9 +111,9 @@ if (!board.id) {
   console.error('Pin it in inputs/uploads.json (run --list to inspect).');
   process.exit(1);
 }
-const schema = await getSchema(board.id);
-const titleProp = titlePropName(schema);
-const idProp = findByType(schema, 'id', 'number');
+const schema = await getSchema(api, board.id);
+const titleProp = findProp(schema, null, 'title');
+const idProp = findProp(schema, 'id', 'number');
 const pmap = spec.propertyMap || {};
 const missing = (spec.images || []).filter((f) => !existsSync(f));
 if (missing.length) die(`Missing local file(s): ${missing.join(', ')}`);
@@ -210,7 +205,7 @@ if (existing) {
   await api(`/pages/${existing.id}`, 'PATCH', { properties: props, cover: null });
   const oldIds = (await allPages(api, `/blocks/${existing.id}/children`)).map((b) => b.id);
   if (children.length) await api(`/blocks/${existing.id}/children`, 'PATCH', { children });
-  for (const bid of oldIds) await fetch(`https://api.notion.com/v1/blocks/${bid}`, { method: 'DELETE', headers: H });
+  for (const bid of oldIds) await api(`/blocks/${bid}`, 'DELETE');
   page = await api(`/pages/${existing.id}`);
   console.log('UPDATED existing page');
 } else {

@@ -32,7 +32,4 @@ they've tried and why it fell short → what actually works, said plainly → on
 scenes the persona can feel → a customer quote with a number or timeframe → a soft call to action.
 For colder personas, keep the product out of the first third.
 
-## Where it lives
-
-The locked copy goes in the ad's record as `meta: { headline, primary_text }`
-(`outputs/json/[ID].json`, schema in `tools/record-ad.mjs`).
+The locked copy goes in the ad's record (`meta`).

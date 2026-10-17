@@ -1,32 +1,20 @@
-// Board data: ad records plus batch-plan slots not made yet, with persona details and renders.
+// Board data: ad records plus batch-plan slots not made yet, each with its persona's details and its files.
 // Returned paths are brand-relative (POSIX), for the /file route.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { isSeparator, tableCells } from '../../components/workflow/Markdown.js';
-import { readJson } from './brands.js';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { mediaType } from '../client/api.js';
+import { isSeparator, tableCells } from '../markdown.js';
 import { repoRoot } from './root.js';
+import { catalogLib } from './tools.js';
 
-const readJsonDir = (dir) => {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => readJson(join(dir, f), null))
-    .filter(Boolean);
-};
-
-const readAds = (outputs) => readJsonDir(join(outputs, 'json')).sort((x, y) => (x.id || 0) - (y.id || 0));
-const readPlans = (outputs) => readJsonDir(join(outputs, 'batches'));
-
-// ---- persona details (the `## Personas` table in inputs/*research.md) ----
+// ---- persona details (the table in inputs/<product>-personas.md) ----
 // Table names ("The Morning Routine") vs record slugs ("MorningRoutine"): drop "The ", compare alphanumerics, digits as words.
 const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
 const norm = (s) => String(s || '').toLowerCase().replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
 const wordy = (s) => s.replace(/\d/g, (d) => WORDS[+d]);
 
 function parsePersonaTable(md) {
-  const m = md.match(/^##\s+Personas\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m);
-  if (!m) return [];
-  const rows = m[1].split('\n').filter((l) => l.trim().startsWith('|')).map(tableCells);
+  const rows = md.split('\n').filter((l) => l.trim().startsWith('|')).map(tableCells);
   if (rows.length < 3) return [];
   const heads = rows[0].map((h) => h.toLowerCase());
   const KEY = { name: 'name', age: 'age', gender: 'gender', 'awareness stage': 'awareness', 'physical pain': 'pain', 'emotional pain': 'feels', 'desired outcome': 'wants', objection: 'but' };
@@ -41,7 +29,7 @@ function personas(brandDirAbs) {
   const out = [];
   const inputs = join(brandDirAbs, 'inputs');
   try {
-    for (const f of readdirSync(inputs).filter((f) => /research\.md$/i.test(f))) {
+    for (const f of readdirSync(inputs).filter((f) => /-personas\.md$/i.test(f))) {
       try { out.push(...parsePersonaTable(readFileSync(join(inputs, f), 'utf8'))); } catch {}
     }
   } catch {}
@@ -65,13 +53,24 @@ function personaDetail(list, slug) {
 
 const posix = (p) => p.split(sep).join('/');
 
-// A record's render: the first existing generation.output(s) path (repo-relative or absolute), as { abs, mtime }.
-function renderOf(rec) {
-  for (const p of [rec?.generation?.output, ...(rec?.generation?.outputs || [])].filter(Boolean)) {
-    const abs = resolve(repoRoot(), p);
-    try { const st = statSync(abs); if (st.isFile()) return { abs, mtime: st.mtimeMs }; } catch {}
+// The ad's files: the ones its record names, else its exported ones (final/, then the folder: <id>_V1_…), one per
+// file name. [{ abs, mtime, version, place }]: version from "<id>_V2_…" or an upload name ("ID-2_STORY.png",
+// whose place is Story), else the file's own name; the record's first file is the one shown.
+function filesOf(rec, folderAbs) {
+  const named = [rec?.generation?.output, ...(rec?.generation?.outputs || [])].filter(Boolean).map((p) => resolve(repoRoot(), p));
+  const exported = named.length || !folderAbs ? [] : [join(folderAbs, 'final'), folderAbs].flatMap((dir) => {
+    try { return readdirSync(dir).filter((n) => /^\d+_V\d+_/.test(n) && ['image', 'video'].includes(mediaType(n))).map((n) => join(dir, n)); } catch { return []; }
+  });
+  const seen = new Set(), out = [];
+  for (const abs of [...named, ...exported]) {
+    const name = basename(abs);
+    if (seen.has(name)) continue;
+    try { if (!statSync(abs).isFile()) continue; } catch { continue; }
+    seen.add(name);
+    const m = /_V(\d+)_/.exec(name) || /-(\d+)_([A-Z]+)\.\w+$/.exec(name);
+    out.push({ abs, mtime: statSync(abs).mtimeMs, version: m ? `V${m[1]}` : name.replace(/\.\w+$/, ''), place: m?.[2] ? m[2][0] + m[2].slice(1).toLowerCase() : '' });
   }
-  return null;
+  return out;
 }
 
 // Brand-relative form of a record path (for the file route); falls back to the raw string.
@@ -89,24 +88,19 @@ function promptOf(rec) {
   return typeof p === 'string' ? p : JSON.stringify(p, null, 2);
 }
 
-// Records tagged with their batch, plus a planned row for each plan slot with no record yet.
-function adsWithPlan(outputs, plans) {
-  const recs = readAds(outputs);
+// Records tagged with their batch, plus a planned row for each plan slot with no record yet (plan format: plan-batch).
+function adsWithPlan(recs, plans) {
   const byId = new Map(recs.map((r) => [String(r.id), r]));
   const planned = [];
   for (const plan of plans) {
     for (const slot of plan.slots || []) {
       const existing = byId.get(String(slot.id));
-      if (existing) { existing.batch = plan.name; if (slot.angleSource) existing.angleSource = slot.angleSource; continue; }
+      if (existing) { existing.batch = plan.name; continue; }
       planned.push({
         id: slot.id,
         status: 'in-progress',
         batch: plan.name,
-        concept: { product: plan.subject || plan.defaults?.product || '', persona: slot.persona || '', angle: slot.angle || '', format: slot.format || '', imageType: slot.imageType || '' },
-        angleSource: slot.angleSource || '',
-        refs: slot.refs || [],
-        copy: slot.copy || {},
-        design: slot.design || '',
+        concept: { product: plan.product || '', persona: slot.persona || '', angle: slot.angle || '', format: slot.format || '' },
         generation: null,
       });
     }
@@ -119,33 +113,30 @@ export function adFolders(outputs) {
   try { return readdirSync(outputs, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+_/.test(d.name)).map((d) => d.name); } catch { return []; }
 }
 
-// Records may hold objects or arrays where strings are expected; flatten them for React.
-export function displayText(v) {
-  if (v == null) return '';
-  if (typeof v === 'string') return v;
-  if (Array.isArray(v)) return v.map(displayText).join(' · ');
-  if (typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k}: ${displayText(x)}`).join(' · ');
-  return String(v);
-}
-
-export function boardData(brandDirAbs) {
+export async function boardData(brandDirAbs) {
+  const { readRecords } = await catalogLib();
   const outputs = join(brandDirAbs, 'outputs');
-  const plans = readPlans(outputs);
+  const plans = readRecords({ json: join(outputs, 'batches') });
   const personaList = personas(brandDirAbs);
   const folders = adFolders(outputs);
-  const ads = adsWithPlan(outputs, plans).map((r) => {
+  const ads = adsWithPlan(readRecords({ json: join(outputs, 'json') }), plans).map((r) => {
+    const folder = folders.find((f) => f.startsWith(`${r.id}_`)) || '';
     const ad = {
       ...r,
-      folder: folders.find((f) => f.startsWith(`${r.id}_`)) || '', // links the ad to its Workflow page
+      folder, // links the ad to its Workflow page
       refs: (r.refs || r.generation?.refs || []).map((ref) => brandRel(brandDirAbs, ref)),
       prompt: promptOf(r),
-      design: displayText(r.design),
-      copy: Object.fromEntries(Object.entries(r.copy || {}).map(([k, v]) => [k, displayText(v)])),
     };
-    const render = renderOf(r);
-    if (render) {
-      ad.img = posix(relative(brandDirAbs, render.abs));
-      ad.imgVersion = render.mtime; // cache-buster
+    const files = filesOf(r, folder && join(outputs, folder));
+    if (files[0]) {
+      ad.img = posix(relative(brandDirAbs, files[0].abs));
+      ad.imgVersion = files[0].mtime; // cache-buster
+    }
+    // Versions in order (V1, V2 …), each with its files by place (Feed, Story, or one file with no place).
+    if (files.length > 1) {
+      const groups = new Map();
+      for (const f of files) groups.set(f.version, [...(groups.get(f.version) || []), { place: f.place, img: posix(relative(brandDirAbs, f.abs)), v: f.mtime }]);
+      ad.versions = [...groups].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true })).map(([label, fs]) => ({ label, files: fs }));
     }
     const pd = personaDetail(personaList, r.concept?.persona);
     if (pd) ad.personaDetail = pd;

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // transcribe-media.mjs — any audio/video clip -> transcript JSON (lib/transcribe.mjs).
-// A library item reuses its catalog transcript. Word timings run locally (whisper.cpp). Without a kie
-// key for a transcript it exits 3 (SKIP).
+// A file in the brand's library (same bytes, anywhere under the brand) reuses its catalog transcript.
+// --words: local Whisper's words (whisper.cpp) replace Gemini's text, the final transcript, written back
+// to the file's record when it has none yet. Without a kie key for a transcript it exits 3 (SKIP).
 
 import { writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { typeOf, inferWorkspace, inferBrand, brandDirFrom, mediaDirFrom, catalogPaths, readRecords, parseArgs, die, usage, REPO_ROOT } from './lib/catalog.mjs';
+import { dirname, join, resolve } from 'node:path';
+import { typeOf, inferWorkspace, inferBrand, brandDirFrom, catalogPaths, readRecords, mergeRecord, hashFile, parseArgs, die, usage, REPO_ROOT } from './lib/catalog.mjs';
 import { analysisKeys, spend, spendText, ANALYSIS_MODEL } from './lib/analyze.mjs';
 import { audioTrack, transcribeAudio, toTranscript, vocabulary, alignWords } from './lib/transcribe.mjs';
 
@@ -18,17 +19,20 @@ Required:
 
 Optional:
   --out <path>             Output JSON (default: alongside the input as <name>.transcript.json)
-  --words                  Add word timings (for captions and cuts), from local Whisper
+  --words                  Words and their timings from local Whisper (for captions and cuts),
+                           replacing Gemini's text
   --workspace <WS>         Workspace whose kie key to use when the input isn't under workspaces/<WS>/
 
 Transcripts: Gemini on kie.ai (<WS>_KIE_API_KEY; optional fallback when kie fails: <WS>_AI_GATEWAY_API_KEY).
 
-Output: { model, language, has_speech, text, sound?, segments:[{start,end,speaker,text}],
+Output: { model, language, text, segments:[{start,end,speaker,text}],
           words?:[{start,end,word,speaker}], words_model? }`;
 
-function libraryRecord(input) {
-  if (!/[\\/]inputs[\\/]media[\\/]/.test(input)) return null;
-  return readRecords(catalogPaths(mediaDirFrom(input))).find((r) => r.file?.name === basename(input)) || null;
+async function libraryRecord(input, paths) {
+  const recs = readRecords(paths);
+  if (!recs.length) return null;
+  const sha = await hashFile(input);
+  return recs.find((r) => r.sha256 === sha) || null;
 }
 
 async function main() {
@@ -43,30 +47,33 @@ async function main() {
 
   const ws = a.workspace ? String(a.workspace) : inferWorkspace(input);
   const keys = analysisKeys(a.workspace ? join(REPO_ROOT, 'workspaces', ws, '_') : input);
-  const media = join(brandDirFrom(input), 'inputs', 'media');
+  const paths = catalogPaths(join(brandDirFrom(input), 'inputs', 'media'));
 
   let result;
-  const rec = libraryRecord(input);
-  if (rec?.audio_transcript?.segments?.length) {
+  const rec = await libraryRecord(input, paths);
+  if (rec?.transcript?.segments?.length) {
     console.error(`transcript from catalog record ${rec.id}`);
-    const t = rec.audio_transcript;
-    result = { model: t.model || rec.analysis?.model || '', has_speech: true, ...t, sound: rec.audio_description };
+    result = rec.transcript;
   } else {
     if (!keys.kie) { console.error(`SKIP: no kie key — add ${(ws || '<WS>').toUpperCase()}_KIE_API_KEY to .env (or pass --workspace)`); process.exit(3); }
     const track = audioTrack(input);
     try {
-      if (!track || track.silent) result = { model: ANALYSIS_MODEL, language: '', has_speech: false, text: '', sound: track ? 'Silent — no audible sound.' : 'No audio track.', segments: [] };
+      if (!track || track.silent) result = { model: ANALYSIS_MODEL, language: '', text: '', segments: [] };
       else {
-        const snd = await transcribeAudio(keys, track, { brand: inferBrand(input), vocab: vocabulary(media) });
-        const t = toTranscript(snd, track.duration) || { language: snd.language || '', text: '', segments: [], model: snd.model };
-        result = { ...t, has_speech: !!t.segments.length, sound: snd.sound };
+        const snd = await transcribeAudio(keys, track, { brand: inferBrand(input), vocab: vocabulary(paths.media) });
+        result = toTranscript(snd, track.duration) || { language: snd.language || '', text: '', segments: [], model: snd.model };
       }
     } finally { if (track) rmSync(track.dir, { recursive: true, force: true }); }
   }
 
   if (a.words) {
     if (!result.segments.length) result = { ...result, words: [], words_model: null };
+    else if (result.words?.length) console.error('words from the catalog record');
     else result = await alignWords({ file: input, transcript: result });
+    if (rec && result.words.length && !rec.transcript?.words?.length) {
+      mergeRecord(paths, { id: rec.id, transcript: result });
+      console.error(`record ${rec.id}: transcript replaced with Whisper's`);
+    }
   }
 
   mkdirSync(dirname(out), { recursive: true });

@@ -3,19 +3,19 @@
 // Each saved file gets a <stem>.gen.json sidecar.
 
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { applyEnv, die, ffprobeJson, mimeOf, parseArgs, usage } from './lib/catalog.mjs';
+import { die, ffprobeJson, mimeOf, parseArgs, usage } from './lib/catalog.mjs';
 import {
-  errorText, gatewayClient, kieJob, kieUpload, kieUploadAll, logGatewayWarnings, pickModel, presignRef, runProviders, saveResults, times,
-  userError, workspaceKeys, writeSidecars,
+  brandRel, envHelp, errorText, gatewayClient, kieJob, kieUpload, kieUploadAll, kieUrls, logGatewayWarnings, pickModel, presignRef, runHelp, runOpts,
+  runProviders, saveResults, times, userError, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
-
-applyEnv();
 
 const HELP = `generate-video.mjs — video ad generator (kie.ai)
 
   node tools/generate-video.mjs --prompt-file <prompt.txt> --first-frame <img> --out <clip.mp4>
   node tools/generate-video.mjs --model seedance-2.5 --image <a.png> --image <b.png> --prompt-file <p.txt> --out <clip.mp4>
+  node tools/generate-video.mjs --upgrade <seedance-480p-clip.mp4> [--out <clip-1080p.mp4>]
 
 Required:
   --prompt "<text>"        Inline prompt (max 7,000 characters on minimax-h3), OR
@@ -52,17 +52,15 @@ Optional:
                            seedance-2.5: 4-30, or auto (the model picks)
   --aspect <ratio>         minimax-h3: 21:9 16:9 4:3 1:1 3:4 9:16 (default 9:16), or adaptive with
                              references (their default); frames set the shape (no --aspect)
-                           omni: 9:16 (default) | 16:9
+                           omni: 9:16 (default, frames too) | 16:9
                            seedance-2.5: 1:1 4:3 3:4 16:9 9:16 21:9 adaptive (default)
   --no-audio               seedance-2.5 only: no generated sound
-  --num <n>                Variations (default 1)
-  --timeout <seconds>      Max wait per task (default 600)
-  --unlisted-model <id>    A kie model id outside the list, sent as-is with --model's request shape
-                           and no checks. Only with the user's yes
-  --provider kie|gateway   Force one. By default a request kie rejects before generating goes to the
-                           AI Gateway when the workspace has <WS>_AI_GATEWAY_API_KEY (seedance-2.5 only)
+  --upgrade <clip>         seedance-2.5: remake a 480p take at 1080p as the same take (same motion,
+                           timing and voice), within 7 days of it, at the 1080p rate. --out defaults
+                           to <clip>-1080p.mp4
+${runHelp(600, { gateway: ' (seedance-2.5 only)' })}
 
-Env: <WORKSPACE>_KIE_API_KEY; the workspace comes from --out.`;
+${envHelp()}`;
 
 // kie limits per model, from the docs linked in MODELS. res = our name -> kie's value.
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -115,9 +113,25 @@ function seedanceInput(base, o) {
   if (o.imageUrls.length) input.reference_image_urls = o.imageUrls;
   if (o.videoUrls.length) input.reference_video_urls = o.videoUrls;
   if (o.audioUrls.length) input.reference_audio_urls = o.audioUrls;
+  if (o.res === '480p') input.draft = true; // same price and look as a normal 480p take; keeps --upgrade open
   return [base, input];
 }
 const INPUT = { 'minimax-h3': minimaxInput, 'gemini-omni-1.1-flash': omniInput, 'seedance-2.5': seedanceInput };
+
+// The 1080p version of a Seedance 480p take, from the draft task in its sidecar.
+async function upgrade(args) {
+  const clip = String(args.upgrade);
+  const side = clip.replace(/\.[^./]+$/, '') + '.gen.json';
+  const gen = existsSync(side) ? JSON.parse(await readFile(side, 'utf8')) : {};
+  if (!gen.draftTask) die(`${clip} has no Seedance draft to upgrade (only 480p seedance-2.5 takes made on kie have one): make a fresh 1080p take instead.`);
+  if (Date.now() - Date.parse(gen.at) > 7 * 864e5) die(`${clip}'s draft is over 7 days old: make a fresh 1080p take instead.`);
+  const out = String(args.out || clip.replace(/(\.[^./]+)?$/, '-1080p.mp4'));
+  workspaceKeys(out);
+  const entry = pickModel({ model: gen.model }, 'video', 'seedance-2.5');
+  const results = await kieJob(`${entry.kie}-draft`, { draft_task_id: gen.draftTask, resolution: '1080p', output_format: 'mp4' }, runOpts(args, 600).timeout);
+  const saved = await saveResults(results, out, { fallbackExt: 'mp4' });
+  await writeSidecars(saved, { ...gen, params: { ...gen.params, resolution: '1080p' }, each: [{ upgradedFrom: brandRel(clip) }] });
+}
 
 // AI Gateway sizes for Seedance (vercel.com/docs/ai-gateway/modalities/video-generation).
 const GATEWAY_RESOLUTION = { '480p': '854x480', '720p': '1280x720', '1080p': '1920x1080' };
@@ -125,6 +139,7 @@ const GATEWAY_RESOLUTION = { '480p': '854x480', '720p': '1280x720', '1080p': '19
 async function main() {
   const args = parseArgs(process.argv.slice(2), { repeat: ['video', 'image', 'audio'], flags: ['no-audio'], help: HELP });
   for (const k of ['video', 'image', 'audio']) args[k] ||= [];
+  if (args.upgrade) return upgrade(args);
   if (!args.prompt && !args['prompt-file']) usage(HELP);
   if (!args.out) die('--out is required');
   const { W } = workspaceKeys(args.out);
@@ -150,7 +165,7 @@ async function main() {
   if (aspect && !L.aspects.includes(aspect) && !(shape === 'minimax-h3' && aspect === 'adaptive' && refs))
     die(`${shape} takes --aspect ${L.aspects.join(' ')}${shape === 'minimax-h3' ? ' (adaptive only with references)' : ''}, not ${aspect}.`);
   if (shape === 'minimax-h3' && frames && aspect) die('minimax-h3 takes no --aspect with frames: the frame sets the shape.');
-  if (!aspect && ((shape === 'minimax-h3' && !frames && !refs) || (shape === 'gemini-omni-1.1-flash' && !firstFrame))) aspect = '9:16';
+  if (!aspect && ((shape === 'minimax-h3' && !frames && !refs) || shape === 'gemini-omni-1.1-flash')) aspect = '9:16'; // omni would crop a frame to its 16:9 default
 
   if (frames && refs) die('A clip takes --first-frame/--last-frame OR --image/--video/--audio references, not both.');
   if (lastFrame && !firstFrame && !L.lastAlone) die(`${shape} takes --last-frame only together with --first-frame.`);
@@ -171,9 +186,9 @@ async function main() {
     videoWindow = { start, ends: Math.min(len, start + 10) };
   }
 
-  const num = Math.max(1, parseInt(args.num || '1', 10));
-  const timeout = parseInt(args.timeout || '600', 10);
+  const { num, timeout } = runOpts(args, 600);
   const base = { prompt, aspect, duration, audio, videoWindow };
+  let each = []; // per saved file: its draft task, for --upgrade
 
   async function runKie() {
     const o = {
@@ -182,7 +197,11 @@ async function main() {
       firstFrameUrl: firstFrame && await kieUpload(firstFrame), lastFrameUrl: lastFrame && await kieUpload(lastFrame),
     };
     const [model, input] = INPUT[shape](entry.kie, o);
-    return times(num, () => kieJob(entry.unlisted ? entry.kie : model, input, timeout));
+    const takes = await times(num, () => kieJob(entry.unlisted ? entry.kie : model, input, timeout, {
+      pick: (d, taskId) => kieUrls(d)?.map((url) => ({ url, taskId })),
+    }));
+    if (input.draft) each = takes.map((t) => ({ draftTask: t.taskId }));
+    return takes.map((t) => t.url);
   }
 
   // Seedance 2.5 only; the Gateway takes refs as URLs.
@@ -223,6 +242,7 @@ async function main() {
     tool: 'generate-video', model: entry.name, provider, prompt,
     params: { aspect, resolution, duration: duration === -1 ? 'auto' : duration, audio },
     refs: refList.filter(([, p]) => p).map(([role, path]) => ({ role, path })),
+    each,
   });
 }
 

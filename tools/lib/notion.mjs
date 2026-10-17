@@ -1,12 +1,12 @@
 // notion.mjs — shared Notion helpers: token, API caller, paging, Ads Board resolution.
 // Optional per workspace: <WS>_NOTION_TOKEN in .env.
-import { loadEnv, readUploads } from './catalog.mjs';
+import { readUploads, wsKey } from './catalog.mjs';
 
 // Exits with setup help when the workspace has no token.
 export function notionClient(workspace) {
   const W = (workspace || '').toUpperCase();
   if (!W) { console.error('Could not determine the workspace (need a path under workspaces/<Workspace>/<Brand>/, or pass <Workspace>).'); process.exit(1); }
-  const token = loadEnv()[`${W}_NOTION_TOKEN`];
+  const token = wsKey(W, 'NOTION_TOKEN');
   if (!token) { console.error(`Workspace ${W} has no Notion configured (set ${W}_NOTION_TOKEN in .env). Notion is only for workspaces that review on Notion.`); process.exit(1); }
   const headers = { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' };
   const api = (p, method = 'GET', body) =>
@@ -32,6 +32,10 @@ export async function allPages(api, path, body) {
 
 export const plain = (rt) => (rt || []).map((t) => t.plain_text).join('');
 export const titleOf = (d) => plain(d.title);
+
+// A board's properties ({ <name>: { type, … } }), and the first one with this lower-case name and/or type.
+export const getSchema = async (api, dbId) => (await api(`/databases/${dbId}`)).properties || {};
+export const findProp = (schema, name, type) => Object.entries(schema).find(([n, d]) => (!name || n.toLowerCase() === name) && (!type || d.type === type))?.[0];
 
 // The board lookup for a brand: the spec's board/boardId, else the one pinned in the brand's
 // inputs/uploads.json, else a search on spec.brand. `brandPath` is any path inside the brand, or null.

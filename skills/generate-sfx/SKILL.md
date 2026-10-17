@@ -5,8 +5,8 @@ description: Generate and add sound effects for video ads with Suno Sounds throu
 
 # Generate SFX
 
-First look in the **shared library** (`workspaces/Shared/Library`, see **search-media**) for known
-meme and stock sounds. Otherwise generate with **Suno Sounds** (kie.ai) via `tools/generate-sfx.mjs`.
+Look in the libraries first (**search-media**); otherwise generate with **Suno Sounds** via
+`tools/generate-sfx.mjs`.
 
 ## Plan the cue
 
@@ -29,10 +29,8 @@ node tools/generate-sfx.mjs \
   --out workspaces/<WS>/<Brand>/outputs/<ad>/sfx/cap-click-a.mp3
 ```
 
-Each run gives two takes (`<out>`, `<out>_2`). For a loop (ambience, room tone) add `--loop`, and
-`--tempo <bpm>` / `--key <key>` to sit it with the music. Listen for invented layers, excess
-reverb, an unclear transient, and an ending that can't be cut cleanly. Approved reusable sounds go into the shared
-library (or the brand's, if brand-specific); one-off cues stay in the ad's folder.
+Loops, tempo and key: `--help`. Listen for invented layers, excess reverb, an unclear transient, and an ending that can't be cut cleanly. Approved reusable sounds go into the brand's
+media library (**catalog-media**, `--generated`); one-off cues stay in the ad's folder.
 
 ## Place
 

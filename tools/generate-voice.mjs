@@ -3,15 +3,13 @@
 // Each saved file gets a <stem>.gen.json sidecar.
 
 import { readFile } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { applyEnv, die, extForMime, parseArgs, usage } from './lib/catalog.mjs';
+import { die, parseArgs, usage } from './lib/catalog.mjs';
 import {
-  errorText, gatewayClient, kieJob, logGatewayWarnings, pickModel, runProviders, saveResults, times, userError,
-  workspaceKeys, writeSidecars,
+  envHelp, errorText, fetchResult, gatewayClient, kieJob, logGatewayWarnings, pickModel, runHelp, runOpts, runProviders, saveResults,
+  times, userError, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
-
-applyEnv();
 
 const HELP = `generate-voice.mjs — voiceover generator (kie.ai)
 
@@ -28,13 +26,7 @@ Optional:
                            Puck; 70 voices, e.g. Kore, Puck, Charon, Zephyr, Leda). A voices-file voice wins
   --voices-file <path>     Each character once (format below)
   --format <ext>           mp3 (default) | wav
-  --num <n>                Variations (default 1)
-  --timeout <seconds>      Max wait per task (default 600)
-  --unlisted-model <id>    A kie model id outside the list, sent as-is with --model's request shape
-                           and no checks. Only with the user's yes
-  --provider kie|gateway   Force one. By default a request kie rejects before generating goes to the
-                           AI Gateway when the workspace has <WS>_AI_GATEWAY_API_KEY (Gemini, one
-                           speaker only)
+${runHelp(600, { gateway: ' (Gemini, one speaker only)' })}
 
 Lines may carry Gemini tone tags in angle brackets (<laugh>, <sigh>, <short pause>, <whispers>, ...).
 
@@ -44,7 +36,7 @@ Voices file: one block per character:
   voice_name: Kore
   The description is sent as the style of each of that speaker's lines.
 
-Env: <WORKSPACE>_KIE_API_KEY; the workspace comes from --out.`;
+${envHelp()}`;
 
 const KEYS = { description: 'description', voice_name: 'voiceName' };
 
@@ -105,16 +97,9 @@ async function main() {
   const speakers = [...new Set(turns.map((t) => t.label))];
   const format = String(args.format || 'mp3').toLowerCase();
   if (!['mp3', 'wav'].includes(format)) die(`--format must be mp3 | wav (got "${format}")`);
-  const num = Math.max(1, parseInt(args.num || '1', 10));
-  const timeout = parseInt(args.timeout || '600', 10);
+  const { num, timeout } = runOpts(args, 600);
   const voiceNames = String(args['voice-name'] || '').split(',').map((v) => v.trim()).filter(Boolean);
-
-  async function fetchAudio(url) {
-    const res = await fetch(url);
-    if (!res.ok) throw userError(`download ${url} -> HTTP ${res.status}`);
-    const have = extForMime(res.headers.get('content-type')) || extname(new URL(url).pathname).slice(1).toLowerCase() || 'wav';
-    return transcode({ bytes: new Uint8Array(await res.arrayBuffer()), format: have }, format);
-  }
+  const fetchAudio = async (url) => { const { bytes, ext } = await fetchResult(url); return transcode({ bytes, format: ext || 'wav' }, format); };
 
   if (speakers.length > 2) die(`${entry.name} takes at most 2 speakers (got ${speakers.length}: ${speakers.join(', ')}).`);
   const voiceOf = (label) => { const i = speakers.indexOf(label); return characters[label]?.voiceName || voiceNames[i] || ['Kore', 'Puck'][i]; };

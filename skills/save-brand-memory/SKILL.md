@@ -12,7 +12,7 @@ Turn anything that should shape **future** ads into a standing rule in the brand
 
 - **Durable** ("never call the greens powder a meal replacement", "UGC-style hooks keep winning")
   → memory.
-- **One-off** ("move 20.2's subline") → that ad's **revision plan** (**pull-comments**).
+- **One-off** ("move 20_V2's subline") → that ad's **revision plan** (**pull-comments**).
 
 When a note carries both, apply the fix through the revision plan and save only the rule here.
 
@@ -20,7 +20,7 @@ When a note carries both, apply the fix through the revision plan and save only 
 
 Turn each durable point into one **imperative rule** with its reason, then check:
 
-- **Already in `research.md` or `DESIGN.md`?** Don't copy it.
+- **Already in `<product>-research.md` or `DESIGN.md`?** Don't copy it.
 - **Already in `memory.md`?** Sharpen the existing line; never stack a duplicate.
 - **Conflict** with either? Ask the user rather than silently overriding.
 
@@ -39,4 +39,4 @@ Scope a rule to its product or persona in parentheses if it isn't brand-wide. Ke
 ## 3. Promote when it stabilizes
 
 When a rule has held across several ads and is plainly brand law, move it into the right section of
-`DESIGN.md` (how ads look) or `research.md` (everything else) and delete it from `memory.md`.
+`DESIGN.md` (how ads look) or `<product>-research.md` (everything else) and delete it from `memory.md`.

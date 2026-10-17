@@ -7,8 +7,6 @@
 //     "id": 41,
 //     "status": "in-progress | pending-review | approved",    // making it · made, waiting for the user · approved
 //     "concept":   { "product": "", "persona": "", "angle": "", "format": "" },
-//     "copy":      { "hook": "", "subline-top": "", "pill-1": "" },   // named slots per the format
-//     "design":    "treatment notes",
 //     "meta":      { "headline": "", "primary_text": "" },            // Meta in-platform copy (write-meta-copy)
 //     "generation": {
 //       "model": "gpt-image-2.5", "resolution": "2K", "aspect": "4:5",
@@ -19,7 +17,7 @@
 //     },
 //     "sentTo":    { "drive": "<url>", "notion": "<url>" }             // where it was uploaded (upload-to-*)
 //   }
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { cleanImage } from './lib/clean-image.mjs';
 import { REPO_ROOT, indexMarkdown, parseArgs, readRecords, usage } from './lib/catalog.mjs';
@@ -38,10 +36,18 @@ const jsonDir = join(outputs, 'json');
 if (!existsSync(jsonDir)) { console.error('no json/ dir at ' + jsonDir); process.exit(1); }
 
 const recs = readRecords({ json: jsonDir }).sort((a, b) => (a.id || 0) - (b.id || 0));
+// Hook 1 from the ad's brief (the newest .md in its folder). An ad's words live in its brief or its prompt.
+const folders = readdirSync(outputs, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+function hook(r) {
+  const dir = folders.find((n) => n.startsWith(`${r.id}_`));
+  const mds = dir ? readdirSync(join(outputs, dir)).filter((n) => /\.md$/i.test(n) && n !== 'analysis.md').map((n) => join(outputs, dir, n)) : [];
+  const brief = mds.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+  return brief && /^\|\s*\**Hook\s*1?\**\s*\|([^|]*)\|/im.exec(readFileSync(brief, 'utf8'))?.[1].trim();
+}
 writeFileSync(join(outputs, 'index.md'), indexMarkdown({
   title: 'Ads index', noun: 'ad', from: 'outputs/json/*.json',
   cols: ['ID', 'Status', 'Product', 'Persona', 'Angle', 'Format', 'Hook', 'Output'],
-  rows: recs.map((r) => [r.id, r.status, r.concept?.product, r.concept?.persona, r.concept?.angle, r.concept?.format, r.copy?.hook, r.generation?.output]),
+  rows: recs.map((r) => [r.id, r.status, r.concept?.product, r.concept?.persona, r.concept?.angle, r.concept?.format, hook(r), r.generation?.output]),
 }));
 console.log(`wrote ${join(outputs, 'index.md')} (${recs.length} ads)`);
 

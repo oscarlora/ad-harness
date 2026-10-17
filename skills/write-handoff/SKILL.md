@@ -5,7 +5,7 @@ description: Optional. Write the short, conversational message that goes with a 
 
 # Write handoff
 
-Optional: for when ads go to someone else (a client, a teammate). Pick the path that fits:
+Pick the path that fits:
 
 - **Sample list** — a first look or small set; one line per ad.
 - **New batch drop** — a larger batch added to a folder they already have; high-level only.

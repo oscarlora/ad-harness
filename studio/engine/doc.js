@@ -87,7 +87,7 @@ export const r3 = (x) => Math.round(x * 1000) / 1000;
 export const endOf = (c) => c.end ?? (c.dur != null ? (c.at ?? 0) + c.dur : null);
 
 // Every keyframed value in o and its nested objects (not in clips, caption lines or transitions): fn(holder, key, keys, path).
-function eachKeyed(o, fn, path = []) {
+export function eachKeyed(o, fn, path = []) {
   for (const [k, v] of Object.entries(o || {})) {
     if (keyed(v)) fn(o, k, v, path);
     else if (v && typeof v === 'object' && !Array.isArray(v) && k !== 'transition') eachKeyed(v, fn, [...path, k]);

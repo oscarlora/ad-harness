@@ -14,22 +14,20 @@ For **more than one** ad, plan the batch before making any. The plan survives ac
 ```json
 {
   "name": "acme-50",
-  "goal": 50,
+  "product": "Acme Bowl",
   "constraints": { "noRepeatFormat": true, "noRepeatAngle": true },
-  "split": [ { "persona": "...", "count": 10 } ],
-  "made": [],
-  "remaining": 50
+  "slots": [ { "id": 31, "persona": "...", "angle": "...", "format": "..." } ]
 }
 ```
+
+One slot per ad, each with the ID it reserves.
 
 ## How
 
 1. **Settle the goal and split** with the user — the total, how to divide it (personas × count,
    products, angles), and the constraints; options differ in structure.
-2. **Write the plan** to `outputs/batches/[name].json`.
-3. **Build against it** — the ad's workflow makes each ad from the next open slot, writes its record,
-   then appends the id to `made` and decrements `remaining`. Honor the constraints (check the records
-   / `outputs/index.md`).
+2. **Write the plan** to `outputs/batches/[name].json`, numbering the slots on from the next free ID
+   (**write-prompt**, Filename convention).
+3. **Build against it** — the ad's workflow makes each ad from the next open slot (no record yet),
+   under the slot's ID. Honor the constraints (check the records / `outputs/index.md`).
 4. **Resume any time** — re-open the plan and continue.
-
-Keep Studio's Board open (**open-studio**) so the user reviews ads as they land.

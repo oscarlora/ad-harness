@@ -1,10 +1,11 @@
 'use client';
 // Studio's player for every video and audio; how it looks and behaves: studio/DESIGN.md (Player).
 // keys: take Space and ← / → (the viewers). scenes [{ start, description }] mark the progress bar; sprites
-// { url, cols, rows, interval, frameW, frameH } show the frame under the pointer; captions [{ start, end, text }].
+// { url, cols, rows, interval, frameW, frameH } show the frame under the pointer; captions [{ start, end, text }];
+// compact drops mute and the guides (references in a doc, not ads).
 import { useEffect, useRef, useState } from 'react';
+import { clock } from '../lib/client/format.js';
 import { isTyping } from '../lib/client/hooks.js';
-import { clock } from './BrandPage.js';
 import { IcCaptions, IcFull, IcMute, IcPause, IcPlay, IcSound, IcZones } from './icons.js';
 
 // A box over the media's visible picture (object-fit: contain) of width / height ratio r.
@@ -69,17 +70,17 @@ export function spriteCell(sp, t, dur) {
   };
 }
 
-export default function Player({ src, kind = 'video', poster, autoPlay = false, muted = false, preload = 'metadata', label, onLoadedMetadata, onTimeUpdate, keys = false, scenes = [], sprites = null, captions = [] }) {
+export default function Player({ src, kind = 'video', poster, autoPlay = false, muted = false, preload = 'metadata', label, onLoadedMetadata, onTimeUpdate, keys = false, scenes = [], sprites = null, captions = [], compact = false }) {
   const wrap = useRef(null);
   const media = useRef(null);
   const [paused, setPaused] = useState(!autoPlay);
-  const [isMuted, setMuted] = useState(muted);
   const [t, setT] = useState(0);
   const [dur, setDur] = useState(0);
   const [hover, setHover] = useState(null); // { x, t } over the progress bar
   const [ratio, setRatio] = useState(0);
+  const [isMuted, setMuted] = useState(muted);
+  const [zone, nextZone] = useZones(compact ? 0 : ratio);
   const [showCaptions, setShowCaptions] = useState(true);
-  const [zone, nextZone] = useZones(ratio);
   const started = useRef(autoPlay); // played, stepped or scrubbed, and not at the end
   const frame = useRef(1 / 30); // one frame's length, measured while playing
   const marks = scenes.map((s) => s.start).filter((s) => s > 0);
@@ -168,34 +169,38 @@ export default function Player({ src, kind = 'video', poster, autoPlay = false, 
 
   return (
     <div ref={wrap} className={`player player--${kind}`}>
-      {kind === 'video'
-        ? <video {...props} poster={poster} playsInline onClick={toggle} />
-        : <audio {...props} />}
-      {kind === 'video' && ratio > 0 && (line || zone) && (
-        <MediaBox ratio={ratio}>
-          {zone && <SafeZones mode={zone} ratio={ratio} />}
-          {line && <p className="player__caption">{line.text}</p>}
-        </MediaBox>
-      )}
-      <div className="player__bar">
-        <button type="button" className="player__btn" aria-label={paused ? 'Play' : 'Pause'} onClick={toggle}>{paused ? <IcPlay /> : <IcPause />}</button>
-        <span className="player__time">{clock(t)} / {clock(dur)}</span>
-        <div
-          className="player__track" role="slider" aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(t)}
-          onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); seekTo(e); }}
-          onPointerMove={(e) => { if (dur) setHover(at(e)); if (e.buttons) seekTo(e); }}
-          onPointerLeave={() => setHover(null)}
-        >
-          <div className="player__fill" style={{ width: `calc((100% - ${2 * INSET}px) * ${dur ? t / dur : 0})` }} />
-          {dur > 0 && marks.map((s) => <span key={s} className="player__mark" style={{ left: `calc(${INSET}px + (100% - ${2 * INSET}px) * ${s / dur})` }} />)}
-          {hover && (sprites || scene) && (
-            <div className="player__peek" style={{ left: Math.max(PEEK_W / 2, Math.min(hover.w - PEEK_W / 2, hover.x)), width: PEEK_W }}>
-              {sprites && <div className="player__peek-frame" style={{ aspectRatio: sprites.frameW / sprites.frameH, ...spriteCell(sprites, hover.t, dur) }} />}
-              <div className="player__peek-text"><b>{clock(hover.t)}</b>{scene?.description ? ` ${scene.description}` : ''}</div>
-            </div>
+      {kind === 'video' ? (
+        <div className="player__screen">
+          <video {...props} poster={poster} playsInline onClick={toggle} />
+          {ratio > 0 && (line || zone) && (
+            <MediaBox ratio={ratio}>
+              {zone && <SafeZones mode={zone} ratio={ratio} />}
+              {line && <p className="player__caption">{line.text}</p>}
+            </MediaBox>
           )}
         </div>
-        <button type="button" className="player__btn" aria-label={isMuted ? 'Unmute' : 'Mute'} onClick={() => { if (media.current) media.current.muted = !isMuted; }}>{isMuted ? <IcMute /> : <IcSound />}</button>
+      ) : <audio {...props} />}
+      <div className="player__bar">
+        <button type="button" className="player__btn" aria-label={paused ? 'Play' : 'Pause'} onClick={toggle}>{paused ? <IcPlay /> : <IcPause />}</button>
+        <div className="player__seek">
+          <span className="player__time">{clock(t)} / {clock(dur)}</span>
+          <div
+            className="player__track" role="slider" aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(dur)} aria-valuenow={Math.round(t)}
+            onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); seekTo(e); }}
+            onPointerMove={(e) => { if (dur) setHover(at(e)); if (e.buttons) seekTo(e); }}
+            onPointerLeave={() => setHover(null)}
+          >
+            <div className="player__fill" style={{ width: `calc((100% - ${2 * INSET}px) * ${dur ? t / dur : 0})` }} />
+            {dur > 0 && marks.map((s) => <span key={s} className="player__mark" style={{ left: `calc(${INSET}px + (100% - ${2 * INSET}px) * ${s / dur})` }} />)}
+            {hover && (sprites || scene) && (
+              <div className="player__peek" style={{ left: Math.max(PEEK_W / 2, Math.min(hover.w - PEEK_W / 2, hover.x)), width: PEEK_W }}>
+                {sprites && <div className="player__peek-frame" style={{ aspectRatio: sprites.frameW / sprites.frameH, ...spriteCell(sprites, hover.t, dur) }} />}
+                <div className="player__peek-text"><b>{clock(hover.t)}</b>{scene?.description ? ` ${scene.description}` : ''}</div>
+              </div>
+            )}
+          </div>
+        </div>
+        {!compact && <button type="button" className="player__btn" aria-label={isMuted ? 'Unmute' : 'Mute'} onClick={() => { if (media.current) media.current.muted = !isMuted; }}>{isMuted ? <IcMute /> : <IcSound />}</button>}
         {captions.length > 0 && (
           <button type="button" className="player__btn" aria-pressed={showCaptions} aria-label={showCaptions ? 'Hide captions' : 'Show captions'} title={showCaptions ? 'Hide captions' : 'Show captions'} onClick={() => setShowCaptions(!showCaptions)}><IcCaptions /></button>
         )}

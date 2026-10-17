@@ -2,13 +2,13 @@
 // sent inline. Only when kie still fails after its retries and the workspace has <WS>_AI_GATEWAY_API_KEY,
 // that one call goes to Gemini Flash Lite on the Vercel AI Gateway.
 import { readFileSync } from 'node:fs';
-import { loadEnv, inferWorkspace, sleep } from './catalog.mjs';
+import { loadEnv, inferWorkspace, sleep, wsKey } from './catalog.mjs';
 import { PUBLIC_BUCKETS } from './r2.mjs';
 import { gatewayClient } from './providers.mjs';
 
 export const ANALYSIS_MODEL = 'gemini-3-6-flash';
 const FALLBACK_MODEL = 'google/gemini-3.1-flash-lite';
-// Media travels inline in the request (base64, +33%): keep each file under this.
+// Media travels inline (base64, +33%); kie rejects bodies over 30 MB and ignores file links.
 export const INLINE_MAX = 14 * 1024 * 1024;
 
 // This process's spend: kie credits (1 credit ≈ $0.005) and Gateway fallback USD.
@@ -16,14 +16,13 @@ export const spend = { credits: 0, usd: 0 };
 export const spendText = () => `${spend.credits.toFixed(2)} kie credits${spend.usd ? ` + $${spend.usd.toFixed(4)} AI Gateway` : ''}`;
 
 // A public workspace (the shared library) borrows any workspace's key when it has none of its own.
-function wsKey(anyPath, suffix) {
+function keyFor(anyPath, suffix) {
   const ws = inferWorkspace(anyPath);
-  const env = { ...loadEnv(), ...process.env };
-  const own = (ws && env[`${ws.toUpperCase()}_${suffix}`]) || '';
+  const own = (ws && wsKey(ws, suffix)) || '';
   if (own || !PUBLIC_BUCKETS[ws]) return own;
-  return Object.entries(env).find(([k, v]) => k.endsWith(`_${suffix}`) && v)?.[1] || '';
+  return Object.entries({ ...loadEnv(), ...process.env }).find(([k, v]) => k.endsWith(`_${suffix}`) && v)?.[1] || '';
 }
-export const analysisKeys = (anyPath) => ({ kie: wsKey(anyPath, 'KIE_API_KEY'), gateway: wsKey(anyPath, 'AI_GATEWAY_API_KEY') });
+export const analysisKeys = (anyPath) => ({ kie: keyFor(anyPath, 'KIE_API_KEY'), gateway: keyFor(anyPath, 'AI_GATEWAY_API_KEY') });
 export function requireKeys(anyPath) {
   const keys = analysisKeys(anyPath);
   if (!keys.kie) {

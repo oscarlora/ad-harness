@@ -6,6 +6,7 @@ export const IcCopy = () => <svg {...base}><rect x="9" y="9" width="11" height="
 export const IcFull = () => <svg {...base}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>;
 export const IcLink = () => <svg {...base}><path d="M10 14a5 5 0 007 0l2-2a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-2 2a5 5 0 007 7l1-1" /></svg>;
 export const IcFolder = () => <svg {...base}><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>;
+export const IcAlert = () => <svg {...base}><path d="M12 7v6M12 17h.01" /></svg>;
 export const IcX = () => <svg {...base}><path d="M6 6l12 12M18 6L6 18" /></svg>;
 export const IcOpen = () => <svg {...base}><path d="M14 4h6v6M20 4l-9 9M10 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-4" /></svg>;
 export const IcChip = () => <svg {...base}><rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" /></svg>;
@@ -36,4 +37,12 @@ export const IcPanelOpen = () => <svg {...base}><rect x="3" y="4" width="18" hei
 export const IcMute = () => <svg {...base}><path d="M11 5L6 9H3v6h3l5 4zM22 9l-6 6M16 9l6 6" /></svg>;
 export const IcCaptions = () => <svg {...base}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M10.5 10.2a2 2 0 100 3.6M17 10.2a2 2 0 100 3.6" /></svg>;
 export const IcZones = () => <svg {...base}><rect x="6" y="2" width="12" height="20" rx="2" /><rect x="8" y="5.5" width="8" height="8" rx="1" strokeDasharray="2 2" /></svg>;
+export const IcAds = () => <svg {...base}><rect x="3" y="3" width="8" height="10" rx="1.5" /><rect x="13" y="3" width="8" height="6" rx="1.5" /><rect x="13" y="11" width="8" height="10" rx="1.5" /><rect x="3" y="15" width="8" height="6" rx="1.5" /></svg>;
+export const IcFlow = () => <svg {...base}><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="M8.5 6H15a3 3 0 010 6H9a3 3 0 000 6h6.5" /></svg>;
+export const IcStatus = () => <svg {...base}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3" fill="currentColor" /></svg>;
+export const IcSort = () => <svg {...base}><path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4" /></svg>;
+export const IcBox = () => <svg {...base}><path d="M21 8l-9-5-9 5v8l9 5 9-5zM3 8l9 5 9-5M12 13v8" /></svg>;
+export const IcHash = () => <svg {...base}><path d="M5 9h15M4 15h15M10 3L8 21M16 3l-2 18" /></svg>;
+export const IcGlobe = () => <svg {...base}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18" /></svg>;
+export const IcUser = () => <svg {...base}><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0116 0" /></svg>;
 export const IcGrip = () => <svg {...base}><path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01" strokeWidth="3" /></svg>;

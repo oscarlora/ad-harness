@@ -5,8 +5,6 @@ import { existsSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import { brandRoute } from '../../../../../lib/server/http.js';
 
-export const dynamic = 'force-dynamic';
-
 const HEARTBEAT_MS = 25_000;
 const DEBOUNCE_MS = 400;
 
@@ -25,6 +23,7 @@ export const GET = brandRoute((req, ctx) => {
       const send = (s) => { if (!closed) try { controller.enqueue(encoder.encode(s)); } catch { closed = true; } };
       const watchers = [];
       let debounce = null, lastSent = 0;
+      const fire = () => { lastSent = Date.now(); send('event: change\ndata: {}\n\n'); };
       const heartbeat = setInterval(() => send(': hb\n\n'), HEARTBEAT_MS);
       cleanup = () => {
         if (closed) return;
@@ -41,10 +40,9 @@ export const GET = brandRoute((req, ctx) => {
         try {
           const w = watch(dir, { recursive: true }, () => {
             // The first change goes out at once (an edit shows immediately); a burst after it collapses into one.
-            const now = Date.now();
-            if (now - lastSent > DEBOUNCE_MS) { lastSent = now; send('event: change\ndata: {}\n\n'); return; }
+            if (Date.now() - lastSent > DEBOUNCE_MS) return fire();
             clearTimeout(debounce);
-            debounce = setTimeout(() => { lastSent = Date.now(); send('event: change\ndata: {}\n\n'); }, DEBOUNCE_MS);
+            debounce = setTimeout(fire, DEBOUNCE_MS);
           });
           w.on('error', () => {});
           watchers.push(w);

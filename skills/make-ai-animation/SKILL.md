@@ -18,8 +18,8 @@ ones with a letter suffix (`frame-03-a.png`, `clip-01-b.mp4`).
 
 ## 1. Concept
 
-Load the brand context (AGENTS.md). Persona, angle and the 2–4 claims it carries, signed off as in
-**make-ai-podcast** step 1, unless the brief or a reference sets them. The product's own lines carry only signed-off claims; bigger
+Load the brand context (AGENTS.md). Persona, angle and the 2–4 claims it carries pass **write-copy**'s
+claims gate, unless the brief or a reference sets them. The product's own lines carry only signed-off claims; bigger
 reactions ("she can't be fifty-nine") stay in the characters' mouths, never the narrator's or the
 end card's. Settle the **path** here.
 
@@ -47,8 +47,7 @@ Locked if the brief has one or the user writes it (**write-copy**'s user-written
 write it with **write-copy**, including its pace (Length).
 
 - **Narrated:** one voice to the viewer, one line per idea, every line something you can picture.
-- **Dialogue:** the craft in **make-ai-podcast** step 7. Label every line `NAME (ROLE):`, narrator
-  lines `VO:`.
+- **Dialogue:** **write-copy**'s dialogue rules; narrator lines `VO:`.
 
 ## 3. Voice
 
@@ -56,9 +55,8 @@ write it with **write-copy**, including its pace (Length).
   delivery. Get the chosen take's word timings (`node tools/transcribe-media.mjs --in <take>
   --words`) and map each script line to its start and end: those times set the shots.
 - **Dialogue:** the clips make the voices (step 7). Write a voice block per speaking character
-  (checklist in **generate-voice**): open with where she grew up and her accent, make each
-  clearly different, and paste it word for word into every clip prompt under the same label. Lock
-  the blocks before the first clip; a later change breaks that character's earlier clips. Plan to
+  (**generate-voice**), each clearly different. Lock the blocks before the first clip; a later change
+  breaks that character's earlier clips. Plan to
   even the voices out in the edit. **Both:** this, plus the narrator generated as above and laid in
   at the edit.
 
@@ -84,7 +82,7 @@ sound) below it.
 - **Direct the motion.** One main camera move per shot, smooth like a motion-control rig. Every cut
   is motivated: the camera follows something (a thrown plate, a whip pan) out of one shot and lands
   on it in the next. One screen direction per side of the story (the problem moves right to left;
-  once free, she moves left to right). Fast, never frantic: the thing to watch stays near the same
+  once free, they move left to right). Fast, never frantic: the thing to watch stays near the same
   spot in frame across a cut.
 - **Narrated: plan the clips** in a table under the shots: consecutive shots grouped into clips no
   longer than the model allows (**write-prompt**, Video models), whole lines only.
@@ -99,13 +97,16 @@ in a single shot is described in that frame's prompt instead.
 1. **Hero first, alone:** the main character in the locked style (front, three-quarter, side, full
    body, a few expressions). The user approves it as the style lock before any other sheet.
 2. **Then the rest, in parallel**, each with the hero sheet as style reference: one per recurring
-   character (varied in age, build and skin tone when the brief asks), one per recurring setting (a
-   wide shot plus the reverse angle), and props that must match.
+   character (varied in age, build and skin tone when the brief asks), one per recurring setting and
+   one per prop that must match. A setting sheet is its four sides as a 2×2 grid, seen from the
+   middle of the space in the same light (front, right, back, left), so no frame invents a wall it
+   hasn't seen; a frame prompt names the panel its shot faces. A prop sheet is a 2×2 grid of front,
+   back, side and top.
 3. **Props that stand for an idea carry their word** when a word reads faster than a symbol (jars
    labeled FOCUS, ENERGY, SLEEP, spelled exactly as given). Otherwise no text on sheets.
 4. **The product is never generated:** crop it into `sheets/product.png` (**write-prompt**'s product
-   rules). Nobody presents it to the camera: she shows it to the people she's talking to, or holds it
-   beside her face in a narrated close.
+   rules). Nobody presents it to the camera: the character shows it to the people they're talking to, or holds it
+   beside their face in a narrated close.
 
     node tools/generate-image.mjs --prompt-file <ad>/sheets/<name>.txt [--ref <ad>/sheets/hero.png] \
       --aspect 16:9 --resolution 2K --out <ad>/sheets/<name>-a.png
@@ -123,7 +124,7 @@ follow **write-prompt**'s "How a model reads a prompt".
       --aspect 9:16 --resolution 1K --out <ad>/frames/frame-01.png
 
 - **Draw the moment the clip starts from:** whoever speaks first is about to talk, a body in motion
-  is caught where the motion begins, and anything the action needs is already there (the cup in her
+  is caught where the motion begins, and anything the action needs is already there (the cup in their
   hand). The clip can't bring in what the frame lacks.
 - **The product:** `sheets/product.png` first in the references, label to the camera
   (**write-prompt**'s product rules).
@@ -135,28 +136,30 @@ follow **write-prompt**'s "How a model reads a prompt".
   of the frame") plus "much closer than reference image 1". A gesture a line calls for happens in
   the clip on its word, never pre-set in the frame. If an earlier shot is regenerated, recheck the
   cut after it.
-- Once a character's look is set in an approved frame, that frame outranks her sheet. Restate each
+- Once a character's look is set in an approved frame, that frame outranks their sheet. Restate each
   character's defining wardrobe in every frame prompt.
-- Before showing a scene's frames, check them against the blocking and each other (seats, screen
-  sides, camera side, eyelines, wardrobe, props, light) and against step 4's one-story rules.
+- As a scene's frames land, check them against the blocking and each other (seats, screen sides,
+  camera side, eyelines, wardrobe, props, light) and against step 4's one-story rules, and flag what's
+  off to the user.
 - No text beyond prop labels and the product.
 
 ## 7. Clips
 
 Every clip prompt follows **write-prompt**'s "How a model reads a prompt", above all **animate from
-the frame, not against it**. Each prompt stands alone, written like a director's notes:
+the frame, not against it**. Each prompt stands alone, written like a director's notes and laid out in its model's syntax
+(**write-prompt**, Writing for each model):
 
-- **TASK:** animate the frame(s) for N seconds in their exact style; don't redraw, restyle or relight.
+- **TASK:** animate the frame(s) for N seconds keeping their exact style, drawing and light.
 - **CAMERA:** the move, its feel and where it ends up, with timings.
 - **WHO IS WHO:** each person by position and look.
 - **ACTION:** a timeline of beats, each tied to a second (the word's time minus the clip's start).
-  When several people act in turn, only one moves at a time. Nothing repeats, nobody freezes at the end.
-- **SOUND:** only this shot's sounds, placed in time. Say in the prompt: no music, crowd chatter,
-  room tone or ambience.
+  When several people act in turn, only one moves at a time. Every beat is new, and everyone is still moving at the end.
+- **SOUND:** only this shot's sounds, placed in time; no music, chatter or ambience, said each
+  model's way.
 
 **Narrated:** MiniMax H3, or Seedance 2.5 for longer clips (**write-prompt**, Video models). One
 run per planned clip: its shots' frames in order as `--image` refs, then the sheets of who's in it
-(9 images at most on MiniMax). The prompt lists `SHOT n (a–b s), image n:` with a hard cut at each,
+(9 images at most on MiniMax). The prompt gives each shot its frame and start second, with a hard cut at each,
 and SOUND carries the effects, so every clip comes back with its own sound. Name each clip after its
 first shot (`clips/clip-07.mp4` covers shots 07–12). Run independent clips in parallel (long
 renders: AGENTS.md).
@@ -165,31 +168,30 @@ renders: AGENTS.md).
       --image <ad>/frames/frame-07.png --image <ad>/frames/frame-08.png --image <ad>/sheets/<setting>.png \
       --aspect 9:16 --duration <clip seconds, rounded up> --out <ad>/clips/clip-07.mp4 --timeout 1500
 
-**Dialogue:** one Seedance 2.5 run per shot at 480p from its frame; it makes the voices and sound
-too. Leave `--aspect` off (the frame sets the shape).
+**Dialogue:** one Seedance 2.5 run per shot from its frame; it makes the voices and sound too. Leave
+`--aspect` off (the frame sets the shape).
 
     node tools/generate-video.mjs --prompt-file <ad>/prompts/clip-01.txt \
-      --model seedance-2.5 --first-frame <ad>/frames/frame-01.png --resolution 480p \
+      --model seedance-2.5 --first-frame <ad>/frames/frame-01.png \
       --duration <shot seconds> --out <ad>/clips/clip-01.mp4 --timeout 900
 
 Dialogue prompts add two sections:
 
 - **LINES:** who speaks, the exact words, roughly when, and who stays silent (off-screen voices
-  included). Direct the delivery of any line meant a certain way, syllables included ("slower and
-  louder, hitting each syllable: FIF-TY-EIGHT"). Tag every line with the speaker's position and look
+  included). Direct a line meant a certain way as a whole ("slower and louder"), never word by
+  word. Tag every line with the speaker's position and look
   (`LEFT, green dress:`). Introduce a very short line as speech ("she says the single word 'Stop.'").
   An off-screen voice gets lip-synced onto any visible mouth: keep every on-screen mouth closed while
-  it speaks and say it comes from behind the camera. Listeners make no sound at all (a gasp makes her
-  a voice, and she may get the lines); say so. Breaths written into the action come out audible.
-  The speaker's face is at least as open to the camera as any listener's: put the camera on her
-  listeners' side, never turn her.
-- **VOICES:** the step 3 blocks, word for word, for whoever speaks.
+  it speaks and say it comes from behind the camera. Listeners make no sound at all (a gasp makes them
+  a voice, and they may get the lines); say so. Breaths written into the action come out audible.
+  The speaker's face is at least as open to the camera as any listener's: put the camera on their
+  listeners' side, never turn the speaker.
+- **VOICES:** the step 3 blocks, word for word under the same labels, for whoever speaks.
 
 Preview each clip mixing its own sound, the voiceover span and the music under it. When one shot
 misses, fix its prompt (**write-prompt**) and regenerate **that shot
 alone** from its frame (`--first-frame`, at least the model's minimum length; fix the frame first
-when the frame set it up), then splice it in at the clip's real cut. Clips stay at the tool's
-default tier (AGENTS.md, Video).
+when the frame set it up), then splice it in at the clip's real cut.
 
 ## 8. Edit
 
@@ -207,8 +209,9 @@ Video, Voice, Music (**add-music**), SFX.
   sound, cut the same way) goes on the SFX track at 0 dB; extra effects: **generate-sfx**. When an action still lands off its word, find it (`edit-video.mjs moves`) and
   retime the still stretches between actions, never the actions.
 - **Dialogue: sound design** treats the film as one place heard from different spots. First audit
-  every clip's audio (Gemini, as in **catalog-media**): clips often bake in music and chatter despite
-  the prompt, and invent lines in silent shots. Then build four stems lined up to the timeline:
+  every clip's sound with Gemini (`generateJSON` in `tools/lib/analyze.mjs`, as **catalog-media**
+  does): clips often bake in music and chatter despite the prompt. Find lines invented in silent
+  shots with `node tools/transcribe-media.mjs --in <clip>`. Then build four stems lined up to the timeline:
   dialogue (voice-isolated where anything is baked in, **generate-voice**; invented lines muted; every shot leveled to one loudness), ambience (one
   bed per location from the same recording, filtered for distance, crossfading at location changes;
   conversations sit "far" so the lines carry), music (one diegetic track, muffled by distance,
@@ -219,5 +222,4 @@ Video, Voice, Music (**add-music**), SFX.
 
 **Hand off:** **write-handoff** (Editor handoff).
 
-Naming: **write-prompt**, format `Animation`. To rename an ad, rename its folder and files, update the paths in its edit documents
-and, with R2, remove the old folder there.
+Naming: **write-prompt**, format `Animation`.

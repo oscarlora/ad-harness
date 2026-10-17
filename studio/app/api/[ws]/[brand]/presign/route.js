@@ -3,12 +3,11 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { mediaUrl } from '../../../../../lib/client/api.js';
 import { r2For } from '../../../../../lib/server/tools.js';
 import { defaultApp } from '../../../../../lib/server/openers.js';
 import { brandRoute, jsonRes } from '../../../../../lib/server/http.js';
 import { isMediaId, mediaRecord } from '../../../../../lib/server/media.js';
-
-export const dynamic = 'force-dynamic';
 
 const LINK_TTL = 7 * 24 * 3600; // 7 days, the most a signed R2 link can last
 
@@ -22,10 +21,7 @@ export const GET = brandRoute(async (req, ctx) => {
   const onDevice = here ? abs.replace(homedir(), '~') : null;
   const app = here ? await defaultApp(abs) : '';
   const r2 = await r2For(ctx.ws).catch(() => null);
-  if (!r2) {
-    const local = `/api/${encodeURIComponent(ctx.ws)}/${encodeURIComponent(ctx.brand)}/file?p=${encodeURIComponent(`inputs/media/${rec.file.name}`)}`;
-    return jsonRes({ url: local, local: true, onDevice, app, message: 'No R2 creds for this workspace — copied a local-serve URL instead.' });
-  }
+  if (!r2) return jsonRes({ url: mediaUrl(ctx.ws, ctx.brand, rec.file.name), local: true, onDevice, app, message: 'No R2 creds for this workspace — copied a local-serve URL instead.' });
   // A private bucket gets a signed link for the longest R2 allows (expires, in s); a public bucket's never lapses (null).
   return jsonRes({ url: r2.presignGet(`${ctx.brand}/inputs/media/${rec.file.name}`, LINK_TTL), local: false, expires: r2.public ? null : LINK_TTL, onDevice, app });
 });

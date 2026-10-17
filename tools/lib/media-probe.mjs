@@ -3,8 +3,8 @@
 // media/ and write its skeleton record. analyze-media fills the descriptions.
 //
 // Images use `sips` on macOS, ffmpeg elsewhere; video/audio use ffmpeg. A missing tool still yields a
-// record, with derivatives flagged pending. A video is decoded once (videoPass), on VideoToolbox where
-// possible; at most MEDIA_JOBS videos (default 2) are worked at once.
+// record, without derivatives. A video is decoded once (videoPass), on VideoToolbox where possible; at
+// most MEDIA_JOBS videos (default 2) are worked at once.
 // Near-duplicates (re-exports) are skipped conservatively:
 //   image — perceptual hash close in any rotation AND the pixels match.
 //   video — duration within 0.05 s AND (same original name, or matching frame hashes).
@@ -14,15 +14,15 @@
 //   video → thumbs/<id>.jpg (poster)  keyframes/<id>_NN.jpg (one per scene)  sprites/<id>.jpg
 //   audio → peaks/<id>.json (waveform)
 import { statSync, writeFileSync, existsSync, copyFileSync, readdirSync, readFileSync, mkdirSync, mkdtempSync, rmSync, renameSync, constants } from 'node:fs';
-import { join, basename, extname, relative, dirname } from 'node:path';
+import { join, basename, extname, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
-import { catalogPaths, ensureDirs, typeOf, mimeOf, recordSkeleton, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, padId, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, RESERVED } from './catalog.mjs';
+import { catalogPaths, ensureDirs, typeOf, mimeOf, hashFile, readRecords, writeRecord, mergeRecord, isMedia, slugify, have, run, runAsync, ffprobeJson, imageFitCmd, pcm, round, SETUP_HINT } from './catalog.mjs';
 import { readDriveSources } from './drive.mjs';
 import { INLINE_MAX } from './analyze.mjs';
 
 const HAS_FFMPEG = have('ffmpeg') && have('ffprobe');
 const HAS_SIPS = have('sips');
-const INSTALL_FFMPEG = 'install ffmpeg (macOS: brew install ffmpeg · Windows: winget install Gyan.FFmpeg)';
+const RESERVED = new Set(['brand', '_catalog']); // folders the catalog never reads (see lib/catalog.mjs)
 
 // ---------- heavy-work pool + hardware decoding ----------
 const jobLimit = () => Math.max(1, parseInt(process.env.MEDIA_JOBS, 10) || 2);
@@ -92,7 +92,7 @@ const TURN = { 90: ',transpose=clock', 180: ',hflip,vflip', 270: ',transpose=ccl
 // Tries VideoToolbox decode + scale, then hardware decode only, then all software.
 // Returns { cuts, proxy, track } (null = not made).
 export async function videoPass(file, meta, { scenes = false, sprite = null, work = null, rung = 0 }) {
-  if (!HAS_FFMPEG) throw new Error(`ffmpeg is required for video — ${INSTALL_FFMPEG}`);
+  if (!HAS_FFMPEG) throw new Error(`ffmpeg is required for video — ${SETUP_HINT}`);
   const tmp = mkdtempSync(join(tmpdir(), 'pass-'));
   try {
     const rungs = work ? RUNGS.slice(rung, rung + (meta.exact > 90 ? 2 : 1)) : [];
@@ -304,27 +304,54 @@ function nearDupFinder(paths, records) {
   };
 }
 
+const orientationOf = (w, h) => (!w || !h ? 'unknown' : w > h ? 'landscape' : w < h ? 'portrait' : 'square');
+const ASPECTS = [[1, 1], [4, 5], [5, 4], [2, 3], [3, 2], [3, 4], [4, 3], [9, 16], [16, 9], [9, 19.5], [1.91, 1]];
+function snapAspect(w, h) {
+  if (!w || !h) return null;
+  const r = w / h;
+  let best = null, bestD = Infinity;
+  for (const [a, b] of ASPECTS) { const d = Math.abs(r - a / b); if (d < bestD) { bestD = d; best = [a, b]; } }
+  return bestD / (w / h) < 0.04 ? `${best[0]}:${best[1]}` : `${Math.round(r * 100) / 100}:1`;
+}
+
+// analyze-media fills analysis / products / people / transcript. source: { kind: generated|link|upload, url? }.
+function recordSkeleton({ id, sha256: hash, name, type, mime, bytes, width, height, duration, source = { kind: 'upload' } }) {
+  const rec = {
+    id, sha256: hash,
+    file: { name, type, mime, bytes },
+    source,
+    products: [], people: [], unknown_people: [],
+    analysis: '',
+    status: 'probed',
+  };
+  if (width) rec.file.width = width;
+  if (height) rec.file.height = height;
+  if (width && height) { rec.file.orientation = orientationOf(width, height); rec.file.aspect = snapAspect(width, height); }
+  if (duration != null) rec.file.duration = duration;
+  return rec;
+}
+
 // Probe one new file and place the original as <id>_<slug>.<ext> (analyze-media renames it later).
-async function probe({ file, media, id, sha256, phash, sourceType, sourceName }) {
+async function probe({ file, media, id, sha256, phash, source }) {
   const paths = catalogPaths(media);
   ensureDirs(paths);
   const type = typeOf(file);
   if (!type) throw new Error(`not a media file: ${file}`);
   const ext = extname(file).slice(1).toLowerCase();
   const name = `${id}_${slugify(basename(file, extname(file)))}.${ext}`;
-  const base = { id, sha256: sha256 || await hashFile(file), name, type, mime: mimeOf(file), bytes: statSync(file).size, sourceType, sourceName };
+  const base = { id, sha256: sha256 || await hashFile(file), name, type, mime: mimeOf(file), bytes: statSync(file).size, source };
   const warnings = [];
   let dims = {}, video = null;
 
   if (type === 'image') {
     if (!HAS_SIPS && !HAS_FFMPEG) {
-      warnings.push(`no image tool found — dimensions and thumbnails skipped (record still created, derivatives pending). To enable them, ${INSTALL_FFMPEG}.`);
+      warnings.push(`no image tool found — dimensions and thumbnails skipped (the record is still created). To enable them, ${SETUP_HINT}.`);
     } else {
       dims = imageDims(file);
       if (!imageDerivatives(file, paths, id)) warnings.push(`could not make derivatives for ${basename(file)} (format not supported by the installed tool) — analyze the original file instead.`);
     }
   } else if (!HAS_FFMPEG) {
-    warnings.push('ffmpeg not found — video/audio derivatives skipped (install ffmpeg to enable scenes, sprites, waveform, transcription).');
+    warnings.push(`ffmpeg not found — video/audio derivatives skipped (scenes, sprites, waveform, transcription). To enable them, ${SETUP_HINT}.`);
   } else if (type === 'video') {
     const meta = videoMeta(file);
     dims = { width: meta.width, height: meta.height, duration: meta.duration };
@@ -346,19 +373,15 @@ async function probe({ file, media, id, sha256, phash, sourceType, sourceName })
   return { id, type, name, warnings };
 }
 
-function collect(dir, out = []) {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const fp = join(dir, e.name);
-    if (e.isDirectory()) { if (!RESERVED.has(e.name)) collect(fp, out); }
-    else if (isMedia(fp)) out.push(fp);
-  }
-  return out.sort();
-}
+// The media files under dir, outside reserved folders, sorted.
+const collect = (dir) => readdirSync(dir, { recursive: true, withFileTypes: true })
+  .filter((e) => !e.isDirectory() && !relative(dir, e.parentPath).split(sep).some((d) => RESERVED.has(d)))
+  .map((e) => join(e.parentPath, e.name)).filter(isMedia).sort();
 
 // Planning (hash, dedupe, allocate ids) is sequential so ids never race; probing runs in parallel.
 // Returns [{ id, src, existing, reason?, type?, name?, warnings? }]; skipped files give the id they
-// duplicate.
-export async function planAndProbe({ dir, media, sourceType = 'brand', sourceName = '' }) {
+// duplicate. sourceOf(file) → the record's source.
+export async function planAndProbe({ dir, media, sourceOf = () => ({ kind: 'upload' }) }) {
   const paths = catalogPaths(media);
   const records = readRecords(paths);
   const bySha = new Map(records.map((r) => [r.sha256, r.id]));
@@ -374,7 +397,7 @@ export async function planAndProbe({ dir, media, sourceType = 'brand', sourceNam
       const fp = fingerprint(src, tmp);
       const hit = finder.match(src, fp);
       if (hit) { manifest.push({ id: hit.id, src, existing: true, reason: hit.reason }); console.log(`skip ${basename(src)} — near-duplicate: ${hit.reason}`); continue; }
-      const id = padId(++next);
+      const id = String(++next).padStart(5, '0');
       bySha.set(sha256, id);
       finder.add(id, src, fp);
       todo.push({ src, id, sha256, phash: fp.phash });
@@ -382,8 +405,7 @@ export async function planAndProbe({ dir, media, sourceType = 'brand', sourceNam
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 
   await Promise.all(todo.map(async (f) => {
-    const sub = relative(dir, dirname(f.src)); // preserve the source's folder as this file's source.name
-    const out = await probe({ file: f.src, media, id: f.id, sha256: f.sha256, phash: f.phash, sourceType, sourceName: sub || sourceName });
+    const out = await probe({ file: f.src, media, id: f.id, sha256: f.sha256, phash: f.phash, source: sourceOf(f.src) });
     manifest.push({ ...out, src: f.src, existing: false });
   }));
   return manifest;

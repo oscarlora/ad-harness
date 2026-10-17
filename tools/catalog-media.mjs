@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // catalog-media.mjs — media to searchable library in one command. Idempotent: duplicates are skipped
 // with their reason. A Drive folder is tracked in drive-sources.json, so re-runs download only new
-// files and remember its --source-type / --source-name.
+// files. Each record's source: generated (--generated), the link it was pulled from, or an upload.
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -22,14 +22,15 @@ const node = (script, args) => spawnSync(process.execPath, [join(TOOLS, script),
 const HELP = `catalog-media.mjs — media to searchable library: pull → probe → analyze → embed → index → push
 
   node tools/catalog-media.mjs --brand workspaces/<WS>/<Brand> [--source "<folder|Drive link|URL>"]
-       [--source-type brand|generated|external] [--source-name "Sept shoot"] [--jobs 2] [--no-push] [--dry-run]
+       [--generated] [--jobs 2] [--no-push] [--dry-run]
     --source     what to add; without it, finishes what is pending and pushes
+    --generated  the files were made by ADPK (else: the link each was pulled from, or an upload)
     --jobs       videos probed at once (default 2)
     --no-push    keep the library local (default: push to R2 when the workspace has keys)
     --dry-run    list what a Drive folder pull would download, then stop
 Analysis: Gemini on kie.ai (<WS>_KIE_API_KEY). Search vectors are made locally (no key).`;
 
-const a = parseArgs(process.argv.slice(2), { flags: ['no-push', 'dry-run'], help: HELP });
+const a = parseArgs(process.argv.slice(2), { flags: ['no-push', 'dry-run', 'generated'], help: HELP });
 if (!a.brand) usage(HELP);
 if (a.jobs) process.env.MEDIA_JOBS = String(a.jobs);
 const brand = resolve(a.brand);
@@ -51,17 +52,18 @@ else if (a.source) {
   dir = a.source;
 }
 
-// A tracked Drive folder keeps its source type/name across runs unless overridden.
 const sources = drive ? readDriveSources(paths) : null;
 const tracked = drive && (sources[drive.folderId] ||= { folderId: drive.folderId, files: {} });
-const sourceType = a['source-type'] || tracked?.sourceType || 'brand';
-const sourceName = a['source-name'] || tracked?.sourceName || (drive ? `Drive ${drive.folderName}` : '');
+// pull-media's .links.json (also left in a folder it pulled into earlier) names each file's link.
+let links = {};
+try { links = JSON.parse(readFileSync(join(dir, '.links.json'), 'utf8')); } catch {}
+const sourceOf = (src) => (a.generated ? { kind: 'generated' } : links[basename(src)] ? { kind: 'link', url: links[basename(src)] } : { kind: 'upload' });
 
 let fresh = 0, newIds = [];
 try {
   // 2. Probe + place originals.
   if (dir) {
-    const manifest = await planAndProbe({ dir, media, sourceType, sourceName });
+    const manifest = await planAndProbe({ dir, media, sourceOf });
     fresh = manifest.filter((m) => !m.existing).length;
     newIds = manifest.filter((m) => !m.existing).map((m) => m.id);
     for (const w of new Set(manifest.flatMap((m) => m.warnings || []))) console.error('WARN: ' + w);
@@ -71,10 +73,8 @@ try {
     // Record Drive files now that they have catalog ids.
     if (drive) {
       const idOf = new Map(manifest.map((m) => [basename(m.src), m.id]));
-      const now = new Date().toISOString();
-      Object.assign(tracked, { sourceType, sourceName, lastCheckedAt: now });
-      for (const f of drive.downloaded) tracked.files[f.id] = { name: f.name, modifiedTime: f.modifiedTime, size: f.size, ingestedAt: now, catalogId: idOf.get(f.file) ?? null };
-      for (const f of drive.listed) { const t = tracked.files[f.id]; if (t && !t.modifiedTime && f.modifiedTime) Object.assign(t, { modifiedTime: f.modifiedTime, size: f.size }); }
+      for (const f of drive.downloaded) tracked.files[f.id] = { name: f.name, modifiedTime: f.modifiedTime, catalogId: idOf.get(f.file) ?? null };
+      for (const f of drive.listed) { const t = tracked.files[f.id]; if (t && !t.modifiedTime && f.modifiedTime) t.modifiedTime = f.modifiedTime; }
       writeDriveSources(paths, sources);
     }
   }
@@ -84,7 +84,7 @@ try {
 
   // 4. Vectors + index.
   await embedAll({ media });
-  const n = buildIndex(catalogPaths(media));
+  const n = buildIndex(paths);
   console.log(`catalog: ${n} assets · analysis ${spendText()}${res.failed.length ? ` · ${res.failed.length} failed analysis (re-run to retry)` : ''}`);
 
   // 5. Push to R2 when the workspace has creds — originals only when some were added or renamed.

@@ -1,11 +1,7 @@
-import { listBrands } from '../lib/server/brands.js';
 import HomeIndex from '../components/HomeIndex.js';
 
-export const dynamic = 'force-dynamic';
+export const dynamic = 'force-dynamic'; // the layout's brand list is read on each visit
 
 export default function Home() {
-  let brands = [];
-  let error = null;
-  try { brands = listBrands(); } catch (e) { error = String(e?.message || e); }
-  return <HomeIndex brands={brands} error={error} />;
+  return <HomeIndex />;
 }

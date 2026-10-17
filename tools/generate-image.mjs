@@ -7,13 +7,11 @@ import { existsSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { cleanImage } from './lib/clean-image.mjs';
-import { applyEnv, die, imageFitCmd, parseArgs, runAsync, usage } from './lib/catalog.mjs';
+import { die, imageFitCmd, parseArgs, runAsync, usage } from './lib/catalog.mjs';
 import {
-  errorText, gatewayClient, kieJob, kieUploadAll, logGatewayWarnings, pickModel, runProviders, saveResults, times, userError,
-  workspaceKeys, writeSidecars,
+  envHelp, errorText, gatewayClient, kieJob, kieUploadAll, logGatewayWarnings, pickModel, runHelp, runOpts, runProviders, saveResults,
+  times, userError, workspaceKeys, writeSidecars,
 } from './lib/providers.mjs';
-
-applyEnv();
 
 const HELP = `generate-image.mjs — image ad generator (kie.ai)
 
@@ -39,14 +37,9 @@ Optional:
   --resolution <res>       1K (default) | 2K | 4K
   --background <b>         gpt-image-2.5: auto (default) | opaque | transparent
   --format <ext>           nano-banana-2.1: png (default) | jpg. gpt-image-2.5 returns png
-  --num <n>                Variations (default 1)
-  --timeout <seconds>      Max wait per task (default 300)
-  --unlisted-model <id>    A kie model id outside the list, sent as-is with --model's request shape
-                           and no checks. Only with the user's yes
-  --provider kie|gateway   Force one. By default a request kie rejects before generating goes to the
-                           AI Gateway when the workspace has <WS>_AI_GATEWAY_API_KEY
+${runHelp(300)}
 
-Env: <WORKSPACE>_KIE_API_KEY; the workspace comes from the --out/--record path.`;
+${envHelp('the --out/--record path')}`;
 
 // kie request limits per model, from the docs linked in MODELS.
 const LIMITS = {
@@ -100,7 +93,7 @@ async function viaKie({ entry, prompt, refs, aspect, resolution, background, for
     input.output_format = format;
     if (refUrls.length) input.image_input = refUrls;
   }
-  return times(num, () => kieJob(id, input, timeout, 2000));
+  return times(num, () => kieJob(id, input, timeout, { pollMs: 2000 }));
 }
 
 // Long edge from the tier, short edge from the aspect, both multiples of 16 (GPT Image needs it).
@@ -191,8 +184,7 @@ async function main() {
     die('--background is auto | opaque | transparent, on gpt-image-2.5 only.');
   const format = String(args.format || g.format || 'png').toLowerCase();
   if (!['png', 'jpg'].includes(format) || (format !== 'png' && shape !== 'nano-banana-2.1')) die('--format is png | jpg, on nano-banana-2.1 only.');
-  const num = Math.max(1, parseInt(args.num || '1', 10));
-  const timeout = parseInt(args.timeout || '300', 10);
+  const { num, timeout } = runOpts(args, 300);
   const refsIn = args.ref.length ? args.ref : (Array.isArray(g.refs) ? g.refs : []);
   const refs = checkRefs(shape, refsIn);
 

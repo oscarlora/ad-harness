@@ -40,18 +40,36 @@ export function useBrandData(ws, brand, kind) {
 // A key pressed in a text field or select, which keeps it.
 export const isTyping = (e) => !!e.target?.closest?.('input, textarea, select, [contenteditable]');
 
-// Viewer keys: Esc closes; ← / → and ↑ / ↓ step to the previous / next file (a started video takes ← / →); ignored while typing.
-export function useViewerKeys(onStep, onClose) {
+// Undo / redo (⌘Z / ⌘⇧Z; Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y) of the changes made in the last place the user changed
+// something; a field being typed in keeps its own. record(entry) after each change; apply(entry, redo) reverts it
+// (redo false) or makes it again.
+let undoActive = null;
+export function useUndo(apply) {
+  const stacks = useRef({ past: [], future: [] });
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  const record = useCallback((entry) => {
+    const s = stacks.current;
+    s.past = [...s.past.slice(-99), entry];
+    s.future = [];
+    undoActive = stacks;
+  }, []);
   useEffect(() => {
     const onKey = (e) => {
-      if (isTyping(e)) return;
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { e.preventDefault(); onStep(-1); }
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { e.preventDefault(); onStep(1); }
+      if (undoActive !== stacks || !(e.metaKey || e.ctrlKey) || e.altKey || isTyping(e)) return;
+      const k = e.key.toLowerCase(), redo = (k === 'z' && e.shiftKey) || (k === 'y' && e.ctrlKey);
+      if (k !== 'z' && !redo) return;
+      const s = stacks.current, from = redo ? s.future : s.past, to = redo ? s.past : s.future;
+      if (!from.length) return;
+      e.preventDefault();
+      const entry = from.pop();
+      to.push(entry);
+      applyRef.current(entry, redo);
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onStep, onClose]);
+    return () => { document.removeEventListener('keydown', onKey); if (undoActive === stacks) undoActive = null; };
+  }, []);
+  return record;
 }
 
 // const [copied, copy] = useCopied()

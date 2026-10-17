@@ -1,5 +1,6 @@
 // clean-image.mjs — strip metadata (C2PA, EXIF, XMP, text chunks) from PNG/JPEG without touching
-// pixels; other formats pass through. generate-image.mjs runs every saved file through it.
+// pixels; other formats pass through. generate-image.mjs runs every saved file through it, record-ad.mjs
+// every approved ad's image.
 
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // Ancillary PNG chunks that carry metadata only (caBX = C2PA manifest).

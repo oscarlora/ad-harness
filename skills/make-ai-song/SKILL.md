@@ -16,7 +16,7 @@ and clip prompt follows **write-prompt**'s "How a model reads a prompt". Work in
 Load the brand context (AGENTS.md). Pick the persona and angle first; default to the brand's most
 emotional persona (grief, identity loss) unless told otherwise. Each concept steals one move from
 the swipe file: a specific age in the first line, a named villain, a story told backwards, small
-concrete scenes (a 3am clock).
+concrete scenes (a 3am clock). Write it to the ad folder's `concept.md`.
 
 ## 2. Lyrics
 
@@ -58,15 +58,17 @@ side by side in 1:1. No text in the pictures.
 
 ## 6. Clips
 
-One MiniMax H3 run per clip at 768p, with the storyboard sheet and the character sheets as
-references (**write-prompt**, Video models).
+One MiniMax H3 run per clip, with the storyboard sheet and the character sheets as references
+(**write-prompt**, Video models).
 
     node tools/generate-video.mjs --prompt-file <ad>/prompts/clip-01.txt --image <sheet> --image <hero> \
       [--image <cast>] [--image <product>] --aspect 9:16 --duration <clip length, rounded up> \
       --out <ad>/clips/clip-01.mp4 --timeout 1500
 
-The prompt lists the shots with rough timings ("Shot 2 (5.1–9.9s): …") and ends with the rules:
-match each panel, hard cuts, never show the sheet or its gutters, no text, nobody speaks or sings.
+The prompt, in MiniMax's layout (**write-prompt**, Writing for each model), times each shot
+(`[Shot 2] At 00:05.100, the camera cuts to …`) and keeps the rules: match each panel, hard cuts,
+each panel fills the frame edge to edge, every surface plain, nobody speaks, both sound fields
+`N/A`.
 To fix one bad shot, make a new still for it and animate it alone (`--first-frame <still>
 --duration 6`), not the whole clip.
 
@@ -90,4 +92,4 @@ sound.
 
 ## 8. Versions and export
 
-With **edit-video** (versions, Export), format `Song`. Clips stay at 768p (AGENTS.md, Video).
+With **edit-video** (versions, Export), format `Song`.

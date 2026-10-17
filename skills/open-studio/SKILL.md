@@ -28,16 +28,27 @@ Deps install via `tools/setup.sh` / `setup.ps1` (or `npm install --prefix studio
 - **Board** — the ad records (`outputs/json/*.json`) and batch plans (`outputs/batches/*.json`) by
   status: In Progress (plan slots and ads being made), Pending Review, Approved, plus where each was
   sent. Read-only: the user reviews and calls approvals and revisions here.
-- **Media** — the catalog (`inputs/media/_catalog/`). Its sidebar edits records (tags, products,
-  people) through `tools/record-media.mjs --merge`.
+- **Media** — the catalog (`inputs/media/_catalog/`). Its sidebar shows each record's source, analysis
+  and transcript, and edits the record's products, people and analysis directly.
 - **Workflow** — each ad folder's step bar for its format, inferred from the folder's files and the
-  record. Animation and slides ads share one view: Concept · Script · Voices · Storyboard · Sheets ·
-  Frames · Clips · Edit, frames and clips counted against the storyboard's shots. UGC ads: Concept · Script ·
-  Storyboard · Brief · Edit, Concept shows the brief's Message, For and Format lines, Script the LINES TO CAMERA table's Scene and Line columns, Storyboard its other
-  columns (actions, editor notes) and the SLIDES / B-ROLL tables. Every .md shown is editable in place (click a block or cell; drag the
-  grips to reorder blocks, table rows and columns, or click one to delete, insert, duplicate or comment); selecting text leaves a note for the agent, as on the video, saved to disk at once; changes on disk show live,
-  so re-read a file before editing it. An ad with an edit
-  document opens on its **Edit** step: live preview, timeline (each track can be turned off in the
-  preview to review the others; the guide button shades the 4:5 and 1:1 crops and the Reels safe zone; clicking a media clip opens a trim panel that changes the part of its source
-  it plays, sliding what follows), the user's notes (answered by **edit-video**'s review loop) and the
-  Export button.
+  record (`studio/lib/server/workflow.js`):
+  - Image: Prompt · Drafts · Final · Meta copy
+  - Animation and slides: Concept · Script · Voices · Storyboard · Sheets · Frames · Clips · Edit
+  - Song: Concept · Lyrics · Song · Look · Storyboard · Clips · Edit
+  - Podcast: Look · Script · Clips · Music · Edit
+  - UGC: Profile (only when the ad is for a known creator: `references/profile.md`) · Concept · Script
+    · Storyboard · Brief · Footage · Edit
+  - Voiceover: Script · Voice · B-roll · Export
+  - Other video: Script · Voice · Look · Clips · Music · Edit
+
+  UGC steps show the brief's sections: Concept its Message, For and Format lines and media blocks,
+  Script the LINES TO CAMERA Scene and Line columns (with word count, spoken time and a voice
+  button), Storyboard every column and the SLIDES / B-ROLL tables, Footage each scene's clip and
+  checklist under a delivery and approval summary (**review-ugc-footage**). Every .md shown is a
+  page of blocks, editable in place. One block carries one thing: a title is its own bold block
+  (`**Message**`) over its text, and an image, audio or video is its own `![](path)` line (relative
+  to the ad folder), so put a step's reference reels and stills in its .md that way; a table cell
+  holding only `` `path.jpg` `` shows the image. Selecting text, and each finished edit, leaves a note
+  for the agent; changes on disk show live, so re-read a file before editing it. An ad with an edit
+  document opens on its **Edit** step: live preview, timeline, the user's notes (answered by
+  **edit-video**'s review loop) and Export.

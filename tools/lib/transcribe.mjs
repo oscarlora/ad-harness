@@ -1,18 +1,20 @@
 // transcribe.mjs — speech for the media catalog and for captions.
-//   transcribeAudio (catalog time) — ANALYSIS_MODEL on a mono 16 kHz track → sentence transcript
-//     (speakers S1, S2…) plus a portrait of the sound. Sentence times are ±1 s: fine for search, not captions.
-//   alignWords (caption time only) — local Whisper (whisper.cpp) word timestamps mapped onto that
-//     sentence text, then each word edge snapped to speech energy.
+//   transcribeAudio — ANALYSIS_MODEL on a mono 16 kHz track → sentence transcript (speakers S1, S2…) plus
+//     an account of the sound: an audio file's analysis, a clip outside the library, or a video's track
+//     when its picture call can't transcribe it (past LONG s, or looped). Sentence times are ±1 s: fine for
+//     search, not captions.
+//   alignWords — local Whisper (whisper.cpp) words replace that sentence text (they are the more
+//     accurate), keeping its sentences and speakers; each word edge snapped to speech energy.
 //
 // Shapes:
 //   catalog transcript  { language, text, segments:[{start,end,speaker,text}], model }
-//   + alignWords        words:[{start,end,word,speaker}], words_model; segments re-timed from the words
+//   + alignWords        words:[{start,end,word,speaker}], words_model; segments re-written from the words
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync, statSync, createWriteStream } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir, availableParallelism } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { have, run, ffprobeJson, readRoster, inferBrand, pcm, round } from './catalog.mjs';
+import { have, run, ffprobeJson, readRoster, inferBrand, loudness, round, SETUP_HINT } from './catalog.mjs';
 import { generateJSON, filePart, ANALYSIS_MODEL, INLINE_MAX } from './analyze.mjs';
 import { buildAudioPrompt, buildAudioSchema, buildMergePrompt, buildMergeSchema } from './analysis-prompt.mjs';
 
@@ -22,7 +24,7 @@ const SILENT_DB = -50; // a track whose loudest peak is below this is silence (d
 // Mono 16 kHz mp3 in a temp dir: { path, dir, silent, duration }, or null without audio. `made` = an
 // mp3 the probe already extracted. Caller removes `dir`.
 export function audioTrack(src, made = null) {
-  if (!have('ffmpeg')) throw new Error('ffmpeg is required for audio (macOS: bash tools/setup.sh · Windows: winget install Gyan.FFmpeg)');
+  if (!have('ffmpeg')) throw new Error(`ffmpeg is required for audio — ${SETUP_HINT}`);
   const p = ffprobeJson(src);
   if (!(p.streams || []).some((s) => s.codec_type === 'audio')) return null;
   const dir = made && existsSync(made) ? dirname(made) : mkdtempSync(join(tmpdir(), 'track-'));
@@ -51,10 +53,11 @@ export function vocabulary(mediaDir) {
   return [...new Set(names.filter(Boolean).map(String))];
 }
 
-// keys = analysisKeys(). → { has_speech, language, sentences, sound, model (, descriptor, tags) }. Tracks past LONG s go in ~PART s
+// keys = analysisKeys(). → { has_speech, language, sentences, sound, model (, descriptor) }. Tracks past LONG s go in ~PART s
 // parts (one long call loops until its JSON is cut off), split at quiet moments, with OVERLAP s either
 // side; a text-only merge call unifies speaker numbering and portraits.
-const LONG = 180, PART = 150, OVERLAP = 2, SNAP_WINDOW = 15;
+export const LONG = 180;
+const PART = 150, OVERLAP = 2, SNAP_WINDOW = 15;
 export async function transcribeAudio(keys, track, { brand, vocab = [], standalone = false } = {}) {
   const dur = track.duration;
   const call = (path, duration, part) => soundCall(keys, path, { brand, vocab, standalone, duration, part });
@@ -86,7 +89,7 @@ export async function transcribeAudio(keys, track, { brand, vocab = [], standalo
     sentences: numberSpeakers(kept.flatMap((ss, k) => ss.map((x) => ({ ...x, speaker: merged.map.get(`${k + 1}:${x.speaker}`) || `part${k + 1}:${x.speaker}` })))),
     sound: merged.sound,
     model: [...new Set(outs.map((o) => o.model))].join(' + '),
-    ...(standalone ? { descriptor: merged.descriptor, tags: merged.tags } : {}),
+    ...(standalone ? { descriptor: merged.descriptor } : {}),
   };
 }
 
@@ -119,7 +122,7 @@ async function soundCall(keys, path, { brand, vocab, standalone, duration, part 
 const SEP = '[\\s,.;:!?¡¿…"-]+', WORD = "[\\p{L}\\p{N}']+", EDGE = "(?![\\p{L}\\p{N}'])", START = "(?<![\\p{L}\\p{N}'])";
 const LOOPS = [new RegExp(`${START}(${WORD})(?:${SEP}\\1${EDGE}){11,}`, 'iu'), new RegExp(`${START}(${WORD}(?:${SEP}${WORD}){1,3})(?:${SEP}\\1${EDGE}){7,}`, 'iu')];
 const loopIn = (text) => LOOPS[0].exec(text) || LOOPS[1].exec(text);
-function loops(sentences = []) {
+export function loops(sentences = []) {
   let same = 1;
   for (let i = 0; i < sentences.length; i++) {
     if (loopIn(String(sentences[i].text || ''))) return true;
@@ -167,10 +170,10 @@ async function mergeParts(keys, parts, outs, kept, standalone) {
   });
   try {
     const { out: m } = await generateJSON(keys, { parts: [{ text: buildMergePrompt({ parts: input, standalone }) }], schema: buildMergeSchema({ standalone }) });
-    return { map: new Map((m.speakers || []).map((x) => [`${x.part}:${x.label}`, x.speaker])), sound: m.sound, descriptor: m.descriptor, tags: m.tags };
+    return { map: new Map((m.speakers || []).map((x) => [`${x.part}:${x.label}`, x.speaker])), sound: m.sound, descriptor: m.descriptor };
   } catch (e) {
     console.error(`merge call failed (${e.message}) — keeping each part's own speaker labels`);
-    return { map: new Map(), sound: outs.map((o) => o.sound).filter(Boolean).join(' '), descriptor: outs[0].descriptor, tags: [...new Set(outs.flatMap((o) => o.tags || []))] };
+    return { map: new Map(), sound: outs.map((o) => o.sound).filter(Boolean).join(' '), descriptor: outs[0].descriptor };
   }
 }
 
@@ -206,17 +209,8 @@ function mapTimings(words, timed) {
   return out;
 }
 
-// Loudness of a file's audio in 10 ms frames (dB), or null.
-function loudness(file) {
-  const samples = pcm(file, 16000);
-  if (!samples) return null;
-  const hop = 160, db = [];
-  for (let i = 0; i + hop <= samples.length; i += hop) { let s = 0; for (let j = i; j < i + hop; j++) s += (samples[j] / 32768) ** 2; db.push(10 * Math.log10(s / hop + 1e-12)); }
-  return db;
-}
-
-// The model's times sit on a 0.1 s grid. Move each word edge within ±SNAP s to where sustained (≥50 ms)
-// speech within 30 dB of the peak starts/stops, never across a neighbouring word.
+// Move each of Whisper's word edges within ±SNAP s to where sustained (≥50 ms) speech within 30 dB of
+// the peak starts/stops (10 ms frames), never across a neighbouring word.
 const SNAP = 0.25, RUN = 5;
 function tidyTimes(times, db) {
   const dur = db.length / 100, F = (s) => Math.round(s * 100), thr = Math.max(...db) - 30, loud = (f) => db[f] > thr;
@@ -262,19 +256,32 @@ async function whisperModel() {
 // ended (punctuation tokens hold the pauses), or at whisper's own token start when that is later and
 // still before the end.
 async function whisperWords(wav, language) {
-  if (!have('whisper-cli')) throw new Error('whisper-cli is missing — run bash tools/setup.sh (Windows: tools\\setup.ps1)');
+  if (!have('whisper-cli')) throw new Error(`whisper-cli is missing — ${SETUP_HINT}`);
   const out = join(dirname(wav), 'words');
   run('whisper-cli', ['-m', await whisperModel(), '-f', wav, '-l', language || 'auto', '-ojf', '-of', out, '-np', '-nfa', '--dtw', 'large.v3.turbo', '-t', String(Math.min(8, availableParallelism()))]);
+  return tokenWords(JSON.parse(readFileSync(`${out}.json`, 'utf8')).transcription.flatMap((s) => s.tokens));
+}
+
+// A piece without a leading space joins the word before it; punctuation joins it too, except opening
+// marks (¿ ¡ « “ ( [), which go on the next word.
+const OPENING = '¿¡«“‘([';
+function tokenWords(tokens) {
   const words = [];
-  let prev = null;
-  for (const t of JSON.parse(readFileSync(`${out}.json`, 'utf8')).transcription.flatMap((s) => s.tokens)) {
+  let prev = null, open = '';
+  for (const t of tokens) {
     if (/^\[_.*\]$/.test(t.text)) continue; // special tokens
     const end = (t.t_dtw >= 0 ? t.t_dtw * 10 : t.offsets.to) / 1000;
-    if (/[\p{L}\p{N}]/u.test(t.text)) {
+    const text = t.text.trim();
+    if (/[\p{L}\p{N}]/u.test(text)) {
       const from = t.offsets.from / 1000, lead = prev ?? end - (t.offsets.to - t.offsets.from) / 1000;
       const start = Math.min(end, from < end ? Math.max(from, lead) : lead);
-      if (/^\s/.test(t.text) || !words.length) words.push({ word: t.text.trim(), start, end });
-      else Object.assign(words.at(-1), { word: words.at(-1).word + t.text, end });
+      if (/^\s/.test(t.text) || !words.length || open || OPENING.includes(text[0])) words.push({ word: open + text, start, end });
+      else Object.assign(words.at(-1), { word: words.at(-1).word + text, end });
+      open = '';
+    } else if (text) { // punctuation
+      const close = text.replace(new RegExp(`[${OPENING}]+$`), '');
+      if (words.length) words.at(-1).word += close; else open += close;
+      open += text.slice(close.length);
     }
     prev = end;
   }
@@ -282,31 +289,48 @@ async function whisperWords(wav, language) {
 }
 
 export async function alignWords({ file, transcript }) {
-  // Punctuation-only tokens ride on their neighbour.
+  // Gemini's words, punctuation-only tokens riding on their neighbour.
   const words = [];
   transcript.segments.forEach((s, si) => {
     for (const w of String(s.text).split(/\s+/).filter(Boolean)) {
       if (!/[\p{L}\p{N}]/u.test(w) && words.length && words[words.length - 1].si === si) words[words.length - 1].word += ` ${w}`;
-      else words.push({ word: w, si, speaker: s.speaker ?? null });
+      else words.push({ word: w, si });
     }
   });
   if (!words.length) return { ...transcript, words: [], words_model: null };
 
   const track = audioTrack(file);
   if (!track) throw new Error('no audio stream');
-  let times;
+  let heard, db;
   try {
     const wav = join(track.dir, 'words.wav');
     run('ffmpeg', ['-y', '-v', 'error', '-i', track.path, '-c:a', 'pcm_s16le', wav]);
-    times = mapTimings(words.map((w) => w.word), await whisperWords(wav, transcript.language));
-    const db = loudness(file);
-    if (db?.length) times = tidyTimes(times, db);
+    heard = await whisperWords(wav, transcript.language);
+    db = loudness(file);
   } finally { rmSync(track.dir, { recursive: true, force: true }); }
+  if (!heard.length) return { ...transcript, words: [], words_model: null };
 
-  const out = words.map((w, i) => ({ start: round(times[i].start), end: round(times[i].end), word: w.word, speaker: w.speaker }));
-  const segments = transcript.segments.map((s, si) => {
-    const ws = out.filter((_, i) => words[i].si === si);
-    return ws.length ? { ...s, start: ws[0].start, end: ws[ws.length - 1].end } : s;
+  // Whisper's words are the final text: Gemini's sentences only lend each word its sentence and speaker,
+  // by where Gemini's own words land on Whisper's timeline.
+  const at = mapTimings(words.map((w) => w.word), heard);
+  const span = transcript.segments.map((_, si) => {
+    const t = at.filter((_, i) => words[i].si === si);
+    return t.length ? [t[0].start, t[t.length - 1].end] : null;
   });
-  return { ...transcript, segments, words: out, words_model: WORDS_MODEL };
+  const segOf = (w) => {
+    const mid = (w.start + w.end) / 2;
+    let best = 0, gap = Infinity;
+    span.forEach((s, si) => { if (!s) return; const d = mid < s[0] ? s[0] - mid : mid > s[1] ? mid - s[1] : 0; if (d < gap) { gap = d; best = si; } });
+    return best;
+  };
+  const times = db?.length ? tidyTimes(heard, db) : heard;
+  const out = heard.map((w, i) => ({ si: segOf(w), start: round(times[i].start), end: round(times[i].end), word: w.word }));
+  const segments = transcript.segments.flatMap((s, si) => {
+    const ws = out.filter((w) => w.si === si);
+    return ws.length ? [{ ...s, start: ws[0].start, end: ws[ws.length - 1].end, text: ws.map((w) => w.word).join(' ') }] : [];
+  });
+  return {
+    ...transcript, text: segments.map((s) => s.text).join(' '), segments,
+    words: out.map(({ si, ...w }) => ({ ...w, speaker: transcript.segments[si].speaker ?? null })), words_model: WORDS_MODEL,
+  };
 }

@@ -16,12 +16,9 @@ Every destination tool works the same way:
 node tools/upload-to-<dest>.mjs [--list] [--confirm] [--create] <spec.json>
 ```
 
-- `--list` inspects the destination (folders, boards, fields) and writes nothing.
-- A plain run prints the plan and writes nothing; show it to the user.
-- `--confirm` writes. Re-running never duplicates (matched by name). It also notes the link on the
-  ad's record (`sentTo`, see `tools/record-ad.mjs`), which Studio shows.
-- Drive only: never creates a folder unless `--create` is passed, after the user agrees. The Notion
-  tool never creates a board.
+`--list` inspects the destination; a plain run prints the plan (show it to the user); `--confirm`
+writes, never duplicating, and notes the link on the ad's record (`sentTo`). Nothing creates a folder
+or board unless `--create` is passed, after the user agrees (Notion never does).
 
 ## The spec
 
@@ -37,7 +34,7 @@ keys. One spec feeds every destination. Omit a field to leave it unset.
   "ratio": ["4:5"], "variations": 4,
   "headline": "Switch To Steady Energy",
   "primaryText": "Sentence one.\n\nSentence two.",
-  "images": ["workspaces/<WS>/Acme/outputs/20.1_..._WELCOME20.png"]
+  "images": ["workspaces/<WS>/Acme/outputs/20_…/final/20_V1_….png"]
 }
 ```
 
@@ -64,8 +61,6 @@ Files land in `<WS>_DRIVE_FOLDER / <brand folder> / <group> /`, where the group 
 
 - Inside the brand folder, ads sit in a **package folder** (e.g. `100-statics-package`), in
   **per-batch group folders**, or directly. Confirm which with the user and set `driveSubfolder`.
-- Without a pinned folder, the brand folder is the one whose name contains `brand`
-  (case-insensitive; exact match wins; several matches error).
 - A new per-ad folder is named `<ID> <descriptor>` (e.g. `41 Static - The Morning Routine Math`),
   never prefixed with `#`.
 - A revision: `--archive` moves same-named files into `Archived` before uploading.

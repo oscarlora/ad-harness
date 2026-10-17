@@ -4,11 +4,9 @@
 // Creds in .env (from connect-drive.mjs): <WS>_DRIVE_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN / _FOLDER
 // Folder resolution never creates silently (brandFolders, resolveGroupFolder); group folders match by
 // exact name.
-import { createWriteStream, existsSync, mkdirSync, openSync, readSync, closeSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import { loadEnv, die, sleep, mimeOf, inferWorkspace, readUploads } from './catalog.mjs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { die, mimeOf, inferWorkspace, readUploads, wsKey, downloadFile, decodeHtml } from './catalog.mjs';
 
 const API = 'https://www.googleapis.com/drive/v3';
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -23,33 +21,29 @@ export async function driveApi(url, token, { method = 'GET', headers = {}, body 
   if (!r.ok) throw new Error(`Drive ${method} ${url.split('?')[0]} -> HTTP ${r.status}: ${j.error?.message || text.slice(0, 200)}`);
   return j;
 }
-const credKeys = (W) => ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'].map((k) => `${W.toUpperCase()}_DRIVE_${k}`);
-export const hasDriveCreds = (workspace) => { const env = loadEnv(); return credKeys(workspace).every((k) => env[k]); };
+const CREDS = ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'];
+export const hasDriveCreds = (workspace) => CREDS.every((k) => wsKey(workspace, `DRIVE_${k}`));
 
 // Exits with setup help when creds are missing or revoked. needFolder: also require <WS>_DRIVE_FOLDER.
 export async function driveToken(workspace, { needFolder = false } = {}) {
   const W = workspace.toUpperCase();
-  const env = loadEnv();
-  const [id, secret, refresh] = credKeys(W);
-  const keys = { id, secret, refresh, folder: `${W}_DRIVE_FOLDER` };
-  const missing = [keys.id, keys.secret, keys.refresh, ...(needFolder ? [keys.folder] : [])].filter((k) => !env[k]);
+  const env = Object.fromEntries([...CREDS, 'FOLDER'].map((k) => [k, wsKey(W, `DRIVE_${k}`)]));
+  const missing = [...CREDS, ...(needFolder ? ['FOLDER'] : [])].filter((k) => !env[k]).map((k) => `${W}_DRIVE_${k}`);
   if (missing.length) {
     console.error(`\nMissing Google Drive credentials for workspace ${W}: ${missing.join(', ')}`);
-    console.error(`First-time setup (one-time consent): download the workspace's OAuth client (Desktop) JSON, then run:`);
-    console.error(`   node tools/connect-drive.mjs ${W}`);
-    console.error(`That opens a browser consent link and writes the creds into .env.${needFolder ? ` Then set ${keys.folder}=<destination folder id>.` : ''}\n`);
+    console.error(`Set them up: node tools/connect-drive.mjs --help${needFolder ? `. Then set ${W}_DRIVE_FOLDER=<destination folder id>` : ''}.\n`);
     process.exit(1);
   }
   const tk = await (await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: env[keys.id], client_secret: env[keys.secret], refresh_token: env[keys.refresh], grant_type: 'refresh_token' }),
+    body: new URLSearchParams({ client_id: env.CLIENT_ID, client_secret: env.CLIENT_SECRET, refresh_token: env.REFRESH_TOKEN, grant_type: 'refresh_token' }),
   })).json();
   if (!tk.access_token) {
     console.error('Drive token refresh failed:', tk.error || '(no error code)', tk.error_description || '');
     if (tk.error === 'invalid_grant') console.error(`Refresh token revoked/expired. Re-run: node tools/connect-drive.mjs ${W}`);
     process.exit(1);
   }
-  return { token: tk.access_token, folder: env[keys.folder] };
+  return { token: tk.access_token, folder: env.FOLDER };
 }
 
 export async function listChildren(folderId, token, { foldersOnly = false } = {}) {
@@ -68,16 +62,13 @@ export async function listChildren(folderId, token, { foldersOnly = false } = {}
 // Without creds a link-shared folder is read through Drive's public embedded view: ids + names only
 // (no modifiedTime/size), Google-native docs show as non-files.
 const NATIVE = 'application/vnd.google-apps.native';
-const unescape = (s) => s.replace(/&#x([\da-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
-  .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
 async function publicFolder(folderId) {
   const r = await fetch(`https://drive.google.com/embeddedfolderview?id=${folderId}`);
   const html = r.ok ? await r.text() : '';
   if (!html.includes('flip-entries')) throw new Error(`Drive folder ${folderId} isn't readable without creds (HTTP ${r.status}). Share it as "anyone with the link", or connect Drive: node tools/connect-drive.mjs <WS>`);
-  const name = unescape((html.match(/<title>([^<]*)/) || [])[1] || '');
+  const name = decodeHtml((html.match(/<title>([^<]*)/) || [])[1] || '').trim();
   const files = [...html.matchAll(/<div class="flip-entry" id="entry-([\w-]+)"[\s\S]*?<a href="([^"]+)"[\s\S]*?<div class="flip-entry-title">([\s\S]*?)<\/div>/g)]
-    .map(([, id, href, title]) => ({ id, name: unescape(title), mimeType: href.includes('/drive/folders/') ? FOLDER_MIME : href.includes('/file/d/') ? null : NATIVE, modifiedTime: null, size: null }));
+    .map(([, id, href, title]) => ({ id, name: decodeHtml(title).trim(), mimeType: href.includes('/drive/folders/') ? FOLDER_MIME : href.includes('/file/d/') ? null : NATIVE, modifiedTime: null, size: null }));
   return { name, files };
 }
 
@@ -98,26 +89,6 @@ export async function listTree(folderId, token) {
   return { name: rootName, files };
 }
 
-// Up to 3 tries. A web page in place of the file (not shared, quota, virus-scan wall) counts as failure.
-// Returns { bytes, filename } (filename from Content-Disposition).
-export async function downloadFile(url, dest, headers = {}) {
-  mkdirSync(dirname(dest), { recursive: true });
-  let last;
-  for (let i = 1; i <= 3; i++) {
-    try {
-      const r = await fetch(url, { headers });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      if (/text\/html/i.test(r.headers.get('content-type') || '')) throw new Error('Drive returned a web page, not the file');
-      await pipeline(Readable.fromWeb(r.body), createWriteStream(dest));
-      const head = Buffer.alloc(64); const fd = openSync(dest, 'r'); readSync(fd, head, 0, 64, 0); closeSync(fd);
-      if (/^\s*<(!doctype|html)/i.test(head.toString('latin1'))) throw new Error('Drive returned a web page, not the file');
-      const cd = r.headers.get('content-disposition') || '';
-      const filename = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/i) || [])[1] || '') || (cd.match(/filename="([^"]+)"/i) || [])[1] || null;
-      return { bytes: statSync(dest).size, filename };
-    } catch (e) { last = e; rmSync(dest, { force: true }); if (i < 3) await sleep(2000 * i); }
-  }
-  throw last;
-}
 export const downloadDriveFile = (fileId, dest, token) => downloadFile(
   token ? `${API}/files/${fileId}?alt=media&supportsAllDrives=true` : `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`,
   dest, token ? auth(token) : {});
@@ -140,8 +111,7 @@ export async function uploadFile(parent, path, token) {
   return { ...created, updated: false };
 }
 
-// _catalog/drive-sources.json: { <folderId>: { folderId, sourceType, sourceName, lastCheckedAt,
-//   files: { <driveFileId>: { name, modifiedTime, size, ingestedAt, catalogId } } } }.
+// _catalog/drive-sources.json: { <folderId>: { folderId, files: { <driveFileId>: { name, modifiedTime, catalogId } } } }.
 // A listed file is downloaded again only when Drive reports a newer modifiedTime.
 export const readDriveSources = (paths) => (existsSync(paths.driveSources) ? JSON.parse(readFileSync(paths.driveSources, 'utf8')) : {});
 export const writeDriveSources = (paths, data) => { mkdirSync(paths.catalog, { recursive: true }); writeFileSync(paths.driveSources, JSON.stringify(data, null, 2) + '\n'); };

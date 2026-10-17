@@ -1,7 +1,7 @@
 // Sound: one mixing graph for preview (AudioContext) and export (OfflineAudioContext), so both hear the same mix.
 // Per clip: volume (dB, keyframable), fadeIn/fadeOut (s), loop · per track: volume (dB, keyframable), mute ·
 // master: loudness target (LUFS, default -14) and a limiter.
-import { hasSound, val } from './doc.js';
+import { hasSound, keyed, val } from './doc.js';
 
 const db = (x) => 10 ** (x / 20);
 const STEP = 1 / 50; // automation resolution, s
@@ -14,12 +14,11 @@ function automate(param, fn, a, b, when, keyedValue) {
   for (let i = 0; i < n; i++) curve[i] = fn(a + ((b - a) * i) / (n - 1));
   param.setValueCurveAtTime(curve, when, Math.max(STEP, b - a));
 }
-const isKeyed = (v) => Array.isArray(v);
 
 // Clips that sound, with their decoded buffers.
 export async function soundClips(doc, media, ctx) {
   const clips = doc.tracks.filter((tr) => !tr.mute).flatMap((tr) => tr.clips.filter(hasSound));
-  const bufs = await Promise.all(clips.map((c) => media.sound(c.src, ctx)));
+  const bufs = await Promise.all(clips.map((c) => media.sound(c.src, ctx, c.rate)));
   return clips.map((c, i) => ({ c, buf: bufs[i] })).filter((x) => x.buf);
 }
 
@@ -34,7 +33,7 @@ export function schedule(ctx, doc, sounds, { from = 0, to = doc.duration, when =
   const bus = (tr) => {
     if (!buses.has(tr)) {
       const g = ctx.createGain();
-      automate(g.gain, (t) => db(val(tr.volume, t, 0)), from, to, when, isKeyed(tr.volume));
+      automate(g.gain, (t) => db(val(tr.volume, t, 0)), from, to, when, keyed(tr.volume));
       g.connect(master);
       buses.set(tr, g);
     }
@@ -44,22 +43,23 @@ export function schedule(ctx, doc, sounds, { from = 0, to = doc.duration, when =
   for (const { c, buf } of sounds) {
     const a = Math.max(c.at, from), b = Math.min(c.end, to);
     if (b <= a) continue;
-    let offset = c.in + (a - c.at) * c.rate;
+    // buf is the source already at the clip's speed (media.sound), so source time t sits at t / rate.
+    const in0 = c.in / c.rate;
+    let offset = in0 + (a - c.at);
     const src = ctx.createBufferSource();
     src.buffer = buf;
     if (c.loop) { // repeats its source from `in` to the end until the clip ends
       src.loop = true;
-      src.loopStart = c.in;
+      src.loopStart = in0;
       src.loopEnd = buf.duration;
-      offset = c.in + ((offset - c.in) % (buf.duration - c.in));
+      offset = in0 + ((offset - in0) % (buf.duration - in0));
     } else if (offset >= buf.duration) continue;
-    src.playbackRate.value = c.rate;
     const g = ctx.createGain();
     const fi = c.fadeIn || 0, fo = c.fadeOut || 0;
     const env = (t) => db(val(c.volume, t, 0)) * (fi ? Math.min(1, (t - c.at) / fi) : 1) * (fo ? Math.min(1, (c.end - t) / fo) : 1);
-    automate(g.gain, env, a, b, when + (a - from), isKeyed(c.volume) || fi > 0 || fo > 0);
+    automate(g.gain, env, a, b, when + (a - from), keyed(c.volume) || fi > 0 || fo > 0);
     src.connect(g).connect(bus(c.track));
-    src.start(when + (a - from), offset, (b - a) * c.rate);
+    src.start(when + (a - from), offset, b - a);
     nodes.push(src);
   }
   return nodes;

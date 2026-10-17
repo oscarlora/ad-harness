@@ -29,9 +29,7 @@ Pull a store's public reviews into `inputs/reviews.csv`, before **research-brand
 ## Platforms
 
 Which work, how each feed is read, and how to add an adapter: the header and code of
-`tools/pull-reviews.mjs`. Not in the tool yet: Yotpo is keyed by an `app_key` in the page,
-Reviews.io by a store token; for Judge.me's `store_invitation` reviews, check the page's
-`jdgmSettings.coupon_*` for whether invites carry a coupon.
+`tools/pull-reviews.mjs`.
 
 ## CSV
 

@@ -63,7 +63,11 @@ Teams share brands through cloud storage:
 
 ## How to set it up
 
-1. Install an AI agent (Claude Code, Codex, Cursor…).
+1. Install an AI agent (Claude Code, Codex, Cursor…) and pick its model:
+   - **Claude:** Opus 5.5, medium (the repo sets it for Claude Code)
+   - **OpenAI:** GPT-6.1 Sol, medium
+   - **xAI:** Grok 4.7, default effort
+   - **Meta:** Muse Wonder, default effort
 2. Tell it: *"Set up the Ad Production Kit from https://github.com/oscarlora/ad-production-kit"*
 
 The agent downloads it, installs what's missing (git, Node, ffmpeg), and walks you through your

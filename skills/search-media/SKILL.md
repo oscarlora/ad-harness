@@ -5,10 +5,10 @@ description: Find and use media from a brand's library — by meaning in any lan
 
 # Search media
 
-The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). Search it first
-for reference photos, footage, music or sounds, instead of hunting raw folders. Assets for every
-brand (music, SFX, references) live in the public **shared library** — pull it if it isn't local
-(AGENTS.md, First-time setup), then search it the same way with
+The library is the catalog built by **catalog-media** (`inputs/media/_catalog/`). For reference
+photos, footage, music or sounds, search the brand's library and the public **shared library**
+(assets for every brand) first, before hunting raw folders or generating. Pull the shared library if
+it isn't local (AGENTS.md, First-time setup) and search it the same way with
 `--media workspaces/Shared/Library/inputs/media`.
 
 ## Agent search — retrieve, then judge
@@ -17,7 +17,7 @@ brand (music, SFX, references) live in the public **shared library** — pull it
    ```
    node tools/search-media.mjs --media <brand>/inputs/media --query "bowl de res visto desde arriba" \
      [--type image|video|audio] [--orientation portrait|landscape|square] \
-     [--product "<name>"] [--person "<name>"] [--source brand|generated|external] [--limit 20] [--json]
+     [--product "<name>"] [--person "<name>"] [--source generated|link|upload] [--limit 20] [--json]
    node tools/search-media.mjs --media <brand>/inputs/media --like 00042 [filters]
    ```
    Queries match by meaning and keyword, in any language. A video hit shows `scene N @ start–end s`:

@@ -14,15 +14,15 @@ pills bottom-right:
 
 | product | persona | angle | format | hook | subline-top | subline-bottom | pill-1 | pill-2 | pill-3 |
 
-The table lives in the **conversation only** until step 8 makes it the ad's record.
+The table lives in the **conversation**.
 
 ## Before starting
 
 Load the brand context (AGENTS.md). **Never repeat** a persona/angle/format already in the brand's
 ads (check `outputs/index.md` or the records) unless asked.
 
-For **more than one** ad, plan the set first with **plan-batch**, then run this workflow once per ad:
-take the next open slot, and add the id to the plan's `made` after generating.
+For **more than one** ad, plan the set first with **plan-batch**, then run this workflow once per ad,
+from the next open slot.
 
 ## Starting point
 
@@ -44,10 +44,9 @@ The **concept** is product + persona + angle + format. Then copy, then design.
 5. **Copy** — hook, plus subline and tertiary if the format uses them (**write-copy**).
 6. **Design** — colors, fonts, hierarchy, legibility (**ideate-image-format**, Design).
 7. **Prompt** — compose the structured prompt in the chat, not in a file (**write-prompt**).
-8. **Show, then generate** — show the full ad as a **table in the chat**, every parameter the JSON will hold **including the prompt**. Then write the record `outputs/json/[id].json`, update the batch plan, and render (**write-prompt**).
+8. **Show, then generate** — show the full ad as a **table in the chat**, every parameter **including the prompt**. Then render (**write-prompt**).
 9. **Approve** — on the user's yes, move the render to `final/` (**write-prompt**, filename
-   convention), then refresh the index (`node tools/record-ad.mjs --index <brand outputs/ dir>`),
-   which strips embedded metadata from every approved image.
+   convention).
 10. **Story version** — every static is made 4:5 first; once a 4:5 is approved, make its 9:16 Story
     version by AI extension, never a new layout: `node tools/extend-to-story.mjs --in <approved 4:5>
     --out <drafts/…> --above "<what continues above>" --below "<what continues below>"`. Use its

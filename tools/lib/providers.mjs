@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
-import { brandDirFrom, extForMime, inferBrand, inferWorkspace, loadEnv, mimeOf, sleep, typeOf } from './catalog.mjs';
+import { brandDirFrom, extForMime, inferBrand, inferWorkspace, loadEnv, mimeOf, sleep, typeOf, wsKey } from './catalog.mjs';
 import { r2FromEnv } from './r2.mjs';
 
 // The only models tools accept by name. kie = its model id (generate-*.mjs add the per-mode suffix);
@@ -60,12 +60,24 @@ export function workspaceKeys(paths, from = '--out') {
   if (!ws) throw userError(`Could not infer the workspace from ${from} (expected workspaces/<Workspace>/...).`);
   const W = ws.toUpperCase();
   const keys = {};
-  for (const [q, name] of Object.entries(PROVIDER_KEY)) {
-    process.env[name] = process.env[`${W}_${name}`] || '';
-    keys[q] = !!process.env[name];
-  }
+  for (const [q, name] of Object.entries(PROVIDER_KEY)) keys[q] = !!(process.env[name] = wsKey(W, name) || '');
   return { W, keys };
 }
+
+// --num and --timeout, as every generate-*.mjs reads them; runHelp is their --help lines (with the
+// Gateway's --unlisted-model and --provider unless gateway is null), envHelp the key line.
+export const runOpts = (args, timeout) => ({ num: Math.max(1, parseInt(args.num || '1', 10)), timeout: parseInt(args.timeout || String(timeout), 10) });
+export const runHelp = (timeout, { num = 'Variations (default 1)', gateway = '' } = {}) => [
+  `  --num <n>                ${num}`,
+  `  --timeout <seconds>      Max wait per task (default ${timeout})`,
+  ...(gateway == null ? [] : [
+    "  --unlisted-model <id>    A kie model id outside the list, sent as-is with --model's request shape",
+    "                           and no checks. Only with the user's yes",
+    '  --provider kie|gateway   Force one. By default a request kie rejects before generating goes to the',
+    `                           AI Gateway when the workspace has <WS>_AI_GATEWAY_API_KEY${gateway}`,
+  ]),
+].join('\n');
+export const envHelp = (from = '--out') => `Env: <WORKSPACE>_KIE_API_KEY; the workspace comes from ${from}.`;
 
 // kie, then the Gateway on a pre-submit rejection when the model is on it and the workspace has its
 // key. `blocker` = why kie can't take this request (checked locally, so nothing is uploaded).
@@ -188,12 +200,14 @@ export async function kieUpload(refPath) {
   return url;
 }
 
-// A createTask code other than 200 means no task was made (nothing billed): a pre-submit rejection.
-export async function kieJob(model, input, timeoutSec, pollMs = 5000) {
+// A createTask code other than 200 means no task was made (nothing billed): a pre-submit rejection,
+// retried on 5xx and 429. pick(record, taskId) = the results of a successful task (default: its URLs).
+export const kieUrls = (d) => JSON.parse(d.resultJson || '{}').resultUrls;
+export async function kieJob(model, input, timeoutSec, { pollMs = 5000, pick = kieUrls } = {}) {
   const taskId = await retryTransient(async () => {
     const json = await kie('/api/v1/jobs/createTask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, input }) });
     if (json?.code !== 200 || !json?.data?.taskId)
-      throw Object.assign(preSubmit(userError(`kie rejected ${model} before generating: ${json?.msg || JSON.stringify(json)} (code ${json?.code})`)), { fatal: true });
+      throw Object.assign(preSubmit(userError(`kie rejected ${model} before generating: ${json?.msg || JSON.stringify(json)} (code ${json?.code})`)), { fatal: !(json?.code === 429 || json?.code >= 500) });
     return json.data.taskId;
   });
   console.error(`task      ${model} -> ${taskId}`);
@@ -201,10 +215,10 @@ export async function kieJob(model, input, timeoutSec, pollMs = 5000) {
   for (;;) {
     const d = (await kie(`/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`))?.data || {};
     if (d.state === 'success') {
-      const urls = JSON.parse(d.resultJson || '{}').resultUrls || [];
-      if (!urls.length) throw new Error(`task ${taskId} success but no resultUrls`);
+      const results = pick(d, taskId) || [];
+      if (!results.length) throw new Error(`task ${taskId} succeeded with no results`);
       console.error(`done      ${taskId}${d.creditsConsumed != null ? `  ${d.creditsConsumed} credits` : ''}`);
-      return urls;
+      return results;
     }
     if (d.state === 'fail') throw userError(`task ${taskId} failed: ${d.failMsg || 'unknown'}${d.failCode ? ` (failCode ${d.failCode})` : ''}`);
     if (Date.now() > deadline) throw new Error(`task ${taskId} timed out after ${timeoutSec}s (state=${d.state}); it may still finish and bill — check kie's logs before resubmitting`);
@@ -227,12 +241,17 @@ async function writeAs(outPath, ext, bytes) {
   return finalPath;
 }
 
-// The extension follows the actual bytes: providers may return jpg for a png request.
-export async function downloadTo(url, outPath, { fallbackExt, transform = (b) => b } = {}) {
+// A result's bytes and extension. The extension follows the actual bytes (from the content type, else
+// the URL; '' if neither says): providers may return jpg for a png request.
+export async function fetchResult(url) {
   const res = await fetch(url);
   if (!res.ok) throw userError(`download ${url} -> HTTP ${res.status}`);
-  const ext = extForMime(res.headers.get('content-type')) || extname(new URL(url).pathname).slice(1).toLowerCase() || fallbackExt;
-  return writeAs(outPath, ext, transform(Buffer.from(await res.arrayBuffer())));
+  const ext = extForMime(res.headers.get('content-type')) || extname(new URL(url).pathname).slice(1).toLowerCase();
+  return { bytes: Buffer.from(await res.arrayBuffer()), ext };
+}
+export async function downloadTo(url, outPath, { fallbackExt, transform = (b) => b } = {}) {
+  const { bytes, ext } = await fetchResult(url);
+  return writeAs(outPath, ext || fallbackExt, transform(bytes));
 }
 
 // Results are URLs (kie) or { bytes, mediaType | ext } (Gateway). Prints "Saved: <path>" per file.
@@ -248,17 +267,20 @@ export async function saveResults(results, out, { fallbackExt, transform = (b) =
   return saved;
 }
 
+// A path relative to its brand folder when it is in one (URLs and other paths as given).
+export const brandRel = (p) => (/^https?:\/\//i.test(p) || !inferBrand(p) ? p : relative(brandDirFrom(p), resolve(p)).replace(/\\/g, '/'));
+
 // <stem>.gen.json beside each saved file, read by the Studio. Ref paths are brand-relative when possible.
-export async function writeSidecars(saved, { tool, model, provider, params = {}, refs = [], prompt }) {
-  const rel = (p) => (/^https?:\/\//i.test(p) || !inferBrand(p) ? p : relative(brandDirFrom(p), resolve(p)).replace(/\\/g, '/'));
-  const body = JSON.stringify({
+// each[i] adds fields to saved[i]'s sidecar only.
+export async function writeSidecars(saved, { tool, model, provider, params = {}, refs = [], prompt, each = [] }) {
+  const common = {
     tool, model, provider, at: new Date().toISOString(),
     params: Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== '')),
-    refs: refs.map(({ role, path }) => ({ role, path: rel(String(path)) })),
+    refs: refs.map(({ role, path }) => ({ role, path: brandRel(String(path)) })),
     prompt,
-  }, null, 2) + '\n';
-  for (const p of saved) {
-    await writeFile(resolve(p.replace(/\.[^./]+$/, '') + '.gen.json'), body)
+  };
+  for (const [i, p] of saved.entries()) {
+    await writeFile(resolve(p.replace(/\.[^./]+$/, '') + '.gen.json'), JSON.stringify({ ...common, ...each[i] }, null, 2) + '\n')
       .catch((e) => console.error(`WARN: no sidecar for ${p}: ${e.message}`)); // never fail a paid generation over it
   }
 }

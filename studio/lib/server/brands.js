@@ -50,7 +50,7 @@ export async function brandCtx(params) {
   return dir ? { ws, brand, dir } : null;
 }
 
-// A /[ws]/[brand]/<tab> page: 404 on an unknown brand. Each page file keeps its own `dynamic` literal (Next reads it statically).
+// A /[ws]/[brand]/<tab> page: 404 on an unknown brand.
 export const brandPage = (Component, extra) => async function BrandTabPage({ params }) {
   const ctx = await brandCtx(params);
   if (!ctx) notFound();

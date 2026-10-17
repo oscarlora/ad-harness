@@ -2,12 +2,12 @@
 // An ad's edit: the live preview (Studio's engine, the same one the export runs), its timeline, and review notes
 // pinned to a moment and a spot on the frame. The agent edits the document; the preview follows the file.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiBase, fileUrl, openFile, postJson } from '../../lib/client/api.js';
-import { isTyping } from '../../lib/client/hooks.js';
+import { editApi, fileUrl, openFile } from '../../lib/client/api.js';
+import { clock } from '../../lib/client/format.js';
+import { isTyping, useUndo } from '../../lib/client/hooks.js';
 import { compose } from '../../engine/doc.js';
-import { clock } from '../BrandPage.js';
-import { IcCheck, IcPause, IcPlay, IcX } from '../icons.js';
-import { Dot } from '../workflow/parts.js';
+import { IcPause, IcPlay } from '../icons.js';
+import { Compose, Notes } from '../workflow/parts.js';
 import { SafeZones, useZones, ZoneButton } from '../Player.js';
 import Timeline from './Timeline.js';
 import Trim from './Trim.js';
@@ -22,8 +22,6 @@ function brandPath(ad, src) {
   return out.join('/');
 }
 
-const STATUS = { open: ['todo', 'Waiting'], seen: ['current', 'Seen'], done: ['done', 'Done: review it'], approved: ['done', 'Approved'] };
-
 export default function Editor({ ws, brand, ad, edit }) {
   const [planFile, setPlanFile] = useState(edit.plans[0].file);
   const plan = edit.plans.find((p) => p.file === planFile) || edit.plans[0];
@@ -37,6 +35,9 @@ export default function Editor({ ws, brand, ad, edit }) {
   const [focus, setFocus] = useState(null); // note id
   const [off, setOff] = useState(() => new Set()); // track names turned off in the preview (never written to the doc)
   const [trimId, setTrimId] = useState(null); // the clip open in the trim panel
+  const api = editApi(ws, brand, ad);
+  // ⌘Z / ⌘⇧Z undo and redo trims: each puts its document back as it was, unless it changed since.
+  const recordUndo = useUndo(({ file, before, after }, redo) => api({ restore: { file, text: redo ? after : before, expect: redo ? before : after } }).catch((e) => setError(e.message)));
   const rootRef = useRef(null), tlRef = useRef(null);
   useEffect(() => { // the fixed timeline's height sizes the preview above it
     const el = tlRef.current;
@@ -214,14 +215,11 @@ export default function Editor({ ws, brand, ad, edit }) {
     return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown); };
   }, [drafting]);
 
-  const saveDraft = async () => {
-    const d = draft;
-    if (!d?.text.trim()) return setDraft(null);
-    const box = d.box[2] > 0.01 || d.box[3] > 0.01 ? d.box : null;
-    setDraft(null);
-    await postJson(`${apiBase(ws, brand)}/edit`, { ad, note: { t: d.t, box, text: d.text, plan: plan.file } }).catch((e) => setError(e.message));
+  const saveDraft = (text) => {
+    const box = draft.box[2] > 0.01 || draft.box[3] > 0.01 ? draft.box : null;
+    api({ note: { t: draft.t, box, text, plan: plan.file } }).catch((e) => setError(e.message));
   };
-  const noteAction = (body) => postJson(`${apiBase(ws, brand)}/edit`, { ad, ...body }).catch((e) => setError(e.message));
+  const noteAction = (body) => api(body).catch((e) => setError(e.message));
   const pick = (n) => { setFocus(n.id); seek(n.t); };
   // Plays what changed for a note: its changed stretch (or its moment), with a second either side.
   const review = (n) => {
@@ -238,8 +236,8 @@ export default function Editor({ ws, brand, ad, edit }) {
   const W = doc?.W || 1080, H = doc?.H || 1920;
   const [zone, nextZone] = useZones(W / H);
   const trimClip = trimId && doc?.tracks.flatMap((tr) => tr.clips).find((c) => c.id === trimId);
-  const applyTrim = (cut) => postJson(`${apiBase(ws, brand)}/edit`, { ad, trim: { plan: plan.file, id: trimId, ...cut } })
-    .then(() => setTrimId(null)).catch((e) => setError(e.message));
+  const applyTrim = (cut) => api({ trim: { plan: plan.file, id: trimId, ...cut } })
+    .then((r) => { if (r.undo) recordUndo(r.undo); setTrimId(null); }).catch((e) => setError(e.message));
 
   return (
     <div className="ed" ref={rootRef}>
@@ -253,15 +251,10 @@ export default function Editor({ ws, brand, ad, edit }) {
           {draft && (
             <>
               {(draft.box[2] > 0.01 || draft.box[3] > 0.01) && <div className="ed__box ed__box--draft" style={boxStyle(draft.box)} />}
-              <form className="ed__compose" style={composeStyle(draft.box)} onPointerDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); saveDraft(); }}>
-                <textarea
-                  ref={composeRef} autoFocus rows={2} value={draft.text} placeholder={`Note at ${clock(draft.t, true)}`}
-                  onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveDraft(); }
-                  }}
-                />
-              </form>
+              <Compose
+                ref={composeRef} style={composeStyle(draft.box)} onPointerDown={(e) => e.stopPropagation()} placeholder={`Note at ${clock(draft.t, true)}`}
+                value={draft.text} onChange={(text) => setDraft({ ...draft, text })} onSend={saveDraft} onClose={() => setDraft(null)}
+              />
             </>
           )}
           {!doc && !error && <div className="ed__wait">Loading</div>}
@@ -278,7 +271,7 @@ export default function Editor({ ws, brand, ad, edit }) {
           )}
           <div className="spacer" />
           {nextZone && <ZoneButton mode={zone} onClick={nextZone} className={zone ? 'btn' : 'btn btn--icon'} />}
-          <Export ws={ws} brand={brand} ad={ad} plan={plan} exp={exp} onError={setError} />
+          <Export ws={ws} brand={brand} ad={ad} plan={plan} exp={exp} api={api} onError={setError} />
         </div>
         {error && <p className="ed__error">{error}</p>}
         <Notes notes={notes} focus={focus} onPick={pick} onReview={review} onAction={noteAction} lead={(n) => <span className="ed-note__time">{clock(n.t, true)}</span>} hint="Click or drag on the video to leave a note." />
@@ -303,9 +296,9 @@ const boxStyle = ([x, y, w, h]) => ({ left: pct(x), top: pct(y), width: pct(w), 
 // The note field sits under the marked spot, or above it near the bottom.
 const composeStyle = ([x, y, w, h]) => (y + h > 0.75 ? { left: pct(Math.min(x, 0.45)), bottom: pct(1 - y + 0.01) } : { left: pct(Math.min(x, 0.45)), top: pct(y + h + 0.01) });
 
-function Export({ ws, brand, ad, plan, exp, onError }) {
+function Export({ ws, brand, ad, plan, exp, api, onError }) {
   const running = exp?.state === 'running';
-  const start = () => postJson(`${apiBase(ws, brand)}/edit`, { ad, export: plan.file }).catch((e) => onError(e.message));
+  const start = () => api({ export: plan.file }).catch((e) => onError(e.message));
   return (
     <div className="ed__export">
       {exp?.state === 'done' && exp.out && (
@@ -316,56 +309,5 @@ function Export({ ws, brand, ad, plan, exp, onError }) {
         {running ? `Exporting ${Math.round((exp.progress || 0) * 100)}%` : 'Export'}
       </button>
     </div>
-  );
-}
-
-// Pending notes, done ones first (to review and approve); approved ones only in the history. Notes come in order;
-// lead(n) shows what a note is on (its moment, or the text it quotes); onReview (optional) plays a done one's change.
-export function Notes({ notes, focus, onPick, onReview, onAction, lead, hint }) {
-  const [history, setHistory] = useState(false);
-  const approved = notes.filter((n) => n.status === 'approved');
-  const order = { done: 0, seen: 1, open: 1 };
-  const list = history ? approved
-    : notes.filter((n) => n.status !== 'approved').sort((a, b) => (order[a.status] ?? 1) - (order[b.status] ?? 1));
-  return (
-    <section className="ed__notes">
-      <div className="ed__notes-head">
-        <span className="eyebrow">{history ? 'Approved' : 'Notes'}</span>
-        <div className="spacer" />
-        {!history && list.length > 0 && (
-          <button type="button" className="ed__history" title="Move every note to the history" onClick={() => list.forEach((n) => onAction({ approve: n.id }))}>Archive all</button>
-        )}
-        {(approved.length > 0 || history) && (
-          <button type="button" className="ed__history" onClick={() => setHistory(!history)}>{history ? 'Back to notes' : `History (${approved.length})`}</button>
-        )}
-      </div>
-      {!list.length && <p className="flow-note">{history ? 'Nothing approved yet.' : hint}</p>}
-      <ul>
-        {list.map((n) => {
-          const [state, label] = STATUS[n.status] || STATUS.open;
-          return (
-            <li key={n.id} className="ed-note" data-status={n.status} aria-current={n.id === focus || undefined}>
-              <button type="button" className="ed-note__main" onClick={() => onPick(n)}>
-                {lead(n)}
-                <span className="ed-note__text">{n.text}</span>
-              </button>
-              <div className="ed-note__acts">
-                {onReview && (n.status === 'done' || n.status === 'approved') && (
-                  <button type="button" className="ed-note__act" title="Watch the change" aria-label="Watch the change" onClick={() => onReview(n)}><IcPlay /></button>
-                )}
-                {n.status === 'done' && (
-                  <button type="button" className="ed-note__act ed-note__act--ok" title="Approve" aria-label="Approve" onClick={() => onAction({ approve: n.id })}><IcCheck /></button>
-                )}
-                {n.status !== 'approved' && (
-                  <button type="button" className="ed-note__act" title="Delete note" aria-label="Delete note" onClick={() => onAction({ remove: n.id })}><IcX /></button>
-                )}
-                <Dot state={state} title={label} />
-              </div>
-              {n.reply && <p className="ed-note__reply">{n.reply}</p>}
-            </li>
-          );
-        })}
-      </ul>
-    </section>
   );
 }

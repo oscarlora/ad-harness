@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // pull-media.mjs — fetch media into a local cache for catalog-media. Sources: a local folder/file, a
 // Google Drive link or id (workspace creds, else the public link), an Air.inc board share link, or a
-// URL (yt-dlp if present, else a direct fetch). Dropbox / OneDrive are reported as not wired yet.
-import { existsSync, mkdirSync, readdirSync, statSync, copyFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+// URL (yt-dlp if present, else a direct fetch). Any other service gets a pull<Service> on pullAir's pattern
+// the first time it's used (skills/pull-media). Writes <out>/.links.json: { <file>: where it came from },
+// the file's own link when the service gives one (Drive), else the source link.
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, copyFileSync, writeFileSync, renameSync, rmSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { inferWorkspace, parseArgs, isMedia, findBin, have, catalogPaths, usage } from './lib/catalog.mjs';
-import { driveToken, driveApi, hasDriveCreds, listTree, downloadFile, downloadDriveFile, readDriveSources, FOLDER_MIME } from './lib/drive.mjs';
+import { inferWorkspace, parseArgs, isMedia, findBin, have, catalogPaths, usage, downloadFile } from './lib/catalog.mjs';
+import { driveToken, driveApi, hasDriveCreds, listTree, downloadDriveFile, readDriveSources, FOLDER_MIME } from './lib/drive.mjs';
+
+const links = {};
 
 function uniqueName(dir, name) {
   let n = name, i = 1; while (existsSync(join(dir, n))) { const dot = name.lastIndexOf('.'); n = dot > 0 ? `${name.slice(0, dot)}_${i}${name.slice(dot)}` : `${name}_${i}`; i++; } return n;
@@ -42,7 +46,9 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
     const { filename } = await downloadDriveFile(id, tmp, token);
     const name = meta?.name || filename || `${id}.bin`;
     if (!isMedia(name)) { rmSync(tmp); console.error(`skip ${name}: not a media file`); return 0; }
-    renameSync(tmp, join(out, uniqueName(out, name)));
+    const file = uniqueName(out, name);
+    renameSync(tmp, join(out, file));
+    links[file] = `https://drive.google.com/file/d/${id}/view`;
     return 1;
   }
 
@@ -63,6 +69,7 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
     try {
       const { bytes } = await downloadDriveFile(f.id, join(out, file), token);
       downloaded.push({ ...f, size: f.size ?? bytes, file });
+      links[file] = `https://drive.google.com/file/d/${f.id}/view`;
       console.log(`  ↓ ${f.name}${mb(bytes)}`);
     } catch (e) { failed.push({ id: f.id, name: f.name, error: e.message }); console.error(`  ✗ ${f.name}: ${e.message}`); }
   }
@@ -73,10 +80,13 @@ async function pullDrive(source, out, W, { brand, dryRun } = {}) {
 // Air's public share API (no key): fetch each clip's original, not the transcode, from the board
 // and every sub-board (a sub-board's clips list only as descendantBoardId of the shared board).
 async function pullAir(source, out, { dryRun } = {}) {
-  const m = source.match(/air\.inc\/a\/([\w-]+)\/b\/([\w-]+)/);
-  if (!m) { console.error('Air: pass a board share link (app.air.inc/a/<id>/b/<board id>).'); process.exit(1); }
-  const [, short, boardId] = m;
+  const m = source.match(/air\.inc\/a\/([\w-]+)(?:\/b\/([\w-]+))?/);
+  if (!m) { console.error('Air: pass a board share link (app.air.inc/a/<id>[/b/<board id>]).'); process.exit(1); }
+  const short = m[1];
   const api = `https://api.air.inc/shorturl/${short}`;
+  // A link without /b/ is the shared board itself.
+  const boardId = m[2] || (await fetch(api).then(r => r.json()).catch(() => ({}))).data?.id;
+  if (!boardId) { console.error('Air: no board behind that link (is it shared by link?)'); process.exit(1); }
   const clips = [];
   for (const board of [boardId, ...(await airSubBoards(api, boardId))]) {
     const scope = board === boardId ? { boardId } : { boardId, descendantBoardId: board };
@@ -122,8 +132,13 @@ async function pullUrl(source, out) {
   const social = /(youtube\.com|youtu\.be|vimeo\.com|tiktok\.com|instagram\.com|facebook\.com)/i.test(source);
   if (social || !/\.\w{2,4}($|\?)/.test(source)) {
     if (!have('yt-dlp')) { console.error('This looks like a page/social link — install yt-dlp to pull it (macOS: brew install yt-dlp · Windows: winget install yt-dlp.yt-dlp).'); process.exit(3); }
-    const r = spawnSync(findBin('yt-dlp'), ['-o', join(out, '%(title).80s.%(ext)s'), source], { stdio: 'inherit' });
-    return r.status === 0 ? 1 : 0;
+    const r = spawnSync(findBin('yt-dlp'), ['-o', join(out, '%(title).80s.%(ext)s'), source], { stdio: ['ignore', 'inherit', 'pipe'], encoding: 'utf8' });
+    if (r.status !== 0) {
+      const err = String(r.stderr || r.error || '').trim();
+      console.error(/Unsupported URL/i.test(err) ? `No handler for ${new URL(source).host} yet: wire one (skills/pull-media, New service).` : `yt-dlp failed: ${err || `exit ${r.status}`}`);
+      process.exit(3);
+    }
+    return 1;
   }
   try { await downloadFile(source, join(out, uniqueName(out, basename(new URL(source).pathname) || 'download'))); }
   catch (e) { console.error(`fetch ${source} -> ${e.message}`); process.exit(1); }
@@ -135,12 +150,17 @@ const source = a.source || a._[0];
 const out = a.out;
 if (!source || !out) usage(HELP);
 mkdirSync(resolve(out), { recursive: true });
+const before = new Set(readdirSync(resolve(out)));
 const W = (a.workspace || inferWorkspace(out) || inferWorkspace(source) || (a.brand && inferWorkspace(a.brand)) || '').toUpperCase();
 let n = 0;
 if (existsSync(source)) n = pullLocal(source, resolve(out));
 else if (/drive\.google\.com/.test(source) || driveId(source)) n = await pullDrive(source, resolve(out), W, { brand: a.brand && resolve(a.brand), dryRun: !!a['dry-run'] });
 else if (/air\.inc\//i.test(source)) n = await pullAir(source, resolve(out), { dryRun: !!a['dry-run'] });
-else if (/dropbox\.com|1drv\.ms|onedrive|sharepoint/i.test(source)) { console.error('Dropbox / OneDrive connectors are not wired yet. Download the folder and pass it as a local path, or use Drive.'); process.exit(3); }
 else if (/^https?:\/\//.test(source)) n = await pullUrl(source, resolve(out));
 else { console.error('Unrecognized source. Use a local path, a Drive link/id, or a URL.'); process.exit(1); }
-if (!a['dry-run']) console.log(`pulled ${n} file${n === 1 ? '' : 's'} → ${resolve(out)}`);
+if (!a['dry-run']) {
+  if (!existsSync(source)) for (const f of readdirSync(resolve(out))) if (!before.has(f) && isMedia(f)) links[f] ||= source;
+  const file = join(resolve(out), '.links.json');
+  if (Object.keys(links).length) writeFileSync(file, JSON.stringify({ ...(existsSync(file) && JSON.parse(readFileSync(file, 'utf8'))), ...links }, null, 2));
+  console.log(`pulled ${n} file${n === 1 ? '' : 's'} → ${resolve(out)}`);
+}

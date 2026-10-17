@@ -4,7 +4,7 @@
 // button turns it off in the preview only (a sound-only track mutes, any other hides and mutes).
 import { memo, useRef } from 'react';
 import { keyed, tin } from '../../engine/doc.js';
-import { clock } from '../BrandPage.js';
+import { clock } from '../../lib/client/format.js';
 import { IcEye, IcEyeOff, IcMute, IcQuote, IcSound } from '../icons.js';
 
 const pct = (x, dur) => `${(x / dur) * 100}%`;
@@ -87,7 +87,7 @@ export default function Timeline({ doc, t, notes, onSeek, onPick, off, onToggle,
     <div className="tl">
       <div className="tl-track tl-track--head">
         <div className="tl-name tl-transport">{children}</div>
-        <div className="tl-lane tl-lane--head">
+        <div className="tl-lane">
           <Ruler dur={dur} />
           {notes.map((n) => (
             <button key={n.id} type="button" className="tl-note" data-status={n.status} style={{ left: pct(n.t, dur) }} title={n.text} onClick={() => onPick(n)}><IcQuote /></button>
