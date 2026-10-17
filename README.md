@@ -10,6 +10,7 @@ This is for people who make ads:
 - designers
 - business owners
 - etc
+
 And can be used on your own or in collaboration.
 
 Built on what I ([@oscarlorak](https://x.com/oscarlorak)) learned making ads for ecommerce brands:
